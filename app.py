@@ -9,7 +9,7 @@ import numpy as np
 st.set_page_config(page_title="Predykcje Premier League", layout="wide")
 
 st.title("Predykcje Premier League 2025/26")
-st.markdown("Model Poissona + home/away + wagi formy")
+st.markdown("Model Poissona | Home/Away | Waga formy")
 
 NAZWY_MAP = {
     "Brighton & Hove Albion": "Brighton",
@@ -50,11 +50,11 @@ historical = load_historical()
 schedule = load_schedule()
 
 # ----------------------------------
-# ŚREDNIE Z WAGAMI + HOME/AWAY
+# ŚREDNIE HOME/AWAY + WAGA
 # ----------------------------------
 
 def weighted_mean(values):
-    weights = np.linspace(1, 2, len(values))  # rosnąca waga
+    weights = np.linspace(1, 2, len(values))
     return np.average(values, weights=weights)
 
 @st.cache_data
@@ -70,32 +70,28 @@ def oblicz_srednie():
             continue
 
         dane[d] = {
-            "gole_home_scored": weighted_mean(home['FTHG']),
-            "gole_home_conceded": weighted_mean(home['FTAG']),
-            "gole_away_scored": weighted_mean(away['FTAG']),
-            "gole_away_conceded": weighted_mean(away['FTHG']),
-            "rozne_home": weighted_mean(home['total_rozne']),
-            "rozne_away": weighted_mean(away['total_rozne']),
-            "kartki_home": weighted_mean(home['total_kartki']),
-            "kartki_away": weighted_mean(away['total_kartki']),
+            "Gole strzelone (dom)": weighted_mean(home['FTHG']),
+            "Gole stracone (dom)": weighted_mean(home['FTAG']),
+            "Gole strzelone (wyjazd)": weighted_mean(away['FTAG']),
+            "Gole stracone (wyjazd)": weighted_mean(away['FTHG']),
+            "Rożne (dom)": weighted_mean(home['total_rozne']),
+            "Rożne (wyjazd)": weighted_mean(away['total_rozne']),
+            "Kartki (dom)": weighted_mean(home['total_kartki']),
+            "Kartki (wyjazd)": weighted_mean(away['total_kartki']),
         }
 
     return pd.DataFrame(dane).T.round(2)
 
 srednie_df = oblicz_srednie()
 
-# ----------------------------------
-# TABELA ŚREDNICH
-# ----------------------------------
-
-st.subheader("📊 Średnie (ostatnie 10 meczów z wagą formy)")
+st.subheader("📊 Średnie z ostatnich 10 meczów (waga formy)")
 st.dataframe(srednie_df)
 
 # ----------------------------------
 # BET BUILDER
 # ----------------------------------
 
-st.subheader("🎛️ Zbuduj własne combo")
+st.subheader("🎛️ Wybierz linie")
 
 col1, col2, col3 = st.columns(3)
 
@@ -104,8 +100,10 @@ with col1:
     typ_gole = st.selectbox("Typ goli", ["Over", "Under"])
 
 with col2:
-    linia_rogi = st.selectbox("Linia rożnych", 
-                              [5.5,6.5,7.5,8.5,9.5,10.5,11.5,12.5,13.5,14.5])
+    linia_rogi = st.selectbox(
+        "Linia rożnych",
+        [5.5,6.5,7.5,8.5,9.5,10.5,11.5,12.5,13.5,14.5]
+    )
     typ_rogi = st.selectbox("Typ rożnych", ["Over", "Under"])
 
 with col3:
@@ -116,10 +114,20 @@ with col3:
 # PREDYKCJE
 # ----------------------------------
 
-st.subheader("Predykcje na najbliższą kolejkę")
+st.subheader("📅 Predykcje na najbliższą kolejkę")
 
 dzisiaj = datetime.now()
 nadchodzace = schedule[schedule['date'] > dzisiaj]
+
+def koloruj(p):
+    if p >= 0.6:
+        return f"🟢 {p*100:.1f}%"
+    elif p >= 0.4:
+        return f"🟠 {p*100:.1f}%"
+    else:
+        return f"🔴 {p*100:.1f}%"
+
+wyniki = []
 
 if not nadchodzace.empty:
     min_round = nadchodzace['round'].min()
@@ -132,25 +140,21 @@ if not nadchodzace.empty:
 
         if home in srednie_df.index and away in srednie_df.index:
 
-            # GOLE (home attack + away defence)
             lambda_gole = (
-                srednie_df.loc[home, "gole_home_scored"] +
-                srednie_df.loc[away, "gole_away_conceded"]
+                srednie_df.loc[home,"Gole strzelone (dom)"] +
+                srednie_df.loc[away,"Gole stracone (wyjazd)"]
             ) / 2
 
-            # ROŻNE
             lambda_rogi = (
-                srednie_df.loc[home, "rozne_home"] +
-                srednie_df.loc[away, "rozne_away"]
+                srednie_df.loc[home,"Rożne (dom)"] +
+                srednie_df.loc[away,"Rożne (wyjazd)"]
             ) / 2
 
-            # KARTKI
             lambda_kartki = (
-                srednie_df.loc[home, "kartki_home"] +
-                srednie_df.loc[away, "kartki_away"]
+                srednie_df.loc[home,"Kartki (dom)"] +
+                srednie_df.loc[away,"Kartki (wyjazd)"]
             ) / 2
 
-            # Liczenie prawdopodobieństw
             def licz_prob(typ, linia, lam):
                 if typ == "Over":
                     return 1 - poisson.cdf(linia, lam)
@@ -163,14 +167,18 @@ if not nadchodzace.empty:
 
             p_combo = p_gole * p_rogi * p_kartki
 
-            with st.expander(f"{home} vs {away}"):
+            wyniki.append({
+                "Mecz": f"{home} vs {away}",
+                "⚽ Gole": koloruj(p_gole),
+                "🚩 Rożne": koloruj(p_rogi),
+                "🟨 Kartki": koloruj(p_kartki),
+                "🎯 Combo %": round(p_combo*100,2)
+            })
 
-                st.write(f"⚽ {typ_gole} {linia_gole}: **{p_gole*100:.1f}%**")
-                st.write(f"🚩 {typ_rogi} {linia_rogi}: **{p_rogi*100:.1f}%**")
-                st.write(f"🟨 {typ_kartki} {linia_kartki}: **{p_kartki*100:.1f}%**")
+    df_wyniki = pd.DataFrame(wyniki)
+    df_wyniki = df_wyniki.sort_values("🎯 Combo %", ascending=False)
 
-                st.markdown("---")
-                st.markdown(f"🎯 **Prawdopodobieństwo całego combo: {p_combo*100:.2f}%**")
+    st.dataframe(df_wyniki, use_container_width=True)
 
 else:
     st.warning("Brak nadchodzących meczów.")
