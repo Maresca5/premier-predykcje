@@ -73,7 +73,7 @@ NAZWY_MAP = {
     # ===== LA LIGA =====
     "Girona FC": "Girona",
     "Girona": "Girona",
-    "Rayo Vallecano": "Rayo Vallecano",
+    "Rayo Vallecano": "Vallecano",
     "Vallecano": "Rayo Vallecano",
     "Villarreal": "Villarreal",
     "Real Oviedo": "Oviedo",
@@ -89,7 +89,7 @@ NAZWY_MAP = {
     "Levante": "Levante",
     "Valencia": "Valencia",
     "Valencia CF": "Valencia",
-    "Real Sociedad": "Real Sociedad",
+    "Real Sociedad": "Sociedad",
     "Sociedad": "Real Sociedad",
     "Celta Vigo": "Celta",
     "Celta": "Celta",
