@@ -3,10 +3,3 @@ pandas
 scipy
 requests
 numpy
-soccerdata>=1.8.8
-pycurl
-certifi
-urllib3
-pyopenssl
-ndg-httpsclient
-pyasn1
