@@ -247,11 +247,12 @@ def oblicz_srednie_ligowe(df_json: str) -> dict:
     }
 
 
-def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame, srednie_lig: dict) -> tuple:
+def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
+                   srednie_lig: dict, forma_dict: dict) -> tuple:
     """
-    Dixon-Coles style: lam = avg_liga * sila_ataku * slabosc_obrony.
-    Normalizacja do sredniej ligowej sprawia ze lambdy sa zroznicowane
-    i nie spieszczaja sie do ~1 przy slabszych parach druzyn.
+    Dixon-Coles style z korektą formy.
+    lam = avg_liga * atak * obrona * form_weight
+    form_weight: +3% za każde W w ostatnich 5, -3% za L (max ±15%)
     """
     avg_h = max(srednie_lig["avg_home"], 0.5)
     avg_a = max(srednie_lig["avg_away"], 0.5)
@@ -261,10 +262,14 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame, srednie_lig: dict) -
     atak_a   = srednie_df.loc[a, "Gole strzelone (wyjazd)"] / avg_a
     obrona_h = srednie_df.loc[h, "Gole stracone (dom)"]     / avg_h
 
-    lam_h = avg_h * atak_h   * obrona_a
-    lam_a = avg_a * atak_a   * obrona_h
+    def form_weight(team: str) -> float:
+        f = forma_dict.get(team, "")
+        w = f.count("W"); l = f.count("L")
+        return float(np.clip(1.0 + (w - l) * 0.03, 0.85, 1.15))
 
-    # Clamp – zabezpieczenie na start sezonu gdy malo danych
+    lam_h = avg_h * atak_h * obrona_a * form_weight(h)
+    lam_a = avg_a * atak_a * obrona_h * form_weight(a)
+
     lam_h = float(np.clip(lam_h, 0.3, 4.5))
     lam_a = float(np.clip(lam_a, 0.3, 4.5))
     return lam_h, lam_a
@@ -310,7 +315,7 @@ def tabela_ligowa(df: pd.DataFrame) -> pd.DataFrame:
 # MODEL POISSONA – PREDYKCJE
 # ===========================================================================
 
-MAX_GOLE = 7  # 0..6
+MAX_GOLE = 6  # 0..5 (macierz 5x5 po przycięciu do top-wyników)
 
 def wybierz_typ(p_home: float, p_draw: float, p_away: float) -> tuple[str, float]:
     """
@@ -377,11 +382,52 @@ def wybierz_wynik(M: np.ndarray, lam_h: float, lam_a: float) -> tuple:
         return int(idx_max[0]), int(idx_max[1]), p_max
 
 
+def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float, rho: float = -0.13) -> np.ndarray:
+    """
+    Korekta Dixon-Coles dla niskich wyników (0-0, 1-0, 0-1, 1-1).
+    rho < 0 → model klasyczny przeszacowuje remisy 1-1 i 0-0.
+    Wartość -0.13 pochodzi z oryginalnej pracy D-C (1997).
+    """
+    M = M.copy()
+    tau = {
+        (0,0): 1 - lam_h * lam_a * rho,
+        (1,0): 1 + lam_a * rho,
+        (0,1): 1 + lam_h * rho,
+        (1,1): 1 - rho,
+    }
+    for (i, j), t in tau.items():
+        if i < M.shape[0] and j < M.shape[1]:
+            M[i, j] *= max(t, 0.001)   # zapobiegamy ujemnym p
+    # Renormalizacja
+    M /= M.sum()
+    return M
+
+
+def confidence_score(p_home: float, p_draw: float, p_away: float) -> tuple:
+    """
+    Pewność modelu: różnica między najlepszym a najgorszym wynikiem.
+    Zwraca (etykieta, emoji, opis).
+    """
+    vals   = sorted([p_home, p_draw, p_away], reverse=True)
+    spread = vals[0] - vals[2]          # różnica top–bottom
+    edge   = vals[0] - vals[1]          # przewaga nad 2. opcją
+
+    if edge > 0.18:
+        return "High", "🟢", f"Wyraźny faworyt (+{edge:.0%} nad 2. opcją)"
+    elif edge > 0.08:
+        return "Medium", "🟡", f"Umiarkowana przewaga (+{edge:.0%})"
+    else:
+        return "Coinflip", "🔴", f"Mecz bardzo wyrównany (spread {spread:.0%})"
+
+
 def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
-    M = np.outer(
+    M_raw = np.outer(
         poisson.pmf(range(MAX_GOLE), lam_h),
         poisson.pmf(range(MAX_GOLE), lam_a),
     )
+    # Dixon-Coles korekta remisów i niskich wyników
+    M = dixon_coles_adj(M_raw, lam_h, lam_a)
+
     p_home = float(np.tril(M, -1).sum())
     p_draw = float(np.trace(M))
     p_away = float(np.triu(M, 1).sum())
@@ -392,23 +438,27 @@ def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
         return round(1 / p, 2) if p > 0.001 else 999.0
 
     typ, p_typ = wybierz_typ(p_home, p_draw, p_away)
+    conf_level, conf_emoji, conf_opis = confidence_score(p_home, p_draw, p_away)
 
     return {
-        "lam_h":   lam_h,
-        "lam_a":   lam_a,
-        "p_home":  p_home,
-        "p_draw":  p_draw,
-        "p_away":  p_away,
-        "wynik_h": wynik_h,
-        "wynik_a": wynik_a,
-        "p_exact": p_exact,
-        "fo_home": fo(p_home),
-        "fo_draw": fo(p_draw),
-        "fo_away": fo(p_away),
-        "typ":     typ,
-        "p_typ":   p_typ,
-        "fo_typ":  fo(p_typ),
-        "macierz": M,
+        "lam_h":      lam_h,
+        "lam_a":      lam_a,
+        "p_home":     p_home,
+        "p_draw":     p_draw,
+        "p_away":     p_away,
+        "wynik_h":    wynik_h,
+        "wynik_a":    wynik_a,
+        "p_exact":    p_exact,
+        "fo_home":    fo(p_home),
+        "fo_draw":    fo(p_draw),
+        "fo_away":    fo(p_away),
+        "typ":        typ,
+        "p_typ":      p_typ,
+        "fo_typ":     fo(p_typ),
+        "conf_level": conf_level,
+        "conf_emoji": conf_emoji,
+        "conf_opis":  conf_opis,
+        "macierz":    M,
     }
 
 # ===========================================================================
@@ -434,17 +484,32 @@ def generuj_komentarz(home: str, away: str, pred: dict, forma_dict: dict) -> str
         key = st.secrets.get("ANTHROPIC_API_KEY", None)
         if key:
             client = anthropic.Anthropic(api_key=key)
+            # Sygnały narracyjne dla AI
+            roznica_sil = abs(pred["lam_h"] - pred["lam_a"])
+            forma_vs_model = (
+                "forma kłóci się z modelem"
+                if (pred["p_home"] > 0.5 and fh.count("L") >= 2)
+                   or (pred["p_away"] > 0.5 and fa.count("L") >= 2)
+                else "forma spójna z modelem"
+            )
+            upset_risk = pred["p_draw"] > 0.28 and roznica_sil > 0.4
+            trap_game  = pred["conf_level"] == "High" and (fh.count("W") <= 1 or fa.count("W") >= 3)
+
             prompt = (
-                f"Jesteś zwięzłym analitykiem piłkarskim. Analizujesz mecz {home} vs {away}.\n\n"
-                f"Dane modelu:\n"
-                f"- Oczekiwane gole: {home} {pred['lam_h']:.2f} | {away} {pred['lam_a']:.2f}\n"
+                f"Jesteś analitykiem piłkarskim piszącym w stylu 'Narrative Mode'.\n"
+                f"Mecz: {home} vs {away}\n\n"
+                f"Dane modelu (Dixon-Coles + korekta formy):\n"
+                f"- λ gospodarzy: {pred['lam_h']:.2f} | λ gości: {pred['lam_a']:.2f}\n"
                 f"- Szanse 1X2: {pred['p_home']:.1%} / {pred['p_draw']:.1%} / {pred['p_away']:.1%}\n"
-                f"- Typ modelu: {pred['typ']} @ {pred['fo_typ']:.2f}\n"
-                f"- Przewidywany wynik: {pred['wynik_h']}:{pred['wynik_a']}\n"
-                f"- Forma {home}: {fh} | Forma {away}: {fa}\n\n"
-                f"Napisz 2-3 zdania po polsku. Wspomnij kto jest faworytem, "
-                f"co mówi forma i czy spodziewasz się niespodzianki. "
-                f"Bądź konkretny, bez ogólników."
+                f"- Typ: {pred['typ']} @ {pred['fo_typ']:.2f} | Pewność: {pred['conf_level']}\n"
+                f"- Wynik modelu: {pred['wynik_h']}:{pred['wynik_a']}\n"
+                f"- Forma {home}: {fh} | {away}: {fa}\n"
+                f"- Sygnały: {forma_vs_model}"
+                f"{', ⚠️ ryzyko niespodzianki' if upset_risk else ''}"
+                f"{', 🪤 trap game?' if trap_game else ''}\n\n"
+                f"Napisz 2-3 zdania po polsku. Użyj narracyjnego stylu – wspomnij czy to trap game, "
+                f"czy forma kłóci się z modelem, czy istnieje ryzyko niespodzianki. "
+                f"Bądź konkretny i analityczny."
             )
             msg = client.messages.create(
                 model="claude-opus-4-6",
@@ -497,6 +562,7 @@ def weryfikuj_predykcje(predykcje: list, hist: pd.DataFrame) -> pd.DataFrame:
     for p in predykcje:
         h, a = p["home"], p["away"]
         match = hist[(hist["HomeTeam"] == h) & (hist["AwayTeam"] == a)]
+        brier = None
         if match.empty:
             status   = "⏳ oczekuje"
             wynik_r  = "–"
@@ -511,7 +577,17 @@ def weryfikuj_predykcje(predykcje: list, hist: pd.DataFrame) -> pd.DataFrame:
             if   typ_pred == "1X": trafiony = rzecz in ("1", "X")
             elif typ_pred == "X2": trafiony = rzecz in ("X", "2")
             else:                  trafiony = (rzecz == typ_pred)
-            status   = "✅ trafiony" if trafiony else "❌ chybiony"
+            status = "✅ trafiony" if trafiony else "❌ chybiony"
+            # Brier Score (jeśli zapisano prawdopodobieństwa)
+            if all(k in p for k in ("p_home", "p_draw", "p_away")):
+                r1 = 1.0 if rzecz == "1" else 0.0
+                rx = 1.0 if rzecz == "X" else 0.0
+                r2 = 1.0 if rzecz == "2" else 0.0
+                brier = round(
+                    (p["p_home"] - r1)**2 +
+                    (p["p_draw"] - rx)**2 +
+                    (p["p_away"] - r2)**2, 3
+                )
         wyniki.append({
             "Liga":           p.get("liga", "–"),
             "Mecz":           f"{h} vs {a}",
@@ -521,6 +597,7 @@ def weryfikuj_predykcje(predykcje: list, hist: pd.DataFrame) -> pd.DataFrame:
             "Wynik":          wynik_r,
             "Status":         status,
             "Trafiony":       trafiony,
+            "Brier Score":    brier,
             "Data predykcji": p.get("data", "–"),
         })
     return pd.DataFrame(wyniki) if wyniki else pd.DataFrame()
@@ -642,7 +719,7 @@ if not historical.empty:
                         a = map_nazwa(mecz["away_team"])
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
-                        lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig)
+                        lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                         lam_r = (srednie_df.loc[h, "Różne (dom)"]             + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
                         lam_k = (srednie_df.loc[h, "Kartki (dom)"]            + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
                         p_g = oblicz_p(typ_gole,   linia_gole,   lam_h + lam_a)
@@ -666,11 +743,39 @@ if not historical.empty:
                         a = map_nazwa(mecz["away_team"])
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
-                        lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig)
+                        lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                         p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
                         btts_data.append((f"{h} - {a}", p_btts))
                     for ms, p in sorted(btts_data, key=lambda x: x[1], reverse=True):
                         st.write(f"{koloruj(p)} **{ms}**: {p:.1%}")
+
+                # ── Value Signal + Mismatch kolejki ──
+                st.divider()
+                vc1, vc2 = st.columns(2)
+                with vc1:
+                    st.write("**🔥 Największa różnica sił (Power Index)**")
+                    power_data = []
+                    for _, mecz in mecze.iterrows():
+                        h2 = map_nazwa(mecz["home_team"])
+                        a2 = map_nazwa(mecz["away_team"])
+                        if h2 not in srednie_df.index or a2 not in srednie_df.index:
+                            continue
+                        lh2, la2 = oblicz_lambdy(h2, a2, srednie_df, srednie_lig, forma_dict)
+                        power_data.append((f"{h2} vs {a2}", abs(lh2 - la2), lh2, la2))
+                    for label, diff, lh2, la2 in sorted(power_data, key=lambda x: x[1], reverse=True)[:5]:
+                        st.write(f"⚡ **{label}** – Power gap: {diff:.2f} (λ {lh2:.2f} vs {la2:.2f})")
+                with vc2:
+                    st.write("**⚽ Najbardziej bramkowy mecz**")
+                    gole_data = []
+                    for _, mecz in mecze.iterrows():
+                        h2 = map_nazwa(mecz["home_team"])
+                        a2 = map_nazwa(mecz["away_team"])
+                        if h2 not in srednie_df.index or a2 not in srednie_df.index:
+                            continue
+                        lh2, la2 = oblicz_lambdy(h2, a2, srednie_df, srednie_lig, forma_dict)
+                        gole_data.append((f"{h2} vs {a2}", lh2 + la2))
+                    for label, total in sorted(gole_data, key=lambda x: x[1], reverse=True)[:5]:
+                        st.write(f"🎯 **{label}** – śr. {total:.2f} goli")
             else:
                 st.info("Brak nadchodzących meczów w terminarzu.")
 
@@ -713,7 +818,7 @@ if not historical.empty:
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
 
-                    lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig)
+                    lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                     pred  = predykcja_meczu(lam_h, lam_a)
                     dopasowane += 1
                     data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
@@ -725,6 +830,9 @@ if not historical.empty:
                         "round":  int(nb),
                         "typ":    pred["typ"],
                         "fo_typ": pred["fo_typ"],
+                        "p_home": round(pred["p_home"], 4),
+                        "p_draw": round(pred["p_draw"], 4),
+                        "p_away": round(pred["p_away"], 4),
                         "data":   datetime.now().strftime("%Y-%m-%d"),
                     })
 
@@ -761,15 +869,25 @@ if not historical.empty:
                             unsafe_allow_html=True,
                         )
 
-                        # Typ + fair odds
+                        # Typ + fair odds + confidence
+                        conf_colors = {"High": "#4CAF50", "Medium": "#FF9800", "Coinflip": "#F44336"}
+                        conf_c = conf_colors.get(pred["conf_level"], "#888")
                         st.markdown(
-                            f"<div style='text-align:center;margin-bottom:10px'>"
+                            f"<div style='text-align:center;margin-bottom:6px'>"
                             f"Typ modelu:&nbsp;{badge_typ(pred['typ'])}"
                             f"&nbsp;&nbsp;"
                             f"<span style='font-size:0.88em;color:#888'>"
                             f"Fair Odds:&nbsp;<b>{pred['fo_typ']:.2f}</b>"
                             f"&nbsp;({pred['p_typ']:.1%})"
                             f"</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(
+                            f"<div style='text-align:center;margin-bottom:8px;"
+                            f"font-size:0.82em;color:{conf_c}'>"
+                            f"{pred['conf_emoji']} <b>{pred['conf_level']}</b>"
+                            f" &nbsp;·&nbsp; {pred['conf_opis']}"
+                            f"</div>",
                             unsafe_allow_html=True,
                         )
 
@@ -861,11 +979,19 @@ if not historical.empty:
                     sr_odds_tr  = zakonczone[zakonczone["Trafiony"] == True]["Fair Odds"].mean()
 
                     st.markdown("### 📊 Podsumowanie")
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Rozegrane mecze",      wszystkie)
-                    m2.metric("Trafione typy",         trafione)
-                    m3.metric("Skuteczność",           f"{skutecznosc:.1%}")
-                    m4.metric("Śr. odds trafionych",  f"{sr_odds_tr:.2f}" if not np.isnan(sr_odds_tr) else "–")
+                    brier_vals = zakonczone["Brier Score"].dropna()
+                    sr_brier   = brier_vals.mean() if len(brier_vals) > 0 else float("nan")
+                    # Brier ref: losowy model ~0.667, dobry model <0.50
+                    brier_delta = f"{0.667 - sr_brier:+.3f} vs random" if not np.isnan(sr_brier) else None
+
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("Rozegrane mecze",     wszystkie)
+                    m2.metric("Trafione typy",        trafione)
+                    m3.metric("Skuteczność",          f"{skutecznosc:.1%}")
+                    m4.metric("Śr. odds trafionych", f"{sr_odds_tr:.2f}" if not np.isnan(sr_odds_tr) else "–")
+                    m5.metric("Brier Score ↓",       f"{sr_brier:.3f}" if not np.isnan(sr_brier) else "–",
+                              delta=brier_delta, delta_color="normal",
+                              help="Niżej = lepiej. Losowy model: ~0.667. Dobry model: <0.50")
 
                     # Wykres per liga (jeśli więcej niż jedna)
                     per_liga = (
