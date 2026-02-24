@@ -101,7 +101,7 @@ NAZWY_MAP = {
     "Sevilla": "Sevilla",
     "Sevilla FC": "Sevilla",
     "Espanyol": "Espanyol",
-    "RCD Espanyol": "Espanyol",
+    "RCD Espanyol": "Espanol",
     "Atlético Madrid": "Ath Madrid",
     "Ath Madrid": "Atlético Madrid",
     "Atletico Madrid": "Ath Madrid",
