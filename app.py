@@ -6,228 +6,489 @@ import requests
 from io import StringIO
 import numpy as np
 
-# =====================================================
-# KONFIGURACJA LIGI (skalowalne)
-# =====================================================
+st.set_page_config(page_title="Predykcje Premier League", layout="wide")
 
-LEAGUE_CODE = "E0"       # Premier League
-SEASON = "2526"          # sezon 2025/26
+st.title("Predykcje Premier League 2025/26")
+st.markdown("Model Poissona + home/away + wagi formy")
 
-st.set_page_config(page_title="Model Piłkarski", layout="wide")
-st.title("Model predykcyjny – Poisson + Strength Model")
+NAZWY_MAP = {
+    "Brighton & Hove Albion": "Brighton",
+    "West Ham United": "West Ham",
+    "Newcastle United": "Newcastle",
+    "Tottenham Hotspur": "Tottenham",
+    "Leeds United": "Leeds",
+    "Manchester United": "Man United",
+    "Manchester City": "Man City",
+    "Nottingham Forest": "Nott'm Forest",
+    "Wolverhampton": "Wolves",
+}
 
-# =====================================================
+# ----------------------------------
 # DANE
-# =====================================================
+# ----------------------------------
 
 @st.cache_data(ttl=900)
-def load_historical(league, season):
-    url = f"https://www.football-data.co.uk/mmz4281/{season}/{league}.csv"
+def load_historical():
+    url = "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
     r = requests.get(url)
     r.raise_for_status()
     df = pd.read_csv(StringIO(r.text))
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
-    df = df.sort_values("Date")
+    df = df.sort_values('Date')
+    df['total_gole'] = df['FTHG'] + df['FTAG']
+    df['total_kartki'] = df['HY'] + df['AY'] + df['HR']*2 + df['AR']*2
+    df['total_rozne'] = df['HC'] + df['AC']
     return df
 
 @st.cache_data(ttl=86400)
 def load_schedule():
     df = pd.read_csv("terminarz_premier_2025.csv")
     df['date'] = pd.to_datetime(df['date'])
-    return df.sort_values("date")
+    return df.sort_values('date')
 
-historical = load_historical(LEAGUE_CODE, SEASON)
+historical = load_historical()
 schedule = load_schedule()
 
-# =====================================================
-# FUNKCJE POMOCNICZE
-# =====================================================
+# ----------------------------------
+# ŚREDNIE Z WAGAMI
+# ----------------------------------
 
 def weighted_mean(values):
     weights = np.linspace(1, 2, len(values))
     return np.average(values, weights=weights)
 
-# =====================================================
-# ŚREDNIE LIGOWE
-# =====================================================
-
-league_avg_home = historical["FTHG"].mean()
-league_avg_away = historical["FTAG"].mean()
-
-# =====================================================
-# SIŁA DRUŻYN
-# =====================================================
-
 @st.cache_data
-def compute_team_strength():
-    teams = pd.unique(historical[['HomeTeam', 'AwayTeam']].values.ravel())
-    data = {}
+def oblicz_srednie():
+    druzyny = pd.unique(historical[['HomeTeam', 'AwayTeam']].values.ravel())
+    dane = {}
 
-    for team in teams:
-        home = historical[historical['HomeTeam'] == team].tail(10)
-        away = historical[historical['AwayTeam'] == team].tail(10)
+    for d in druzyny:
+        home = historical[historical['HomeTeam'] == d].tail(10)
+        away = historical[historical['AwayTeam'] == d].tail(10)
 
         if len(home) < 3 or len(away) < 3:
             continue
 
-        home_scored = weighted_mean(home["FTHG"])
-        home_conceded = weighted_mean(home["FTAG"])
-        away_scored = weighted_mean(away["FTAG"])
-        away_conceded = weighted_mean(away["FTHG"])
-
-        data[team] = {
-            "Attack_home": home_scored / league_avg_home,
-            "Defence_home": home_conceded / league_avg_away,
-            "Attack_away": away_scored / league_avg_away,
-            "Defence_away": away_conceded / league_avg_home,
+        dane[d] = {
+            "Gole strzelone (dom)": weighted_mean(home['FTHG']),
+            "Gole stracone (dom)": weighted_mean(home['FTAG']),
+            "Gole strzelone (wyjazd)": weighted_mean(away['FTAG']),
+            "Gole stracone (wyjazd)": weighted_mean(away['FTHG']),
+            "Różne (dom)": weighted_mean(home['total_rozne']),
+            "Różne (wyjazd)": weighted_mean(away['total_rozne']),
+            "Kartki (dom)": weighted_mean(home['total_kartki']),
+            "Kartki (wyjazd)": weighted_mean(away['total_kartki']),
         }
 
-    return pd.DataFrame(data).T
+    return pd.DataFrame(dane).T.round(2)
 
-strength_df = compute_team_strength()
+srednie_df = oblicz_srednie()
 
-# =====================================================
+# ----------------------------------
+# FUNKCJA KOLORUJĄCA
+# ----------------------------------
+
+def koloruj(p):
+    if p > 0.65:
+        return "🟢"
+    elif p > 0.50:
+        return "🟡"
+    else:
+        return "🔴"
+
+# ----------------------------------
+# BET BUILDER
+# ----------------------------------
+
+st.subheader("🎛️ Zbuduj własne combo")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5, 4.5])
+    typ_gole = st.selectbox("Typ goli", ["Over", "Under"])
+
+with col2:
+    linia_rogi = st.selectbox("Linia rożnych",
+                              [5.5,6.5,7.5,8.5,9.5,10.5,11.5,12.5,13.5,14.5])
+    typ_rogi = st.selectbox("Typ rożnych", ["Over", "Under"])
+
+with col3:
+    linia_kartki = st.selectbox("Linia kartek", [2.5,3.5,4.5,5.5,6.5])
+    typ_kartki = st.selectbox("Typ kartek", ["Over", "Under"])
+
+min_prob = st.slider("Minimalne prawdopodobieństwo combo",
+                     0.0, 1.0, 0.40, 0.05)
+
+# ----------------------------------
+# PREDYKCJE COMBO
+# ----------------------------------
+
+st.subheader("📅 Predykcje combo – najbliższa kolejka")
+
+dzisiaj = datetime.now()
+nadchodzace = schedule[schedule['date'] > dzisiaj]
+
+if not nadchodzace.empty:
+
+    min_round = nadchodzace['round'].min()
+    mecze = nadchodzace[nadchodzace['round'] == min_round]
+
+    lista_meczy = []
+
+    for _, mecz in mecze.iterrows():
+
+        home = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
+        away = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
+
+        if home in srednie_df.index and away in srednie_df.index:
+
+            lambda_home = (
+                srednie_df.loc[home, "Gole strzelone (dom)"] +
+                srednie_df.loc[away, "Gole stracone (wyjazd)"]
+            ) / 2
+
+            lambda_away = (
+                srednie_df.loc[away, "Gole strzelone (wyjazd)"] +
+                srednie_df.loc[home, "Gole stracone (dom)"]
+            ) / 2
+
+            lambda_gole = lambda_home + lambda_away
+
+            lambda_rogi = (
+                srednie_df.loc[home, "Różne (dom)"] +
+                srednie_df.loc[away, "Różne (wyjazd)"]
+            ) / 2
+
+            lambda_kartki = (
+                srednie_df.loc[home, "Kartki (dom)"] +
+                srednie_df.loc[away, "Kartki (wyjazd)"]
+            ) / 2
+
+            def licz_prob(typ, linia, lam):
+                if typ == "Over":
+                    return 1 - poisson.cdf(linia, lam)
+                else:
+                    return poisson.cdf(linia, lam)
+
+            p_gole = licz_prob(typ_gole, linia_gole, lambda_gole)
+            p_rogi = licz_prob(typ_rogi, linia_rogi, lambda_rogi)
+            p_kartki = licz_prob(typ_kartki, linia_kartki, lambda_kartki)
+
+            p_combo = p_gole * p_rogi * p_kartki
+
+            lista_meczy.append({
+                "home": home,
+                "away": away,
+                "p_gole": p_gole,
+                "p_rogi": p_rogi,
+                "p_kartki": p_kartki,
+                "p_combo": p_combo,
+                "lambda_home": lambda_home,
+                "lambda_away": lambda_away
+            })
+
+    lista_meczy = sorted(lista_meczy,
+                         key=lambda x: x["p_combo"],
+                         reverse=True)
+
+    lista_meczy = [m for m in lista_meczy
+                   if m["p_combo"] >= min_prob]
+
+    for mecz in lista_meczy:
+
+        with st.expander(f"{mecz['home']} vs {mecz['away']}"):
+
+            st.write(f"{koloruj(mecz['p_gole'])} ⚽ {typ_gole} {linia_gole}: "
+                     f"**{mecz['p_gole']*100:.1f}%**")
+
+            st.write(f"{koloruj(mecz['p_rogi'])} 🚩 {typ_rogi} {linia_rogi}: "
+                     f"**{mecz['p_rogi']*100:.1f}%**")
+
+            st.write(f"{koloruj(mecz['p_kartki'])} 🟨 {typ_kartki} {linia_kartki}: "
+                     f"**{mecz['p_kartki']*100:.1f}%**")
+
+            st.markdown("---")
+            st.markdown(f"### 🎯 {koloruj(mecz['p_combo'])} "
+                        f"Combo: {mecz['p_combo']*100:.2f}%")
+
+            st.caption(
+                f"Model λ → {mecz['home']}: {mecz['lambda_home']:.2f} | "
+                f"{mecz['away']}: {mecz['lambda_away']:.2f}"
+            )
+
+else:
+    st.warning("Brak nadchodzących meczów.")
+
+# ----------------------------------
+# SEKCJA BTTS
+# ----------------------------------
+
+st.markdown("---")
+st.subheader("⚽ BTTS – najbliższa kolejka")
+
+if not nadchodzace.empty:
+
+    lista_btts = []
+
+    for _, mecz in mecze.iterrows():
+
+        home = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
+        away = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
+
+        if home in srednie_df.index and away in srednie_df.index:
+
+            lambda_home = (
+                srednie_df.loc[home, "Gole strzelone (dom)"] +
+                srednie_df.loc[away, "Gole stracone (wyjazd)"]
+            ) / 2
+
+            lambda_away = (
+                srednie_df.loc[away, "Gole strzelone (wyjazd)"] +
+                srednie_df.loc[home, "Gole stracone (dom)"]
+            ) / 2
+
+            p_home_0 = poisson.pmf(0, lambda_home)
+            p_away_0 = poisson.pmf(0, lambda_away)
+
+            p_btts_yes = 1 - p_home_0 - p_away_0 + (p_home_0 * p_away_0)
+            p_btts_no = 1 - p_btts_yes
+
+            lista_btts.append({
+                "home": home,
+                "away": away,
+                "yes": p_btts_yes,
+                "no": p_btts_no
+            })
+
+    lista_btts = sorted(lista_btts,
+                        key=lambda x: x["yes"],
+                        reverse=True)
+
+    for mecz in lista_btts:
+
+        with st.expander(f"{mecz['home']} vs {mecz['away']}"):
+
+            st.write(f"{koloruj(mecz['yes'])} ⚽ BTTS TAK: "
+                     f"**{mecz['yes']*100:.1f}%**")
+
+            st.write(f"{koloruj(mecz['no'])} ❌ BTTS NIE: "
+                     f"**{mecz['no']*100:.1f}%**")
+
+# ----------------------------------
+# TABELA ŚREDNICH
+# ----------------------------------
+
+st.markdown("---")
+st.subheader("📊 Średnie drużyn (ostatnie 10 meczów, waga formy)")
+
+st.dataframe(
+    srednie_df.sort_index(),
+    use_container_width=True
+)
+
+
+
+# ---------------------------------------------------
+# WAGA FORMY
+# ---------------------------------------------------
+
+def weighted_mean(values):
+    weights = np.linspace(1, 2, len(values))
+    return np.average(values, weights=weights)
+
+# ---------------------------------------------------
+# ŚREDNIE DRUŻYN
+# ---------------------------------------------------
+
+@st.cache_data
+def oblicz_srednie():
+    druzyny = pd.unique(historical[['HomeTeam', 'AwayTeam']].values.ravel())
+    dane = {}
+
+    for d in druzyny:
+        home = historical[historical['HomeTeam'] == d].tail(10)
+        away = historical[historical['AwayTeam'] == d].tail(10)
+
+        if len(home) < 3 or len(away) < 3:
+            continue
+
+        dane[d] = {
+            "Gole strzelone (dom)": weighted_mean(home['FTHG']),
+            "Gole stracone (dom)": weighted_mean(home['FTAG']),
+            "Gole strzelone (wyjazd)": weighted_mean(away['FTAG']),
+            "Gole stracone (wyjazd)": weighted_mean(away['FTHG']),
+        }
+
+    return pd.DataFrame(dane).T.round(2)
+
+srednie_df = oblicz_srednie()
+
+# ---------------------------------------------------
+# FORMA OSTATNIE 5
+# ---------------------------------------------------
+
+def oblicz_forme():
+    druzyny = pd.unique(historical[['HomeTeam', 'AwayTeam']].values.ravel())
+    forma = {}
+
+    for d in druzyny:
+        mecze = historical[
+            (historical['HomeTeam'] == d) |
+            (historical['AwayTeam'] == d)
+        ].tail(5)
+
+        wyniki = []
+        for _, m in mecze.iterrows():
+            if m['HomeTeam'] == d:
+                if m['FTHG'] > m['FTAG']:
+                    wyniki.append("W")
+                elif m['FTHG'] < m['FTAG']:
+                    wyniki.append("L")
+                else:
+                    wyniki.append("D")
+            else:
+                if m['FTAG'] > m['FTHG']:
+                    wyniki.append("W")
+                elif m['FTAG'] < m['FTHG']:
+                    wyniki.append("L")
+                else:
+                    wyniki.append("D")
+
+        forma[d] = "".join(wyniki)
+
+    return forma
+
+forma_dict = oblicz_forme()
+
+# ---------------------------------------------------
 # TABELA LIGOWA
-# =====================================================
+# ---------------------------------------------------
 
-def league_table():
+def tabela_ligowa():
     table = {}
 
     for _, m in historical.iterrows():
-        h, a = m['HomeTeam'], m['AwayTeam']
+        home, away = m['HomeTeam'], m['AwayTeam']
         hg, ag = m['FTHG'], m['FTAG']
 
-        for t in [h, a]:
-            if t not in table:
-                table[t] = {"pts":0,"gf":0,"ga":0,"played":0}
+        for team in [home, away]:
+            if team not in table:
+                table[team] = {"pts":0,"gf":0,"ga":0,"played":0}
 
-        table[h]["gf"] += hg
-        table[h]["ga"] += ag
-        table[a]["gf"] += ag
-        table[a]["ga"] += hg
-        table[h]["played"] += 1
-        table[a]["played"] += 1
+        table[home]["gf"] += hg
+        table[home]["ga"] += ag
+        table[home]["played"] += 1
+
+        table[away]["gf"] += ag
+        table[away]["ga"] += hg
+        table[away]["played"] += 1
 
         if hg > ag:
-            table[h]["pts"] += 3
+            table[home]["pts"] += 3
         elif hg < ag:
-            table[a]["pts"] += 3
+            table[away]["pts"] += 3
         else:
-            table[h]["pts"] += 1
-            table[a]["pts"] += 1
+            table[home]["pts"] += 1
+            table[away]["pts"] += 1
 
     df = pd.DataFrame(table).T
     df["diff"] = df["gf"] - df["ga"]
     return df.sort_values(["pts","diff","gf"], ascending=False)
 
-# =====================================================
-# MODEL MECZU
-# =====================================================
-
-def predict_match(home, away):
-
-    att_home = strength_df.loc[home, "Attack_home"]
-    def_away = strength_df.loc[away, "Defence_away"]
-
-    att_away = strength_df.loc[away, "Attack_away"]
-    def_home = strength_df.loc[home, "Defence_home"]
-
-    lambda_home = att_home * def_away * league_avg_home
-    lambda_away = att_away * def_home * league_avg_away
-
-    lambda_total = lambda_home + lambda_away
-
-    p_home_0 = poisson.pmf(0, lambda_home)
-    p_away_0 = poisson.pmf(0, lambda_away)
-
-    p_btts = 1 - p_home_0 - p_away_0 + (p_home_0 * p_away_0)
-    p_over25 = 1 - poisson.cdf(2, lambda_total)
-
-    # dokładne wyniki 0-4
-    score_probs = {}
-    for i in range(5):
-        for j in range(5):
-            score_probs[f"{i}-{j}"] = poisson.pmf(i, lambda_home) * poisson.pmf(j, lambda_away)
-
-    top_scores = sorted(score_probs.items(), key=lambda x: x[1], reverse=True)[:5]
-
-    return {
-        "lambda_total": round(lambda_total,2),
-        "BTTS": round(p_btts*100,1),
-        "Over25": round(p_over25*100,1),
-        "TopScores": [(s, round(p*100,1)) for s,p in top_scores]
-    }
-
-# =====================================================
-# NAJBLIŻSZA KOLEJKA
-# =====================================================
+# ---------------------------------------------------
+# HIGH PROBABILITY – MODEL
+# ---------------------------------------------------
 
 st.markdown("---")
-st.subheader("🔥 Model – najbliższa kolejka")
+st.subheader("🔥 High Probability – model Poissona")
 
-today = datetime.now()
-upcoming = schedule[schedule["date"] > today]
+dzisiaj = datetime.now()
+nadchodzace = schedule[schedule['date'] > dzisiaj]
 
-if not upcoming.empty:
+if not nadchodzace.empty:
 
-    next_round = upcoming["round"].min()
-    matches = upcoming[upcoming["round"] == next_round]
+    min_round = nadchodzace['round'].min()
+    mecze = nadchodzace[nadchodzace['round'] == min_round]
 
-    results = []
+    ranking = []
 
-    for _, row in matches.iterrows():
-        home = row["home_team"]
-        away = row["away_team"]
+    for _, mecz in mecze.iterrows():
 
-        if home in strength_df.index and away in strength_df.index:
+        home = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
+        away = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
 
-            pred = predict_match(home, away)
+        if home in srednie_df.index and away in srednie_df.index:
 
-            results.append({
+            lambda_home = (
+                srednie_df.loc[home,"Gole strzelone (dom)"] +
+                srednie_df.loc[away,"Gole stracone (wyjazd)"]
+            ) / 2
+
+            lambda_away = (
+                srednie_df.loc[away,"Gole strzelone (wyjazd)"] +
+                srednie_df.loc[home,"Gole stracone (dom)"]
+            ) / 2
+
+            p_home_0 = poisson.pmf(0, lambda_home)
+            p_away_0 = poisson.pmf(0, lambda_away)
+
+            p_btts = 1 - p_home_0 - p_away_0 + (p_home_0 * p_away_0)
+
+            p_over25 = 1 - poisson.cdf(2, lambda_home + lambda_away)
+
+            ranking.append({
                 "Mecz": f"{home} vs {away}",
-                "λ_total": pred["lambda_total"],
-                "BTTS %": pred["BTTS"],
-                "Over 2.5 %": pred["Over25"],
-                "Top wynik": pred["TopScores"][0][0]
+                "BTTS %": round(p_btts*100,1),
+                "Over 2.5 %": round(p_over25*100,1)
             })
 
-            with st.expander(f"{home} vs {away} – szczegóły"):
-                st.write("Top 5 wyników:")
-                for score, prob in pred["TopScores"]:
-                    st.write(f"{score} → {prob}%")
+    ranking_df = pd.DataFrame(ranking).sort_values(
+        "BTTS %", ascending=False
+    )
 
-    df_results = pd.DataFrame(results).sort_values("BTTS %", ascending=False)
-    st.dataframe(df_results, use_container_width=True)
+    st.dataframe(ranking_df, use_container_width=True)
 
-# =====================================================
-# TABELA
-# =====================================================
+# ---------------------------------------------------
+# TABELA LIGOWA
+# ---------------------------------------------------
 
 st.markdown("---")
 st.subheader("📊 Tabela ligowa")
-st.dataframe(league_table(), use_container_width=True)
-
-# =====================================================
-# POWER RANKING
-# =====================================================
-
-st.markdown("---")
-st.subheader("⚡ Power Ranking (modelowy)")
-
-power = strength_df.copy()
-power["Power"] = (
-    power["Attack_home"] + power["Attack_away"]
-    - power["Defence_home"] - power["Defence_away"]
-)
 
 st.dataframe(
-    power.sort_values("Power", ascending=False)[["Power"]],
+    tabela_ligowa(),
     use_container_width=True
 )
 
-# =====================================================
-# ODŚWIEŻ
-# =====================================================
+# ---------------------------------------------------
+# FORMA
+# ---------------------------------------------------
+
+st.markdown("---")
+st.subheader("📈 Forma – ostatnie 5 meczów")
+
+forma_df = pd.DataFrame.from_dict(
+    forma_dict, orient="index", columns=["Forma"]
+)
+
+st.dataframe(forma_df.sort_index(), use_container_width=True)
+
+# ---------------------------------------------------
+# ŚREDNIE
+# ---------------------------------------------------
+
+st.markdown("---")
+st.subheader("📊 Średnie drużyn (waga formy)")
+
+st.dataframe(
+    srednie_df.sort_index(),
+    use_container_width=True
+)
+
+# ----------------------------------
+# ODŚWIEŻANIE
+# ----------------------------------
 
 if st.button("Odśwież dane"):
     st.cache_data.clear()
