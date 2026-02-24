@@ -276,6 +276,42 @@ def tabela_ligowa(df: pd.DataFrame) -> pd.DataFrame:
 
 MAX_GOLE = 7  # 0..6
 
+def wybierz_typ(p_home: float, p_draw: float, p_away: float) -> tuple[str, float]:
+    """
+    Logika wyboru typu:
+    - Jeśli jeden wynik ma p >= PROG_PEWNY  → typ czysty: 1 / X / 2
+    - Jeśli żaden nie jest wyraźny, ale    → podwójna szansa:
+        p_home + p_draw >= PROG_PODWOJNA   → 1X
+        p_away + p_draw >= PROG_PODWOJNA   → X2
+        (w razie remisu między 1X i X2 → wybieramy wyższy)
+    - Ostateczny fallback: czysty typ z najwyższym p
+    """
+    PROG_PEWNY     = 0.42   # próg dla czystego typu (1/X/2)
+    PROG_PODWOJNA  = 0.62   # próg dla podwójnej szansy (1X/X2)
+
+    # Sprawdzamy czyste typy
+    if p_home >= PROG_PEWNY:
+        return "1",  p_home
+    if p_away >= PROG_PEWNY:
+        return "2",  p_away
+    if p_draw >= PROG_PEWNY:
+        return "X",  p_draw
+
+    # Podwójne szanse
+    p_1x = p_home + p_draw
+    p_x2 = p_away + p_draw
+    if p_1x >= PROG_PODWOJNA or p_x2 >= PROG_PODWOJNA:
+        if p_1x >= p_x2:
+            return "1X", p_1x
+        else:
+            return "X2", p_x2
+
+    # Fallback: najwyższe p
+    probs = {"1": p_home, "X": p_draw, "2": p_away}
+    t = max(probs, key=probs.get)
+    return t, probs[t]
+
+
 def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
     M = np.outer(
         poisson.pmf(range(MAX_GOLE), lam_h),
@@ -289,9 +325,7 @@ def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
     def fo(p: float) -> float:
         return round(1 / p, 2) if p > 0.001 else 999.0
 
-    probs = {"1": p_home, "X": p_draw, "2": p_away}
-    typ   = max(probs, key=probs.get)
-    p_typ = probs[typ]
+    typ, p_typ = wybierz_typ(p_home, p_draw, p_away)
 
     return {
         "lam_h":   lam_h,
@@ -406,7 +440,11 @@ def weryfikuj_predykcje(predykcje: list, hist: pd.DataFrame) -> pd.DataFrame:
             hg, ag = int(row["FTHG"]), int(row["FTAG"])
             wynik_r  = f"{hg}:{ag}"
             rzecz    = "1" if hg > ag else ("2" if hg < ag else "X")
-            trafiony = (rzecz == p["typ"])
+            # Obsługa podwójnych szans
+            typ_pred = p["typ"]
+            if   typ_pred == "1X": trafiony = rzecz in ("1", "X")
+            elif typ_pred == "X2": trafiony = rzecz in ("X", "2")
+            else:                  trafiony = (rzecz == typ_pred)
             status   = "✅ trafiony" if trafiony else "❌ chybiony"
         wyniki.append({
             "Liga":           p.get("liga", "–"),
@@ -432,10 +470,15 @@ def oblicz_p(typ: str, linia: float, lam: float) -> float:
     return 1 - poisson.cdf(linia, lam) if typ == "Over" else poisson.cdf(linia, lam)
 
 def badge_typ(typ: str) -> str:
-    kolory = {"1": "#2196F3", "X": "#FF9800", "2": "#E91E63"}
-    kolor  = kolory.get(typ, "#888")
+    if typ == "1X":
+        styl = "background:linear-gradient(90deg,#2196F3,#FF9800)"
+    elif typ == "X2":
+        styl = "background:linear-gradient(90deg,#FF9800,#E91E63)"
+    else:
+        kolory = {"1": "#2196F3", "X": "#FF9800", "2": "#E91E63"}
+        styl   = f"background:{kolory.get(typ, '#888')}"
     return (
-        f"<span style='background:{kolor};color:white;padding:2px 12px;"
+        f"<span style='{styl};color:white;padding:2px 14px;"
         f"border-radius:12px;font-weight:bold;font-size:0.95em'>{typ}</span>"
     )
 
@@ -669,25 +712,28 @@ if not historical.empty:
                         # Metryki 1X2
                         mc1, mc2, mc3 = st.columns(3)
                         with mc1:
+                            aktywny = pred["typ"] in ("1", "1X")
                             st.metric(
                                 f"1 – {h[:13]}",
                                 f"{pred['p_home']:.1%}",
                                 f"@ {pred['fo_home']:.2f}",
-                                delta_color="normal" if pred["typ"] == "1" else "off",
+                                delta_color="normal" if aktywny else "off",
                             )
                         with mc2:
+                            aktywny = pred["typ"] in ("X", "1X", "X2")
                             st.metric(
                                 "X – Remis",
                                 f"{pred['p_draw']:.1%}",
                                 f"@ {pred['fo_draw']:.2f}",
-                                delta_color="normal" if pred["typ"] == "X" else "off",
+                                delta_color="normal" if aktywny else "off",
                             )
                         with mc3:
+                            aktywny = pred["typ"] in ("2", "X2")
                             st.metric(
                                 f"2 – {a[:13]}",
                                 f"{pred['p_away']:.1%}",
                                 f"@ {pred['fo_away']:.2f}",
-                                delta_color="normal" if pred["typ"] == "2" else "off",
+                                delta_color="normal" if aktywny else "off",
                             )
 
                         # Komentarz
