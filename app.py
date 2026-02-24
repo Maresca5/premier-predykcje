@@ -5,42 +5,10 @@ from datetime import datetime
 import requests
 from io import StringIO
 import numpy as np
-
 # --- KONFIGURACJA ---
-st.set_page_config(page_title="Predykcje Top 5 Lig", layout="wide")
-st.title("Predykcje Top 5 Lig 2025/26")
-st.markdown("Model Poissona + home/away + wagi formy | Dane z football-data.co.uk")
-
-# Wybór ligi
-LIGI = {
-    "Premier League": {
-        "historical": "E0.csv",
-        "schedule_patterns": [
-            "terminarz_premier_league_2025.csv",
-            "terminarz_premier_2025.csv"
-        ]
-    },
-    "La Liga": {
-        "historical": "SP1.csv",
-        "schedule_patterns": ["terminarz_la_liga_2025.csv"]
-    },
-    "Bundesliga": {
-        "historical": "D1.csv",
-        "schedule_patterns": ["terminarz_bundesliga_2025.csv"]
-    },
-    "Serie A": {
-        "historical": "I1.csv",
-        "schedule_patterns": ["terminarz_serie_a_2025.csv"]
-    },
-    "Ligue 1": {
-        "historical": "F1.csv",
-        "schedule_patterns": ["terminarz_ligue_1_2025.csv"]
-    },
-}
-
-wybrana_liga = st.selectbox("Wybierz ligę", list(LIGI.keys()))
-
-# Mapowanie nazw (rozszerzone – możesz dopisać dla innych lig)
+st.set_page_config(page_title="Predykcje Premier League", layout="wide")
+st.title("Predykcje Premier League 2025/26")
+st.markdown("Model Poissona + home/away + wagi formy")
 NAZWY_MAP = {
     "Brighton & Hove Albion": "Brighton",
     "West Ham United": "West Ham",
@@ -52,13 +20,11 @@ NAZWY_MAP = {
     "Nottingham Forest": "Nott'm Forest",
     "Wolverhampton": "Wolves",
 }
-
 # --- DANE ---
 @st.cache_data(ttl=900)
 def load_historical():
-    kod = LIGI[wybrana_liga]["historical"]
-    url = f"https://www.football-data.co.uk/mmz4281/2526/{kod}"
     try:
+        url = "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
         r = requests.get(url)
         r.raise_for_status()
         df = pd.read_csv(StringIO(r.text))
@@ -69,34 +35,23 @@ def load_historical():
         df['total_rozne'] = df['HC'] + df['AC']
         return df
     except:
-        st.error(f"Nie udało się pobrać danych historycznych dla {wybrana_liga} ({kod}).")
+        st.error("Nie udało się pobrać danych historycznych.")
         return pd.DataFrame()
-
 @st.cache_data(ttl=86400)
 def load_schedule():
-    patterns = LIGI[wybrana_liga]["schedule_patterns"]
-    for pattern in patterns:
-        try:
-            df = pd.read_csv(pattern)
-            # Wymuszamy konwersję daty
-            df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True)
-            df = df.dropna(subset=['date'])
-            return df.sort_values('date')
-        except:
-            continue
-    
-    st.error(f"Nie znaleziono pasującego pliku terminarza dla {wybrana_liga}. Sprawdź nazwy plików w repo.")
-    return pd.DataFrame()
-
+    try:
+        df = pd.read_csv("terminarz_premier_2025.csv")
+        df['date'] = pd.to_datetime(df['date'])
+        return df.sort_values('date')
+    except:
+        return pd.DataFrame()
 historical = load_historical()
 schedule = load_schedule()
-
 # --- LOGIKA OBLICZEŃ ---
 def weighted_mean(values):
     if len(values) == 0: return 0
     weights = np.linspace(1, 2, len(values))
     return np.average(values, weights=weights)
-
 @st.cache_data
 def oblicz_wszystkie_statystyki(df):
     druzyny = pd.unique(df[['HomeTeam', 'AwayTeam']].values.ravel())
@@ -117,7 +72,6 @@ def oblicz_wszystkie_statystyki(df):
             "Kartki (wyjazd)": weighted_mean(away['total_kartki']),
         }
     return pd.DataFrame(dane).T.round(2)
-
 def oblicz_forme(df):
     druzyny = pd.unique(df[['HomeTeam', 'AwayTeam']].values.ravel())
     forma = {}
@@ -135,7 +89,6 @@ def oblicz_forme(df):
                 else: wyniki.append("D")
         forma[d] = "".join(wyniki)
     return forma
-
 def tabela_ligowa(df):
     table = {}
     for _, m in df.iterrows():
@@ -157,12 +110,10 @@ def tabela_ligowa(df):
     res = pd.DataFrame(table).T
     res["diff"] = res["gf"] - res["ga"]
     return res.sort_values(["pts","diff","gf"], ascending=False)
-
 def koloruj(p):
     if p > 0.65: return "🟢"
     elif p > 0.50: return "🟡"
     else: return "🔴"
-
 # Przygotowanie danych do zakładek
 if not historical.empty:
     srednie_df = oblicz_wszystkie_statystyki(historical)
@@ -185,7 +136,7 @@ if not historical.empty:
             typ_kartki = st.selectbox("Typ kartek", ["Over", "Under"])
        
         min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
-        st.subheader(f"📅 Predykcje – najbliższa kolejka ({wybrana_liga})")
+        st.subheader("📅 Predykcje – najbliższa kolejka")
         dzisiaj = datetime.now()
         nadchodzace = schedule[schedule['date'] > dzisiaj] if not schedule.empty else pd.DataFrame()
         if not nadchodzace.empty:
@@ -232,7 +183,7 @@ if not historical.empty:
                         p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
                         st.write(f"{koloruj(p_btts)} **{h} - {a}**: {p_btts:.1%}")
         else:
-            st.warning(f"Załaduj plik terminarza dla {wybrana_liga}, aby zobaczyć predykcje.")
+            st.warning("Załaduj plik 'terminarz_premier_2025.csv', aby zobaczyć predykcje.")
     with tab2:
         st.subheader("📊 Aktualna Sytuacja")
         c_l, c_f = st.columns([2, 1])
