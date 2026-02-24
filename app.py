@@ -133,7 +133,7 @@ NAZWY_MAP = {
     "Dortmund": "Dortmund",
     "RB Leipzig": "RB Leipzig",
     "Leipzig": "RB Leipzig",
-    "Bayer Leverkusen": "Leverkusen",
+    "Bayer 04 Leverkusen": "Leverkusen",
     "Leverkusen": "Leverkusen",
     "Eintracht Frankfurt": "Eintracht",
     "Eintracht": "Eintracht",
