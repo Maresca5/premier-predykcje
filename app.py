@@ -30,60 +30,234 @@ def normalize_name(name):
     if not isinstance(name, str): return str(name)
     # Usuwanie akcentów i ogonków (np. é -> e)
     name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
-    # Usuwanie typowych skrótów dla lepszego dopasowania
+    # Usuwanie typowych skrótów
     for suffix in [" FC", " CF", " UD", " CD", " RCD", " AS", " Stade", " 1."]:
         name = name.replace(suffix, "")
     return name.strip()
 
-# Rozszerzone mapowanie nazw (Klucz: nazwa z Twojego CSV, Wartość: nazwa z football-data.co.uk)
+# KOMPLETNE mapowanie nazw (nazwa z CSV → nazwa w football-data.co.uk)
 NAZWY_MAP = {
-    # Premier League
+    # ===== PREMIER LEAGUE =====
     "Brighton & Hove Albion": "Brighton",
+    "Brighton": "Brighton",
     "West Ham United": "West Ham",
+    "West Ham": "West Ham",
     "Newcastle United": "Newcastle",
+    "Newcastle": "Newcastle",
     "Tottenham Hotspur": "Tottenham",
+    "Tottenham": "Tottenham",
+    "Leeds United": "Leeds",
+    "Leeds": "Leeds",
     "Manchester United": "Man United",
+    "Man United": "Man United",
     "Manchester City": "Man City",
+    "Man City": "Man City",
     "Nottingham Forest": "Nott'm Forest",
+    "Nott'm Forest": "Nott'm Forest",
     "Wolverhampton Wanderers": "Wolves",
     "Wolverhampton": "Wolves",
+    "Wolves": "Wolves",
     "Leicester City": "Leicester",
-    # La Liga
+    "Leicester": "Leicester",
+    "Southampton": "Southampton",
+    "Crystal Palace": "Crystal Palace",
+    "Everton": "Everton",
+    "Aston Villa": "Aston Villa",
+    "Fulham": "Fulham",
+    "Brentford": "Brentford",
+    "Burnley": "Burnley",
+    "Bournemouth": "Bournemouth",
+    "Sheffield United": "Sheffield Utd",
+    "Sheffield Utd": "Sheffield Utd",
+    
+    # ===== LA LIGA =====
     "Girona FC": "Girona",
-    "Rayo Vallecano": "Vallecano",
+    "Girona": "Girona",
+    "Rayo Vallecano": "Rayo Vallecano",  # Ważne: w danych jest "Rayo Vallecano"
+    "Vallecano": "Rayo Vallecano",
     "Villarreal": "Villarreal",
+    "Real Oviedo": "Oviedo",
+    "Oviedo": "Oviedo",
+    "Mallorca": "Mallorca",
+    "RCD Mallorca": "Mallorca",
+    "Barcelona": "Barcelona",
     "FC Barcelona": "Barcelona",
+    "Deportivo Alavés": "Alaves",
     "Deportivo Alaves": "Alaves",
-    "Deportivo Alaves": "Alaves",
-    "Real Sociedad": "Sociedad",
+    "Alaves": "Alaves",
+    "Levante UD": "Levante",
+    "Levante": "Levante",
+    "Valencia": "Valencia",
+    "Valencia CF": "Valencia",
+    "Real Sociedad": "Real Sociedad",  # Ważne: w danych jest "Real Sociedad"
+    "Sociedad": "Real Sociedad",
     "Celta Vigo": "Celta",
+    "Celta": "Celta",
+    "Getafe": "Getafe",
+    "Getafe CF": "Getafe",
     "Athletic Club": "Ath Bilbao",
     "Athletic Bilbao": "Ath Bilbao",
+    "Ath Bilbao": "Ath Bilbao",
+    "Sevilla": "Sevilla",
     "Sevilla FC": "Sevilla",
+    "Espanyol": "Espanyol",  # Ważne: w danych jest "Espanyol" (przez Y)
     "RCD Espanyol": "Espanyol",
+    "Atlético Madrid": "Ath Madrid",
     "Atletico Madrid": "Ath Madrid",
-    "Atletico Madrid": "Ath Madrid",
+    "Ath Madrid": "Ath Madrid",
+    "Elche": "Elche",
+    "Elche CF": "Elche",
     "Real Betis": "Betis",
+    "Betis": "Betis",
+    "Real Madrid": "Real Madrid",
+    "Osasuna": "Osasuna",
     "CA Osasuna": "Osasuna",
-    # Bundesliga
+    "Real Valladolid": "Valladolid",
+    "Valladolid": "Valladolid",
+    "UD Las Palmas": "Las Palmas",
+    "Las Palmas": "Las Palmas",
+    "Cadiz": "Cadiz",
+    "Cadiz CF": "Cadiz",
+    "Granada": "Granada",
+    "Granada CF": "Granada",
+    "Almeria": "Almeria",
+    "UD Almeria": "Almeria",
+    
+    # ===== BUNDESLIGA =====
     "Bayern Munich": "Bayern Munich",
-    "RB Leipzig": "Leipzig",
-    "Bayer Leverkusen": "Leverkusen",
-    "Eintracht Frankfurt": "Eintracht Frankfurt",
+    "Bayern": "Bayern Munich",
+    "Bayern München": "Bayern Munich",
+    "Borussia Dortmund": "Dortmund",  # Ważne: w danych jest "Dortmund"
+    "Dortmund": "Dortmund",
+    "RB Leipzig": "RB Leipzig",
+    "Leipzig": "RB Leipzig",
+    "Bayer Leverkusen": "Leverkusen",  # Ważne: w danych jest "Leverkusen"
+    "Leverkusen": "Leverkusen",
+    "Eintracht Frankfurt": "Eintracht",  # Ważne: w danych jest "Eintracht"
+    "Eintracht": "Eintracht",
+    "VfB Stuttgart": "Stuttgart",
+    "Stuttgart": "Stuttgart",
+    "VfL Wolfsburg": "Wolfsburg",
+    "Wolfsburg": "Wolfsburg",
+    "Borussia Mönchengladbach": "M'gladbach",
     "Borussia Monchengladbach": "M'gladbach",
-    "Borussia Monchengladbach": "M'gladbach",
+    "Borussia M'gladbach": "M'gladbach",
+    "M'gladbach": "M'gladbach",
+    "1. FC Union Berlin": "Union Berlin",
+    "Union Berlin": "Union Berlin",
+    "SC Freiburg": "Freiburg",
+    "Freiburg": "Freiburg",
+    "1. FC Köln": "Köln",
+    "FC Köln": "Köln",
+    "Köln": "Köln",
+    "FSV Mainz 05": "Mainz",
+    "Mainz": "Mainz",
+    "TSG Hoffenheim": "Hoffenheim",
+    "Hoffenheim": "Hoffenheim",
     "Werder Bremen": "Werder Bremen",
+    "SV Werder Bremen": "Werder Bremen",
+    "VfL Bochum": "Bochum",
+    "Bochum": "Bochum",
+    "FC Augsburg": "Augsburg",
+    "Augsburg": "Augsburg",
+    "FC St. Pauli": "St Pauli",
     "St. Pauli": "St Pauli",
-    # Serie A
+    "St Pauli": "St Pauli",
+    "1. FC Heidenheim": "Heidenheim",
+    "Heidenheim": "Heidenheim",
+    "Hamburger SV": "Hamburg",
+    "Hamburg": "Hamburg",
+    
+    # ===== SERIE A =====
+    "AC Milan": "AC Milan",
+    "Milan": "AC Milan",
+    "Inter": "Inter",
+    "Internazionale": "Inter",
+    "Juventus": "Juventus",
+    "AS Roma": "Roma",
+    "Roma": "Roma",
+    "Lazio": "Lazio",
+    "Napoli": "Napoli",
+    "Atalanta": "Atalanta",
+    "Fiorentina": "Fiorentina",
+    "Torino": "Torino",
+    "Bologna": "Bologna",
+    "Udinese": "Udinese",
+    "Sassuolo": "Sassuolo",
+    "Empoli": "Empoli",
+    "Salernitana": "Salernitana",
     "Hellas Verona": "Verona",
-    "Inter Milan": "Inter",
-    # Ligue 1
-    "Paris Saint-Germain": "PSG",
+    "Verona": "Verona",
+    "Lecce": "Lecce",
+    "Cagliari": "Cagliari",
+    "Genoa": "Genoa",
+    "Monza": "Monza",
+    "Frosinone": "Frosinone",
+    
+    # ===== LIGUE 1 =====
+    "Paris Saint-Germain": "Paris SG",
+    "PSG": "Paris SG",
+    "Paris SG": "Paris SG",
+    "Olympique de Marseille": "Marseille",
+    "Marseille": "Marseille",
+    "AS Monaco": "Monaco",
+    "Monaco": "Monaco",
+    "Olympique Lyonnais": "Lyon",
+    "Lyon": "Lyon",
+    "LOSC Lille": "Lille",
+    "Lille": "Lille",
     "Stade Rennais": "Rennes",
-    "Stade Brestois 29": "Brest",
+    "Rennes": "Rennes",
+    "OGC Nice": "Nice",
+    "Nice": "Nice",
+    "RC Lens": "Lens",
+    "Lens": "Lens",
+    "RC Strasbourg": "Strasbourg",
+    "Strasbourg": "Strasbourg",
+    "FC Nantes": "Nantes",
+    "Nantes": "Nantes",
+    "Montpellier HSC": "Montpellier",
+    "Montpellier": "Montpellier",
+    "FC Toulouse": "Toulouse",
+    "Toulouse": "Toulouse",
     "Stade de Reims": "Reims",
-    "Le Havre AC": "Le Havre"
+    "Reims": "Reims",
+    "Stade Brestois 29": "Brest",
+    "Stade Brestois": "Brest",
+    "Brest": "Brest",
+    "Clermont Foot": "Clermont",
+    "Clermont": "Clermont",
+    "AJ Auxerre": "Auxerre",
+    "Auxerre": "Auxerre",
+    "Le Havre AC": "Le Havre",
+    "Le Havre": "Le Havre",
+    "FC Metz": "Metz",
+    "Metz": "Metz"
 }
+
+# --- FUNKCJA DO MAPOWANIA Z FALLBACKIEM ---
+def map_nazwa(nazwa_z_csv):
+    """Próbuje różnych sposobów dopasowania nazwy drużyny"""
+    if not isinstance(nazwa_z_csv, str):
+        return str(nazwa_z_csv)
+    
+    # 1. Bezpośrednie mapowanie
+    if nazwa_z_csv in NAZWY_MAP:
+        return NAZWY_MAP[nazwa_z_csv]
+    
+    # 2. Sprawdź bez spacji i myślników
+    uproszczona = nazwa_z_csv.replace(" ", "").replace("-", "").replace("'", "")
+    for key, value in NAZWY_MAP.items():
+        if key.replace(" ", "").replace("-", "").replace("'", "") == uproszczona:
+            return value
+    
+    # 3. Znormalizowana wersja
+    znormalizowana = normalize_name(nazwa_z_csv)
+    if znormalizowana in NAZWY_MAP:
+        return NAZWY_MAP[znormalizowana]
+    
+    # 4. Jeśli nic nie pasuje, zwróć oryginał
+    return nazwa_z_csv
 
 # --- FUNKCJE DANYCH ---
 @st.cache_data(ttl=900)
@@ -108,7 +282,15 @@ def load_historical(league_code):
 def load_schedule(filename):
     try:
         df = pd.read_csv(filename)
-        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.tz_localize(None)
+        df['date'] = pd.to_datetime(df['date'], utc=True).dt.tz_localize(None)
+        
+        # Jeśli brak kolumny 'round', utwórz ją na podstawie dat
+        if 'round' not in df.columns:
+            df = df.sort_values('date')
+            unique_dates = df['date'].dt.date.unique()
+            date_to_round = {date: i+1 for i, date in enumerate(unique_dates)}
+            df['round'] = df['date'].dt.date.map(date_to_round)
+        
         return df.dropna(subset=['date']).sort_values('date')
     except Exception as e:
         st.error(f"Problem z plikiem terminarza {filename}: {e}")
@@ -150,32 +332,70 @@ def oblicz_forme(df):
     forma = {}
     for d in druzyny:
         mecze = df[(df['HomeTeam'] == d) | (df['AwayTeam'] == d)].tail(5)
-        wyniki = "".join(["W" if ((m['HomeTeam']==d and m['FTHG']>m['FTAG']) or (m['AwayTeam']==d and m['FTAG']>m['FTHG']))
-                          else "L" if ((m['HomeTeam']==d and m['FTHG']<m['FTAG']) or (m['AwayTeam']==d and m['FTAG']<m['FTHG']))
-                          else "D" for _, m in mecze.iterrows()])
-        forma[d] = wyniki
+        wyniki = []
+        for _, m in mecze.iterrows():
+            if m['HomeTeam'] == d:
+                if m['FTHG'] > m['FTAG']: wyniki.append("W")
+                elif m['FTHG'] < m['FTAG']: wyniki.append("L")
+                else: wyniki.append("D")
+            else:
+                if m['FTAG'] > m['FTHG']: wyniki.append("W")
+                elif m['FTAG'] < m['FTHG']: wyniki.append("L")
+                else: wyniki.append("D")
+        forma[d] = "".join(wyniki)
     return forma
 
 def tabela_ligowa(df):
     if df.empty: return pd.DataFrame()
     table = {}
     for _, m in df.iterrows():
-        for team, g, gs in [(m['HomeTeam'], m['FTHG'], m['FTAG']), (m['AwayTeam'], m['FTAG'], m['FTHG'])]:
-            if team not in table: table[team] = {"pts":0,"gf":0,"ga":0,"played":0}
-            table[team]["gf"] += g
-            table[team]["ga"] += gs
-            table[team]["played"] += 1
-        if m['FTHG'] > m['FTAG']: table[m['HomeTeam']]["pts"] += 3
-        elif m['FTHG'] < m['FTAG']: table[m['AwayTeam']]["pts"] += 3
+        home, away = m['HomeTeam'], m['AwayTeam']
+        hg, ag = m['FTHG'], m['FTAG']
+        for team in [home, away]:
+            if team not in table: 
+                table[team] = {"pts": 0, "gf": 0, "ga": 0, "played": 0}
+        table[home]["gf"] += hg
+        table[home]["ga"] += ag
+        table[home]["played"] += 1
+        table[away]["gf"] += ag
+        table[away]["ga"] += hg
+        table[away]["played"] += 1
+        if hg > ag: 
+            table[home]["pts"] += 3
+        elif hg < ag: 
+            table[away]["pts"] += 3
         else:
-            table[m['HomeTeam']]["pts"] += 1
-            table[m['AwayTeam']]["pts"] += 1
+            table[home]["pts"] += 1
+            table[away]["pts"] += 1
     res = pd.DataFrame(table).T
     res["diff"] = res["gf"] - res["ga"]
-    return res.sort_values(["pts","diff","gf"], ascending=False)
+    return res.sort_values(["pts", "diff", "gf"], ascending=False)
 
 def koloruj(p):
     return "🟢" if p > 0.65 else "🟡" if p > 0.50 else "🔴"
+
+# --- DEBUG W SIDEBARZE ---
+with st.sidebar.expander("🔍 Debugowanie", expanded=False):
+    st.write(f"Wybrana liga: {wybrana_liga}")
+    st.write(f"Dane historyczne: {len(historical)} meczów")
+    st.write(f"Terminarz: {len(schedule)} meczów")
+    
+    if not schedule.empty:
+        st.write(f"Zakres dat: {schedule['date'].min()} do {schedule['date'].max()}")
+        st.write(f"Dostępne kolejki: {sorted(schedule['round'].unique())}")
+        
+        # Sprawdź mapowanie dla pierwszych 5 meczów
+        st.write("**Test mapowania:**")
+        for i, (_, mecz) in enumerate(schedule.head(5).iterrows()):
+            h_raw = mecz['home_team']
+            a_raw = mecz['away_team']
+            h_map = map_nazwa(h_raw)
+            a_map = map_nazwa(a_raw)
+            
+            h_ok = h_map in srednie_df.index if not srednie_df.empty else False
+            a_ok = a_map in srednie_df.index if not srednie_df.empty else False
+            
+            st.write(f"{i+1}. {h_raw} → {h_map}: {h_ok} | {a_raw} → {a_map}: {a_ok}")
 
 # --- RENDEROWANIE ---
 if not historical.empty:
@@ -188,80 +408,112 @@ if not historical.empty:
     with tab1:
         st.subheader("🎛️ Zbuduj własne combo")
         c1, c2, c3 = st.columns(3)
-        linia_gole = c1.selectbox("Linia goli", [1.5, 2.5, 3.5], index=1)
-        linia_rogi = c2.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5], index=1)
-        linia_kartki = c3.selectbox("Linia kartek", [2.5, 3.5, 4.5, 5.5], index=1)
-       
+        with c1:
+            linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5], index=1)
+            typ_gole = st.selectbox("Typ goli", ["Over", "Under"], index=0)
+        with c2:
+            linia_rogi = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5], index=1)
+            typ_rogi = st.selectbox("Typ rożnych", ["Over", "Under"], index=0)
+        with c3:
+            linia_kartki = st.selectbox("Linia kartek", [2.5, 3.5, 4.5, 5.5], index=1)
+            typ_kartki = st.selectbox("Typ kartek", ["Over", "Under"], index=0)
+        
         min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
         
         st.subheader("📅 Predykcje – najbliższa kolejka")
         
-        # Poprawka daty: szukamy meczów od wczoraj, aby złapać trwającą kolejkę
-        wczoraj = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-        
-        if not schedule.empty:
-            # Filtrujemy mecze od wczoraj wzwyż
-            nadchodzace = schedule[schedule['date'] >= wczoraj]
+        # Poprawka: wyświetlamy najbliższą kolejkę niezależnie od daty
+        if not schedule.empty and not srednie_df.empty:
+            # Znajdź najniższy numer kolejki
+            wszystkie_kolejki = sorted(schedule['round'].unique())
             
-            if not nadchodzace.empty:
-                # Bierzemy najniższy dostępny numer rundy z tych, które jeszcze się nie odbyły/trwają
-                min_round = nadchodzace['round'].min()
-                mecze = schedule[schedule['round'] == min_round]
-               
+            if wszystkie_kolejki:
+                najblizsza_kolejka = wszystkie_kolejki[0]
+                mecze = schedule[schedule['round'] == najblizsza_kolejka]
+                
+                st.caption(f"Kolejka {najblizsza_kolejka} – {len(mecze)} meczów")
+                
+                # Funkcja do obliczania prawdopodobieństwa z uwzględnieniem typu
+                def oblicz_p(typ, linia, lam):
+                    return 1 - poisson.cdf(linia, lam) if typ == "Over" else poisson.cdf(linia, lam)
+                
                 col1, col2 = st.columns(2)
+                
+                # Combo Builder
                 with col1:
-                    st.write(f"**Combo Builder (Kolejka {int(min_round)})**")
+                    st.write("**Combo Builder**")
+                    combo_count = 0
                     for _, mecz in mecze.iterrows():
-                        # Pobieranie nazw z uwzględnieniem mapowania i normalizacji
                         h_raw = mecz['home_team']
                         a_raw = mecz['away_team']
-                        h = NAZWY_MAP.get(h_raw, normalize_name(h_raw))
-                        a = NAZWY_MAP.get(a_raw, normalize_name(a_raw))
-                       
+                        h = map_nazwa(h_raw)
+                        a = map_nazwa(a_raw)
+                        
                         if h in srednie_df.index and a in srednie_df.index:
                             lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
                             lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                             lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
                             lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
 
-                            p_g = 1 - poisson.cdf(linia_gole, lam_h + lam_a)
-                            p_r = 1 - poisson.cdf(linia_rogi, lam_r)
-                            p_k = 1 - poisson.cdf(linia_kartki, lam_k)
+                            p_g = oblicz_p(typ_gole, linia_gole, lam_h + lam_a)
+                            p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
+                            p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
                             p_combo = p_g * p_r * p_k
 
                             if p_combo >= min_prob:
+                                combo_count += 1
                                 with st.expander(f"{h} vs {a} ({p_combo:.1%})"):
-                                    st.write(f"{koloruj(p_g)} Gole: {p_g:.1%}")
-                                    st.write(f"{koloruj(p_r)} Rożne: {p_r:.1%}")
-                                    st.write(f"{koloruj(p_k)} Kartki: {p_k:.1%}")
+                                    st.write(f"{koloruj(p_g)} Gole {typ_gole} {linia_gole}: {p_g:.1%}")
+                                    st.write(f"{koloruj(p_r)} Rożne {typ_rogi} {linia_rogi}: {p_r:.1%}")
+                                    st.write(f"{koloruj(p_k)} Kartki {typ_kartki} {linia_kartki}: {p_k:.1%}")
+                    
+                    if combo_count == 0:
+                        st.info("Brak meczów spełniających kryteria. Zmniejsz próg.")
                 
+                # BTTS Ranking
                 with col2:
                     st.write("**BTTS Ranking**")
+                    btts_data = []
                     for _, mecz in mecze.iterrows():
                         h_raw = mecz['home_team']
                         a_raw = mecz['away_team']
-                        h = NAZWY_MAP.get(h_raw, normalize_name(h_raw))
-                        a = NAZWY_MAP.get(a_raw, normalize_name(a_raw))
+                        h = map_nazwa(h_raw)
+                        a = map_nazwa(a_raw)
                         
                         if h in srednie_df.index and a in srednie_df.index:
                             lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
                             lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                             p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
-                            st.write(f"{koloruj(p_btts)} **{h} - {a}**: {p_btts:.1%}")
+                            btts_data.append((f"{h} - {a}", p_btts))
+                    
+                    if btts_data:
+                        for mecz, p in sorted(btts_data, key=lambda x: x[1], reverse=True):
+                            st.write(f"{koloruj(p)} **{mecz}**: {p:.1%}")
             else:
-                st.info("Brak nadchodzących meczów w najbliższym terminie.")
+                st.warning("Brak danych o kolejkach w terminarzu.")
         else:
-            st.warning("Brak danych w pliku terminarza.")
+            st.warning("Brak danych terminarza lub statystyk drużyn.")
 
     with tab2:
         st.subheader("📊 Aktualna Sytuacja")
         c_l, c_f = st.columns([2, 1])
-        with c_l: st.dataframe(tabela, use_container_width=True)
-        with c_f: st.dataframe(pd.DataFrame.from_dict(forma_dict, orient="index", columns=["Forma"]), use_container_width=True)
+        with c_l: 
+            st.write("**Tabela Ligowa**")
+            st.dataframe(tabela, use_container_width=True)
+        with c_f: 
+            st.write("**Forma (5 ostatnich)**")
+            forma_df = pd.DataFrame.from_dict(forma_dict, orient="index", columns=["Forma"])
+            st.dataframe(forma_df, use_container_width=True)
 
     with tab3:
         st.subheader("📊 Średnie ważone drużyn")
+        st.write("Dane uwzględniają atut własnego boiska oraz wagę ostatnich meczów.")
         st.dataframe(srednie_df.sort_index(), use_container_width=True)
+        
+        st.divider()
+        st.caption(f"📊 Liczba meczów w bazie: {len(historical)}")
+        st.caption(f"📅 Ostatnia aktualizacja: {historical['Date'].max().strftime('%d.%m.%Y') if not historical.empty else '—'}")
+        
         if st.button("🔄 Odśwież dane"):
             st.cache_data.clear()
             st.rerun()
