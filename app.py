@@ -1,36 +1,45 @@
 import streamlit as st
 import pandas as pd
 from scipy.stats import poisson
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 from io import StringIO
 import numpy as np
 import unicodedata
+import json
+import os
 
-# --- KONFIGURACJA LIG ---
+# ===========================================================================
+# KONFIGURACJA LIG
+# ===========================================================================
 LIGI = {
-    "Premier League": {"csv_code": "E0", "file": "terminarz_premier_2025.csv"},
+    "Premier League": {"csv_code": "E0",  "file": "terminarz_premier_2025.csv"},
     "La Liga":        {"csv_code": "SP1", "file": "terminarz_la_liga_2025.csv"},
     "Bundesliga":     {"csv_code": "D1",  "file": "terminarz_bundesliga_2025.csv"},
     "Serie A":        {"csv_code": "I1",  "file": "terminarz_serie_a_2025.csv"},
     "Ligue 1":        {"csv_code": "F1",  "file": "terminarz_ligue_1_2025.csv"},
 }
 
+# Plik do przechowywania predykcji (na potrzeby weryfikacji skuteczności)
+PREDYKCJE_FILE = "predykcje_historia.json"
+
 st.set_page_config(page_title="Predykcje Piłkarskie Top 5", layout="wide")
 
-# --- SIDEBAR ---
+# ===========================================================================
+# SIDEBAR
+# ===========================================================================
 st.sidebar.header("🌍 Wybór Rozgrywek")
 wybrana_liga = st.sidebar.selectbox("Wybierz ligę", list(LIGI.keys()))
-debug_mode = st.sidebar.checkbox("🔧 Debug – niezmapowane nazwy", value=False)
+debug_mode   = st.sidebar.checkbox("🔧 Debug – niezmapowane nazwy", value=False)
 
 st.title(f"Predykcje {wybrana_liga} 2025/26")
-st.markdown("Model Poissona + wagi formy • Fair Odds • Komentarze AI")
+st.markdown("Model Poissona + wagi formy • Fair Odds • Weryfikacja skuteczności")
 
 # ===========================================================================
-# MAPOWANIA
+# MAPOWANIA NAZW
 # ===========================================================================
 
-def normalize_name(name):
+def normalize_name(name: str) -> str:
     if not isinstance(name, str):
         return str(name)
     name = unicodedata.normalize("NFKD", name).encode("ASCII", "ignore").decode("ASCII")
@@ -38,56 +47,52 @@ def normalize_name(name):
         name = name.replace(suffix, "")
     return name.strip()
 
-# Klucz -> wartość jest ZAWSZE nazwą używaną w football-data.co.uk
-# Zasada: żaden klucz nie może być równy wartości innego klucza (zapobiega pętlom)
+# Klucz → wartość = ZAWSZE nazwa z football-data.co.uk
 NAZWY_MAP = {
-    # ===== PREMIER LEAGUE =====
-    "Brighton & Hove Albion": "Brighton",
-    "West Ham United":        "West Ham",
-    "Newcastle United":       "Newcastle",
-    "Tottenham Hotspur":      "Tottenham",
-    "Leeds United":           "Leeds",
-    "Manchester United":      "Man United",
-    "Manchester City":        "Man City",
-    "Nottingham Forest":      "Nott'm Forest",
-    "Wolverhampton Wanderers":"Wolves",
-    "Wolverhampton":          "Wolves",
-    "Leicester City":         "Leicester",
-    "Sheffield United":       "Sheffield Utd",
-
-    # ===== LA LIGA =====
-    "Girona FC":              "Girona",
-    "Rayo Vallecano":         "Vallecano",
-    "RCD Mallorca":           "Mallorca",
-    "FC Barcelona":           "Barcelona",
-    "Deportivo Alavés":       "Alaves",
-    "Deportivo Alaves":       "Alaves",
-    "Levante UD":             "Levante",
-    "Valencia CF":            "Valencia",
-    "Real Sociedad":          "Sociedad",
-    "Celta Vigo":             "Celta",
-    "Getafe CF":              "Getafe",
-    "Athletic Club":          "Ath Bilbao",
-    "Athletic Bilbao":        "Ath Bilbao",
-    "Sevilla FC":             "Sevilla",
-    "RCD Espanyol":           "Espanol",
-    "Espanyol":               "Espanol",
-    "Atlético Madrid":        "Ath Madrid",
-    "Atletico Madrid":        "Ath Madrid",
-    "Elche CF":               "Elche",
-    "Real Betis":             "Betis",
-    "CA Osasuna":             "Osasuna",
-    "Real Valladolid":        "Valladolid",
-    "UD Las Palmas":          "Las Palmas",
-    "Cadiz CF":               "Cadiz",
-    "Granada CF":             "Granada",
-    "UD Almeria":             "Almeria",
-
-    # ===== BUNDESLIGA =====
+    # PREMIER LEAGUE
+    "Brighton & Hove Albion":  "Brighton",
+    "West Ham United":         "West Ham",
+    "Newcastle United":        "Newcastle",
+    "Tottenham Hotspur":       "Tottenham",
+    "Leeds United":            "Leeds",
+    "Manchester United":       "Man United",
+    "Manchester City":         "Man City",
+    "Nottingham Forest":       "Nott'm Forest",
+    "Wolverhampton Wanderers": "Wolves",
+    "Wolverhampton":           "Wolves",
+    "Leicester City":          "Leicester",
+    "Sheffield United":        "Sheffield Utd",
+    # LA LIGA
+    "Girona FC":               "Girona",
+    "Rayo Vallecano":          "Vallecano",
+    "RCD Mallorca":            "Mallorca",
+    "FC Barcelona":            "Barcelona",
+    "Deportivo Alavés":        "Alaves",
+    "Deportivo Alaves":        "Alaves",
+    "Levante UD":              "Levante",
+    "Valencia CF":             "Valencia",
+    "Real Sociedad":           "Sociedad",
+    "Celta Vigo":              "Celta",
+    "Getafe CF":               "Getafe",
+    "Athletic Club":           "Ath Bilbao",
+    "Athletic Bilbao":         "Ath Bilbao",
+    "Sevilla FC":              "Sevilla",
+    "RCD Espanyol":            "Espanol",
+    "Espanyol":                "Espanol",
+    "Atlético Madrid":         "Ath Madrid",
+    "Atletico Madrid":         "Ath Madrid",
+    "Elche CF":                "Elche",
+    "Real Betis":              "Betis",
+    "CA Osasuna":              "Osasuna",
+    "Real Valladolid":         "Valladolid",
+    "UD Las Palmas":           "Las Palmas",
+    "Cadiz CF":                "Cadiz",
+    "Granada CF":              "Granada",
+    "UD Almeria":              "Almeria",
+    # BUNDESLIGA
     "FC Bayern München":              "Bayern Munich",
     "Bayern":                         "Bayern Munich",
     "Borussia Dortmund":              "Dortmund",
-    "RB Leipzig":                     "RB Leipzig",
     "Leipzig":                        "RB Leipzig",
     "Bayer 04 Leverkusen":            "Leverkusen",
     "Eintracht Frankfurt":            "Ein Frankfurt",
@@ -109,14 +114,12 @@ NAZWY_MAP = {
     "St. Pauli":                      "St Pauli",
     "1. FC Heidenheim":               "Heidenheim",
     "Hamburger SV":                   "Hamburg",
-
-    # ===== SERIE A =====
+    # SERIE A
     "AC Milan":               "Milan",
     "Internazionale":         "Inter",
     "AS Roma":                "Roma",
     "Hellas Verona":          "Verona",
-
-    # ===== LIGUE 1 =====
+    # LIGUE 1
     "Paris Saint-Germain":    "Paris SG",
     "PSG":                    "Paris SG",
     "Olympique de Marseille": "Marseille",
@@ -139,33 +142,23 @@ NAZWY_MAP = {
     "FC Metz":                "Metz",
 }
 
-_niezmapowane: set = set()  # do debug mode
+_niezmapowane: set = set()
 
-def map_nazwa(nazwa_z_csv: str) -> str:
-    if not isinstance(nazwa_z_csv, str):
-        return str(nazwa_z_csv)
-
-    # 1. Bezpośrednie
-    if nazwa_z_csv in NAZWY_MAP:
-        return NAZWY_MAP[nazwa_z_csv]
-
-    # 2. Uproszczone (bez spacji/myślników/apostrofów)
+def map_nazwa(nazwa: str) -> str:
+    if not isinstance(nazwa, str):
+        return str(nazwa)
+    if nazwa in NAZWY_MAP:
+        return NAZWY_MAP[nazwa]
     def uproszcz(s):
         return s.replace(" ", "").replace("-", "").replace("'", "").lower()
-
     for key, val in NAZWY_MAP.items():
-        if uproszcz(key) == uproszcz(nazwa_z_csv):
+        if uproszcz(key) == uproszcz(nazwa):
             return val
-
-    # 3. Znormalizowana (ASCII)
-    znorm = normalize_name(nazwa_z_csv)
+    znorm = normalize_name(nazwa)
     if znorm in NAZWY_MAP:
         return NAZWY_MAP[znorm]
-
-    # 4. Brak dopasowania – rejestruj i zwróć oryginał
-    _niezmapowane.add(nazwa_z_csv)
-    return nazwa_z_csv
-
+    _niezmapowane.add(nazwa)
+    return nazwa
 
 # ===========================================================================
 # ŁADOWANIE DANYCH
@@ -198,13 +191,13 @@ def load_schedule(filename: str) -> pd.DataFrame:
         if "round" not in df.columns:
             df = df.sort_values("date")
             unique_dates = df["date"].dt.date.unique()
-            date_to_round = {d: i + 1 for i, d in enumerate(unique_dates)}
-            df["round"] = df["date"].dt.date.map(date_to_round)
+            df["round"] = df["date"].dt.date.map(
+                {d: i + 1 for i, d in enumerate(unique_dates)}
+            )
         return df.dropna(subset=["date"]).sort_values("date")
     except Exception as e:
         st.error(f"Problem z plikiem terminarza {filename}: {e}")
         return pd.DataFrame()
-
 
 # ===========================================================================
 # OBLICZENIA STATYSTYK
@@ -217,7 +210,6 @@ def weighted_mean(values: pd.Series) -> float:
     return float(np.average(values, weights=weights))
 
 
-# UWAGA: cache na hash stringa (nazwy ligi) żeby uniknąć problemów z hash DataFrame
 @st.cache_data
 def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
     df = pd.read_json(df_json)
@@ -246,9 +238,8 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
 def oblicz_forme(df: pd.DataFrame) -> dict:
     if df.empty:
         return {}
-    druzyny = pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel())
     forma = {}
-    for d in druzyny:
+    for d in pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel()):
         mecze = df[(df["HomeTeam"] == d) | (df["AwayTeam"] == d)].tail(5)
         wyniki = []
         for _, m in mecze.iterrows():
@@ -267,169 +258,168 @@ def tabela_ligowa(df: pd.DataFrame) -> pd.DataFrame:
     for _, m in df.iterrows():
         home, away = m["HomeTeam"], m["AwayTeam"]
         hg, ag = m["FTHG"], m["FTAG"]
-        for team in [home, away]:
-            if team not in table:
-                table[team] = {"Pkt": 0, "GZ": 0, "GS": 0, "M": 0}
-        table[home]["GZ"] += hg
-        table[home]["GS"] += ag
-        table[home]["M"]  += 1
-        table[away]["GZ"] += ag
-        table[away]["GS"] += hg
-        table[away]["M"]  += 1
-        if hg > ag:
-            table[home]["Pkt"] += 3
-        elif hg < ag:
-            table[away]["Pkt"] += 3
-        else:
-            table[home]["Pkt"] += 1
-            table[away]["Pkt"] += 1
+        for t in [home, away]:
+            if t not in table:
+                table[t] = {"Pkt": 0, "GZ": 0, "GS": 0, "M": 0}
+        table[home]["GZ"] += hg; table[home]["GS"] += ag; table[home]["M"] += 1
+        table[away]["GZ"] += ag; table[away]["GS"] += hg; table[away]["M"] += 1
+        if   hg > ag: table[home]["Pkt"] += 3
+        elif hg < ag: table[away]["Pkt"] += 3
+        else:         table[home]["Pkt"] += 1; table[away]["Pkt"] += 1
     res = pd.DataFrame(table).T
     res["RG"] = res["GZ"] - res["GS"]
     return res.sort_values(["Pkt", "RG", "GZ"], ascending=False)
 
-
 # ===========================================================================
-# MODEL POISSONA – PREDYKCJE WYNIKÓW
+# MODEL POISSONA – PREDYKCJE
 # ===========================================================================
 
-MAX_GOLE = 7  # 0..6 dla każdej drużyny
+MAX_GOLE = 7  # 0..6
 
-def oblicz_macierz(lam_h: float, lam_a: float) -> np.ndarray:
-    """Macierz prawdopodobieństw wyników [gole_h x gole_a]"""
-    return np.outer(
+def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
+    M = np.outer(
         poisson.pmf(range(MAX_GOLE), lam_h),
         poisson.pmf(range(MAX_GOLE), lam_a),
     )
-
-
-def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
-    M = oblicz_macierz(lam_h, lam_a)
     p_home = float(np.tril(M, -1).sum())
     p_draw = float(np.trace(M))
     p_away = float(np.triu(M, 1).sum())
+    idx    = np.unravel_index(M.argmax(), M.shape)
 
-    # Najbardziej prawdopodobny dokładny wynik
-    idx = np.unravel_index(M.argmax(), M.shape)
-    p_exact = float(M[idx])
+    def fo(p: float) -> float:
+        return round(1 / p, 2) if p > 0.001 else 999.0
 
-    # Fair odds (bez marży)
-    def fair_odds(p: float) -> str:
-        return f"{1/p:.2f}" if p > 0 else "∞"
+    probs = {"1": p_home, "X": p_draw, "2": p_away}
+    typ   = max(probs, key=probs.get)
+    p_typ = probs[typ]
 
     return {
-        "lam_h": lam_h,
-        "lam_a": lam_a,
-        "p_home": p_home,
-        "p_draw": p_draw,
-        "p_away": p_away,
+        "lam_h":   lam_h,
+        "lam_a":   lam_a,
+        "p_home":  p_home,
+        "p_draw":  p_draw,
+        "p_away":  p_away,
         "wynik_h": int(idx[0]),
         "wynik_a": int(idx[1]),
-        "p_exact": p_exact,
-        "fo_home": fair_odds(p_home),
-        "fo_draw": fair_odds(p_draw),
-        "fo_away": fair_odds(p_away),
+        "p_exact": float(M[idx]),
+        "fo_home": fo(p_home),
+        "fo_draw": fo(p_draw),
+        "fo_away": fo(p_away),
+        "typ":     typ,
+        "p_typ":   p_typ,
+        "fo_typ":  fo(p_typ),
         "macierz": M,
     }
 
+# ===========================================================================
+# KOMENTARZ STATYSTYCZNY / AI
+# ===========================================================================
 
-# ===========================================================================
-# KOMENTARZ AI (Claude API przez Anthropic w artifacts)
-# Jeśli klucz API nie jest dostępny, wyświetla statystyczny fallback
-# ===========================================================================
+def _ocen_forme(f: str) -> str:
+    if not f or f == "?":
+        return "forma nieznana"
+    w = f.count("W"); l = f.count("L")
+    if w >= 4: return "doskonała forma"
+    if w >= 3: return "dobra forma"
+    if l >= 3: return "słaba forma"
+    return "nieregularna forma"
 
 def generuj_komentarz(home: str, away: str, pred: dict, forma_dict: dict) -> str:
-    """Generuje komentarz analityczny. Używa Claude API jeśli dostępny, 
-    w przeciwnym razie generuje komentarz na podstawie samych danych."""
+    fh = forma_dict.get(home, "?")
+    fa = forma_dict.get(away, "?")
 
-    forma_h = forma_dict.get(home, "brak danych")
-    forma_a = forma_dict.get(away, "brak danych")
-
-    # Próba użycia Claude API
-    try:
-        client = _get_anthropic_client()
-        if client:
-            prompt = f"""Jesteś zwięzłym analitykiem piłkarskim. Analizujesz mecz {home} vs {away}.
-
-Dane modelu Poissona:
-- Oczekiwane gole: {home} {pred['lam_h']:.2f} | {away} {pred['lam_a']:.2f}
-- Szanse: Wygrana {home} {pred['p_home']:.1%} | Remis {pred['p_draw']:.1%} | Wygrana {away} {pred['p_away']:.1%}
-- Najbardziej prawdopodobny wynik: {pred['wynik_h']}:{pred['wynik_a']} ({pred['p_exact']:.1%})
-- Forma {home} (ostatnie 5): {forma_h}
-- Forma {away} (ostatnie 5): {forma_a}
-
-Napisz komentarz analityczny 2-3 zdania po polsku. Uwzględnij:
-- Kto jest faworytem i z jakiego powodu
-- Co mówi forma o aktualnej dyspozycji
-- Ewentualne niespodzianki lub wyrównany mecz
-Bądź konkretny, bez ogólników. Nie używaj słowa 'jednoznacznie'."""
-
-            import anthropic
-            message = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=200,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return message.content[0].text.strip()
-    except Exception:
-        pass
-
-    # Fallback – komentarz statystyczny bez AI
-    return _komentarz_statystyczny(home, away, pred, forma_h, forma_a)
-
-
-def _get_anthropic_client():
-    """Zwraca klienta Anthropic jeśli klucz jest w st.secrets, inaczej None."""
+    # Próba Claude API (wymaga ANTHROPIC_API_KEY w st.secrets)
     try:
         import anthropic
         key = st.secrets.get("ANTHROPIC_API_KEY", None)
         if key:
-            return anthropic.Anthropic(api_key=key)
+            client = anthropic.Anthropic(api_key=key)
+            prompt = (
+                f"Jesteś zwięzłym analitykiem piłkarskim. Analizujesz mecz {home} vs {away}.\n\n"
+                f"Dane modelu:\n"
+                f"- Oczekiwane gole: {home} {pred['lam_h']:.2f} | {away} {pred['lam_a']:.2f}\n"
+                f"- Szanse 1X2: {pred['p_home']:.1%} / {pred['p_draw']:.1%} / {pred['p_away']:.1%}\n"
+                f"- Typ modelu: {pred['typ']} @ {pred['fo_typ']:.2f}\n"
+                f"- Przewidywany wynik: {pred['wynik_h']}:{pred['wynik_a']}\n"
+                f"- Forma {home}: {fh} | Forma {away}: {fa}\n\n"
+                f"Napisz 2-3 zdania po polsku. Wspomnij kto jest faworytem, "
+                f"co mówi forma i czy spodziewasz się niespodzianki. "
+                f"Bądź konkretny, bez ogólników."
+            )
+            msg = client.messages.create(
+                model="claude-opus-4-6",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text.strip()
     except Exception:
         pass
-    return None
 
-
-def _komentarz_statystyczny(home: str, away: str, pred: dict, forma_h: str, forma_a: str) -> str:
-    """Komentarz generowany czysto na podstawie danych – bez zewnętrznego API."""
+    # Fallback – czysto statystyczny
     roznica = pred["p_home"] - pred["p_away"]
+    if   roznica >  0.20: faw = f"{home} jest wyraźnym faworytem ({pred['p_home']:.0%})."
+    elif roznica >  0.08: faw = f"{home} jest lekkim faworytem ({pred['p_home']:.0%} vs {pred['p_away']:.0%})."
+    elif roznica < -0.20: faw = f"{away} jest wyraźnym faworytem ({pred['p_away']:.0%})."
+    elif roznica < -0.08: faw = f"{away} jest lekkim faworytem ({pred['p_away']:.0%} vs {pred['p_home']:.0%})."
+    else:                 faw = f"Mecz bardzo wyrównany – remis ma {pred['p_draw']:.0%} szans."
 
-    if roznica > 0.20:
-        faworyt = f"{home} jest wyraźnym faworytem ({pred['p_home']:.0%} szans na wygraną)."
-    elif roznica > 0.08:
-        faworyt = f"{home} jest nieznacznym faworytem ({pred['p_home']:.0%} vs {pred['p_away']:.0%})."
-    elif roznica < -0.20:
-        faworyt = f"{away} jest wyraźnym faworytem ({pred['p_away']:.0%} szans na wygraną)."
-    elif roznica < -0.08:
-        faworyt = f"{away} jest nieznacznym faworytem ({pred['p_away']:.0%} vs {pred['p_home']:.0%})."
-    else:
-        faworyt = f"Mecz bardzo wyrównany – remis ma {pred['p_draw']:.0%} szans."
-
-    # Forma
-    def ocen_forme(f: str) -> str:
-        if not f or f == "brak danych":
-            return "forma nieznana"
-        wins = f.count("W")
-        losses = f.count("L")
-        if wins >= 4:
-            return "doskonała forma"
-        elif wins >= 3:
-            return "dobra forma"
-        elif losses >= 3:
-            return "słaba forma"
-        else:
-            return "nieregularna forma"
-
-    forma_opis = f"{home} ({ocen_forme(forma_h)}: {forma_h}), {away} ({ocen_forme(forma_a)}: {forma_a})."
-
-    gole_oczekiwane = pred["lam_h"] + pred["lam_a"]
+    gole = pred["lam_h"] + pred["lam_a"]
     gole_opis = (
-        f"Model spodziewa się bramkostrzelnego meczu (śr. {gole_oczekiwane:.1f} goli)."
-        if gole_oczekiwane >= 2.8
-        else f"Model przewiduje mecz z niewielu bramkami (śr. {gole_oczekiwane:.1f} goli)."
+        f"Model spodziewa się bramkostrzelnego meczu (śr. {gole:.1f} goli)."
+        if gole >= 2.8 else
+        f"Model przewiduje defensywny mecz (śr. {gole:.1f} goli)."
     )
+    forma_opis = (
+        f"Forma: {home} [{_ocen_forme(fh)}: {fh}], "
+        f"{away} [{_ocen_forme(fa)}: {fa}]."
+    )
+    return f"{faw} {forma_opis} {gole_opis}"
 
-    return f"{faworyt} Forma: {forma_opis} {gole_opis}"
+# ===========================================================================
+# WERYFIKACJA PREDYKCJI
+# ===========================================================================
 
+def wczytaj_predykcje() -> list:
+    if os.path.exists(PREDYKCJE_FILE):
+        try:
+            with open(PREDYKCJE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def zapisz_predykcje(lista: list) -> None:
+    with open(PREDYKCJE_FILE, "w", encoding="utf-8") as f:
+        json.dump(lista, f, ensure_ascii=False, indent=2)
+
+def weryfikuj_predykcje(predykcje: list, hist: pd.DataFrame) -> pd.DataFrame:
+    wyniki = []
+    for p in predykcje:
+        h, a = p["home"], p["away"]
+        match = hist[(hist["HomeTeam"] == h) & (hist["AwayTeam"] == a)]
+        if match.empty:
+            status   = "⏳ oczekuje"
+            wynik_r  = "–"
+            trafiony = None
+        else:
+            row = match.iloc[-1]
+            hg, ag = int(row["FTHG"]), int(row["FTAG"])
+            wynik_r  = f"{hg}:{ag}"
+            rzecz    = "1" if hg > ag else ("2" if hg < ag else "X")
+            trafiony = (rzecz == p["typ"])
+            status   = "✅ trafiony" if trafiony else "❌ chybiony"
+        wyniki.append({
+            "Liga":           p.get("liga", "–"),
+            "Mecz":           f"{h} vs {a}",
+            "Kolejka":        p.get("round", "–"),
+            "Typ modelu":     p["typ"],
+            "Fair Odds":      p["fo_typ"],
+            "Wynik":          wynik_r,
+            "Status":         status,
+            "Trafiony":       trafiony,
+            "Data predykcji": p.get("data", "–"),
+        })
+    return pd.DataFrame(wyniki) if wyniki else pd.DataFrame()
 
 # ===========================================================================
 # HELPERS UI
@@ -438,61 +428,102 @@ def _komentarz_statystyczny(home: str, away: str, pred: dict, forma_h: str, form
 def koloruj(p: float) -> str:
     return "🟢" if p > 0.65 else ("🟡" if p > 0.50 else "🔴")
 
-
 def oblicz_p(typ: str, linia: float, lam: float) -> float:
     return 1 - poisson.cdf(linia, lam) if typ == "Over" else poisson.cdf(linia, lam)
 
+def badge_typ(typ: str) -> str:
+    kolory = {"1": "#2196F3", "X": "#FF9800", "2": "#E91E63"}
+    kolor  = kolory.get(typ, "#888")
+    return (
+        f"<span style='background:{kolor};color:white;padding:2px 12px;"
+        f"border-radius:12px;font-weight:bold;font-size:0.95em'>{typ}</span>"
+    )
+
+def render_macierz_html(M: np.ndarray, home: str, away: str) -> str:
+    """Renderuje macierz wyników jako HTML table – unika problemów z st.dataframe + .style"""
+    max_val = M.max() if M.max() > 0 else 1
+    n = M.shape[0]
+    rows = [
+        "<table style='border-collapse:collapse;font-size:0.70em;width:100%;margin-top:6px'>",
+        "<thead><tr>",
+        f"<th style='padding:2px 5px;color:#999;font-size:0.85em'>{home[:7]}↓ {away[:7]}→</th>",
+    ]
+    for j in range(n):
+        rows.append(f"<th style='padding:2px 5px;text-align:center;color:#aaa'>{j}</th>")
+    rows.append("</tr></thead><tbody>")
+
+    for i in range(n):
+        rows.append("<tr>")
+        rows.append(
+            f"<td style='padding:2px 5px;font-weight:bold;color:#aaa;text-align:center'>{i}</td>"
+        )
+        for j in range(n):
+            v = M[i, j]
+            ratio = v / max_val
+            # Odcień od białego do czerwonego
+            r = 255
+            g = int(255 * (1 - ratio * 0.85))
+            b = int(255 * (1 - ratio * 0.85))
+            bold  = "font-weight:bold;" if (i, j) == np.unravel_index(M.argmax(), M.shape) else ""
+            border = "border:2px solid #E91E63;" if (i, j) == np.unravel_index(M.argmax(), M.shape) else ""
+            rows.append(
+                f"<td style='padding:2px 5px;text-align:center;"
+                f"background:rgb({r},{g},{b});{bold}{border}'>"
+                f"{v:.1%}</td>"
+            )
+        rows.append("</tr>")
+
+    rows.append("</tbody></table>")
+    return "".join(rows)
 
 # ===========================================================================
-# GŁÓWNA LOGIKA
+# GŁÓWNA LOGIKA APLIKACJI
 # ===========================================================================
 
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
 if not historical.empty:
-    srednie_df  = oblicz_wszystkie_statystyki(historical.to_json())
-    forma_dict  = oblicz_forme(historical)
-    tabela      = tabela_ligowa(historical)
+    srednie_df = oblicz_wszystkie_statystyki(historical.to_json())
+    forma_dict = oblicz_forme(historical)
+    tabela     = tabela_ligowa(historical)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🎯 Bet Builder",
         "⚽ Przewidywane Wyniki",
+        "✅ Weryfikacja Skuteczności",
         "📊 Tabela i Forma",
         "📈 Statystyki Modelu",
     ])
 
-    # -----------------------------------------------------------------------
+    # =========================================================================
     # TAB 1 – BET BUILDER
-    # -----------------------------------------------------------------------
+    # =========================================================================
     with tab1:
         st.subheader("🎛️ Zbuduj własne combo")
         c1, c2, c3 = st.columns(3)
         with c1:
-            linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5], index=1)
-            typ_gole   = st.selectbox("Typ goli", ["Over", "Under"], index=0)
+            linia_gole = st.selectbox("Linia goli",   [1.5, 2.5, 3.5], index=1)
+            typ_gole   = st.selectbox("Typ goli",     ["Over", "Under"])
         with c2:
             linia_rogi = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5], index=1)
-            typ_rogi   = st.selectbox("Typ rożnych", ["Over", "Under"], index=0)
+            typ_rogi   = st.selectbox("Typ rożnych",  ["Over", "Under"])
         with c3:
             linia_kartki = st.selectbox("Linia kartek", [2.5, 3.5, 4.5, 5.5], index=1)
-            typ_kartki   = st.selectbox("Typ kartek", ["Over", "Under"], index=0)
+            typ_kartki   = st.selectbox("Typ kartek",  ["Over", "Under"])
 
         min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
-
         st.subheader("📅 Predykcje – najbliższa kolejka")
 
         if not schedule.empty and not srednie_df.empty:
-            dzisiaj = datetime.now().date()
+            dzisiaj  = datetime.now().date()
             przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
-
             if not przyszle.empty:
-                najblizsza = przyszle["round"].min()
-                mecze = schedule[schedule["round"] == najblizsza]
-                st.caption(f"Kolejka {int(najblizsza)} – {len(mecze)} meczów")
+                nb    = przyszle["round"].min()
+                mecze = schedule[schedule["round"] == nb]
+                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
 
                 col1, col2 = st.columns(2)
-
                 with col1:
                     st.write("**Combo Builder**")
                     combo_count = 0
@@ -501,24 +532,20 @@ if not historical.empty:
                         a = map_nazwa(mecz["away_team"])
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
-
                         lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"]    + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
                         lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                         lam_r = (srednie_df.loc[h, "Różne (dom)"]             + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
                         lam_k = (srednie_df.loc[h, "Kartki (dom)"]            + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
-
                         p_g = oblicz_p(typ_gole,   linia_gole,   lam_h + lam_a)
                         p_r = oblicz_p(typ_rogi,   linia_rogi,   lam_r)
                         p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
                         p_combo = p_g * p_r * p_k
-
                         if p_combo >= min_prob:
                             combo_count += 1
                             with st.expander(f"{h} vs {a} ({p_combo:.1%})"):
                                 st.write(f"{koloruj(p_g)} Gole {typ_gole} {linia_gole}: {p_g:.1%}")
                                 st.write(f"{koloruj(p_r)} Rożne {typ_rogi} {linia_rogi}: {p_r:.1%}")
                                 st.write(f"{koloruj(p_k)} Kartki {typ_kartki} {linia_kartki}: {p_k:.1%}")
-
                     if combo_count == 0:
                         st.info("Brak meczów spełniających kryteria. Zmniejsz próg.")
 
@@ -534,43 +561,47 @@ if not historical.empty:
                         lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                         p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
                         btts_data.append((f"{h} - {a}", p_btts))
-
-                    for mecz_str, p in sorted(btts_data, key=lambda x: x[1], reverse=True):
-                        st.write(f"{koloruj(p)} **{mecz_str}**: {p:.1%}")
+                    for ms, p in sorted(btts_data, key=lambda x: x[1], reverse=True):
+                        st.write(f"{koloruj(p)} **{ms}**: {p:.1%}")
             else:
                 st.info("Brak nadchodzących meczów w terminarzu.")
-        else:
-            if schedule.empty:
-                st.warning("Brak danych terminarza.")
-            if srednie_df.empty:
-                st.warning("Brak statystyk drużyn (za mało danych historycznych).")
 
-    # -----------------------------------------------------------------------
-    # TAB 2 – PRZEWIDYWANE WYNIKI (NOWY)
-    # -----------------------------------------------------------------------
+    # =========================================================================
+    # TAB 2 – PRZEWIDYWANE WYNIKI
+    # =========================================================================
     with tab2:
         st.subheader("⚽ Przewidywane wyniki – najbliższa kolejka")
-        st.caption("Fair Odds = kurs bez marży bukmachera, wyliczony z modelu Poissona.")
+        st.caption(
+            "**Fair Odds** = kurs bez marży bukmachera wyliczony z modelu. "
+            "**Typ modelu** = wynik z najwyższym p (1 / X / 2)."
+        )
 
-        pokaz_komentarz = st.toggle("💬 Pokaż komentarz analityczny", value=True)
-        pokaz_macierz   = st.toggle("🔢 Pokaż macierz wyników", value=False)
+        ct1, ct2, ct3 = st.columns(3)
+        with ct1:
+            pokaz_komentarz = st.toggle("💬 Komentarz analityczny", value=True)
+        with ct2:
+            pokaz_macierz = st.toggle("🔢 Macierz wyników", value=False)
+        with ct3:
+            zapisuj_flag = st.toggle(
+                "💾 Zapisz do weryfikacji", value=False,
+                help="Zapisz predykcje tej kolejki – po meczach sprawdzisz skuteczność.",
+            )
 
         if not schedule.empty and not srednie_df.empty:
-            dzisiaj = datetime.now().date()
+            dzisiaj  = datetime.now().date()
             przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
 
             if not przyszle.empty:
-                najblizsza = przyszle["round"].min()
-                mecze = schedule[schedule["round"] == najblizsza]
-                st.caption(f"Kolejka {int(najblizsza)} – {len(mecze)} meczów")
+                nb    = przyszle["round"].min()
+                mecze = schedule[schedule["round"] == nb]
+                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
 
+                nowe_predykcje = []
                 dopasowane = 0
-                for _, mecz in mecze.iterrows():
-                    h_raw = mecz["home_team"]
-                    a_raw = mecz["away_team"]
-                    h = map_nazwa(h_raw)
-                    a = map_nazwa(a_raw)
 
+                for _, mecz in mecze.iterrows():
+                    h = map_nazwa(mecz["home_team"])
+                    a = map_nazwa(mecz["away_team"])
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
 
@@ -578,63 +609,196 @@ if not historical.empty:
                     lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                     pred  = predykcja_meczu(lam_h, lam_a)
                     dopasowane += 1
-
-                    # Data meczu
                     data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
+                    nowe_predykcje.append({
+                        "liga":   wybrana_liga,
+                        "home":   h,
+                        "away":   a,
+                        "round":  int(nb),
+                        "typ":    pred["typ"],
+                        "fo_typ": pred["fo_typ"],
+                        "data":   datetime.now().strftime("%Y-%m-%d"),
+                    })
+
+                    # --- KARTA MECZU ---
                     with st.container(border=True):
-                        # Nagłówek
-                        col_h, col_vs, col_a = st.columns([5, 2, 5])
+                        # Wiersz: drużyna domowa | data | drużyna gości
+                        col_h, col_mid, col_a = st.columns([5, 2, 5])
                         with col_h:
-                            st.markdown(f"### {h}")
-                        with col_vs:
-                            st.markdown(f"<div style='text-align:center;padding-top:8px;color:gray'>{data_meczu}</div>", unsafe_allow_html=True)
+                            st.markdown(
+                                f"<div style='font-size:1.05em;font-weight:bold;padding:2px 0'>{h}</div>",
+                                unsafe_allow_html=True,
+                            )
+                        with col_mid:
+                            st.markdown(
+                                f"<div style='text-align:center;color:#888;font-size:0.78em;"
+                                f"padding-top:5px'>{data_meczu}</div>",
+                                unsafe_allow_html=True,
+                            )
                         with col_a:
-                            st.markdown(f"<div style='text-align:right'>### {a}</div>", unsafe_allow_html=True)
-                            st.markdown(f"### {a}")
+                            st.markdown(
+                                f"<div style='font-size:1.05em;font-weight:bold;"
+                                f"text-align:right;padding:2px 0'>{a}</div>",
+                                unsafe_allow_html=True,
+                            )
 
                         # Przewidywany wynik
                         st.markdown(
-                            f"<h2 style='text-align:center;margin:0'>⚽ {pred['wynik_h']} : {pred['wynik_a']} "
-                            f"<span style='font-size:0.6em;color:gray'>({pred['p_exact']:.1%})</span></h2>",
+                            f"<div style='text-align:center;font-size:1.7em;"
+                            f"font-weight:bold;margin:6px 0'>"
+                            f"⚽ {pred['wynik_h']}:{pred['wynik_a']}"
+                            f"<span style='font-size:0.5em;color:#888;"
+                            f"font-weight:normal;margin-left:8px'>"
+                            f"({pred['p_exact']:.1%})</span></div>",
                             unsafe_allow_html=True,
                         )
 
-                        # Prawdopodobieństwa i fair odds
-                        c1, c2, c3 = st.columns(3)
-                        with c1:
-                            st.metric(f"1 – {h[:10]}", f"{pred['p_home']:.1%}", f"Fair Odds: {pred['fo_home']}")
-                        with c2:
-                            st.metric("X – Remis", f"{pred['p_draw']:.1%}", f"Fair Odds: {pred['fo_draw']}")
-                        with c3:
-                            st.metric(f"2 – {a[:10]}", f"{pred['p_away']:.1%}", f"Fair Odds: {pred['fo_away']}")
+                        # Typ + fair odds
+                        st.markdown(
+                            f"<div style='text-align:center;margin-bottom:10px'>"
+                            f"Typ modelu:&nbsp;{badge_typ(pred['typ'])}"
+                            f"&nbsp;&nbsp;"
+                            f"<span style='font-size:0.88em;color:#888'>"
+                            f"Fair Odds:&nbsp;<b>{pred['fo_typ']:.2f}</b>"
+                            f"&nbsp;({pred['p_typ']:.1%})"
+                            f"</span></div>",
+                            unsafe_allow_html=True,
+                        )
 
-                        # Komentarz AI / statystyczny
+                        # Metryki 1X2
+                        mc1, mc2, mc3 = st.columns(3)
+                        with mc1:
+                            st.metric(
+                                f"1 – {h[:13]}",
+                                f"{pred['p_home']:.1%}",
+                                f"@ {pred['fo_home']:.2f}",
+                                delta_color="normal" if pred["typ"] == "1" else "off",
+                            )
+                        with mc2:
+                            st.metric(
+                                "X – Remis",
+                                f"{pred['p_draw']:.1%}",
+                                f"@ {pred['fo_draw']:.2f}",
+                                delta_color="normal" if pred["typ"] == "X" else "off",
+                            )
+                        with mc3:
+                            st.metric(
+                                f"2 – {a[:13]}",
+                                f"{pred['p_away']:.1%}",
+                                f"@ {pred['fo_away']:.2f}",
+                                delta_color="normal" if pred["typ"] == "2" else "off",
+                            )
+
+                        # Komentarz
                         if pokaz_komentarz:
-                            with st.spinner("Generuję komentarz..."):
-                                kom = generuj_komentarz(h, a, pred, forma_dict)
+                            kom = generuj_komentarz(h, a, pred, forma_dict)
                             st.info(f"💬 {kom}")
 
-                        # Macierz wyników
+                        # Macierz (HTML, nie st.dataframe)
                         if pokaz_macierz:
-                            st.write("**Macierz prawdopodobieństw dokładnych wyników**")
-                            M = pred["macierz"]
-                            df_m = pd.DataFrame(
-                                M,
-                                index=[f"{h[:6]}={i}" for i in range(MAX_GOLE)],
-                                columns=[f"{a[:6]}={j}" for j in range(MAX_GOLE)],
+                            st.markdown("**Macierz dokładnych wyników** (wiersze = gole {h[:6]}, kolumny = gole {a[:6]})")
+                            st.markdown(
+                                render_macierz_html(pred["macierz"], h, a),
+                                unsafe_allow_html=True,
                             )
-                            st.dataframe(df_m.style.format("{:.1%}").background_gradient(cmap="YlOrRd"), use_container_width=True)
+
+                # Zapis predykcji
+                if zapisuj_flag and nowe_predykcje:
+                    istniejace = wczytaj_predykcje()
+                    klucze     = {(p["liga"], p["home"], p["away"], p["round"]) for p in istniejace}
+                    dodane     = 0
+                    for p in nowe_predykcje:
+                        k = (p["liga"], p["home"], p["away"], p["round"])
+                        if k not in klucze:
+                            istniejace.append(p)
+                            dodane += 1
+                    zapisz_predykcje(istniejace)
+                    st.success(f"✅ Zapisano {dodane} nowych predykcji." if dodane else "Predykcje tej kolejki już zapisano.")
 
                 if dopasowane == 0:
-                    st.warning("Żaden mecz z kolejki nie mógł być zmapowany na dane historyczne. Sprawdź Debug w sidebarze.")
+                    st.warning("Żaden mecz nie mógł być dopasowany – sprawdź Debug w sidebarze.")
             else:
                 st.info("Brak nadchodzących meczów w terminarzu.")
 
-    # -----------------------------------------------------------------------
-    # TAB 3 – TABELA I FORMA
-    # -----------------------------------------------------------------------
+    # =========================================================================
+    # TAB 3 – WERYFIKACJA SKUTECZNOŚCI
+    # =========================================================================
     with tab3:
+        st.subheader("✅ Weryfikacja skuteczności modelu")
+        st.caption(
+            "Predykcje zapisujesz w zakładce **⚽ Przewidywane Wyniki** przed kolejką. "
+            "Po rozegraniu meczów dane z football-data.co.uk są porównywane automatycznie."
+        )
+
+        predykcje = wczytaj_predykcje()
+
+        if not predykcje:
+            st.info(
+                "Brak zapisanych predykcji. Przejdź do zakładki **⚽ Przewidywane Wyniki**, "
+                "włącz przełącznik 💾 i wróć tu po kolejce."
+            )
+        else:
+            df_wer = weryfikuj_predykcje(predykcje, historical)
+
+            if not df_wer.empty:
+                zakonczone = df_wer[df_wer["Trafiony"].notna()]
+
+                if not zakonczone.empty:
+                    trafione    = int(zakonczone["Trafiony"].sum())
+                    wszystkie   = len(zakonczone)
+                    skutecznosc = trafione / wszystkie
+                    sr_odds_tr  = zakonczone[zakonczone["Trafiony"] == True]["Fair Odds"].mean()
+
+                    st.markdown("### 📊 Podsumowanie")
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Rozegrane mecze",      wszystkie)
+                    m2.metric("Trafione typy",         trafione)
+                    m3.metric("Skuteczność",           f"{skutecznosc:.1%}")
+                    m4.metric("Śr. odds trafionych",  f"{sr_odds_tr:.2f}" if not np.isnan(sr_odds_tr) else "–")
+
+                    # Wykres per liga (jeśli więcej niż jedna)
+                    per_liga = (
+                        zakonczone.groupby("Liga")["Trafiony"]
+                        .agg(["sum", "count"])
+                        .rename(columns={"sum": "Trafione", "count": "Mecze"})
+                    )
+                    per_liga["Skuteczność %"] = (per_liga["Trafione"] / per_liga["Mecze"] * 100).round(1)
+                    if len(per_liga) > 1:
+                        st.bar_chart(per_liga["Skuteczność %"])
+
+                    st.divider()
+
+                # Tabela szczegółowa
+                st.markdown("### 📋 Szczegółowe wyniki")
+                filtr = st.selectbox(
+                    "Filtruj wyniki",
+                    ["Wszystkie", "✅ Trafione", "❌ Chybione", "⏳ Oczekujące"],
+                )
+                df_show = df_wer.copy()
+                if filtr == "✅ Trafione":
+                    df_show = df_show[df_show["Status"] == "✅ trafiony"]
+                elif filtr == "❌ Chybione":
+                    df_show = df_show[df_show["Status"] == "❌ chybiony"]
+                elif filtr == "⏳ Oczekujące":
+                    df_show = df_show[df_show["Status"] == "⏳ oczekuje"]
+
+                st.dataframe(
+                    df_show.drop(columns=["Trafiony"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.divider()
+                if st.button("🗑️ Wyczyść wszystkie predykcje", type="secondary"):
+                    zapisz_predykcje([])
+                    st.success("Predykcje wyczyszczone.")
+                    st.rerun()
+
+    # =========================================================================
+    # TAB 4 – TABELA I FORMA
+    # =========================================================================
+    with tab4:
         st.subheader("📊 Aktualna Sytuacja")
         c_l, c_f = st.columns([2, 1])
         with c_l:
@@ -642,28 +806,26 @@ if not historical.empty:
             st.dataframe(tabela, use_container_width=True)
         with c_f:
             st.write("**Forma (5 ostatnich)**")
-            forma_df = pd.DataFrame.from_dict(forma_dict, orient="index", columns=["Forma"])
-            st.dataframe(forma_df, use_container_width=True)
+            st.dataframe(
+                pd.DataFrame.from_dict(forma_dict, orient="index", columns=["Forma"]),
+                use_container_width=True,
+            )
 
-    # -----------------------------------------------------------------------
-    # TAB 4 – STATYSTYKI MODELU
-    # -----------------------------------------------------------------------
-    with tab4:
+    # =========================================================================
+    # TAB 5 – STATYSTYKI MODELU
+    # =========================================================================
+    with tab5:
         st.subheader("📊 Średnie ważone drużyn")
-        st.write("Dane uwzględniają atut własnego boiska oraz wagę ostatnich meczów (10 ostatnich spotkań).")
+        st.write("Dane uwzględniają atut własnego boiska + wagę ostatnich meczów (10 ostatnich).")
         st.dataframe(srednie_df.sort_index(), use_container_width=True)
-
         st.divider()
         st.caption(f"📊 Liczba meczów w bazie: {len(historical)}")
         st.caption(f"📅 Ostatnia aktualizacja: {historical['Date'].max().strftime('%d.%m.%Y')}")
-
         if st.button("🔄 Odśwież dane"):
             st.cache_data.clear()
             st.rerun()
 
-    # -----------------------------------------------------------------------
-    # DEBUG MODE
-    # -----------------------------------------------------------------------
+    # Debug mode
     if debug_mode:
         st.sidebar.divider()
         st.sidebar.write("**🔧 Niezmapowane nazwy drużyn**")
@@ -671,7 +833,7 @@ if not historical.empty:
             for n in sorted(_niezmapowane):
                 st.sidebar.warning(f"`{n}`")
         else:
-            st.sidebar.success("Wszystkie nazwy zmapowane poprawnie ✅")
+            st.sidebar.success("Wszystkie nazwy zmapowane ✅")
 
 else:
-    st.error("Nie udało się pobrać danych historycznych. Sprawdź połączenie z internetem lub spróbuj później.")
+    st.error("Nie udało się pobrać danych historycznych. Sprawdź połączenie z internetem.")
