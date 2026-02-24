@@ -427,7 +427,7 @@ if not historical.empty:
 strength_df, league_avg_home, league_avg_away = model_relative_strength(historical)
     
     # --- GŁÓWNY INTERFEJS ---
-    tab1, tab2, tab3 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu","🔮 Predykcje Modelu"])
     
     with tab1:
         st.subheader("🎛️ Zbuduj własne combo")
@@ -550,3 +550,117 @@ strength_df, league_avg_home, league_avg_away = model_relative_strength(historic
             st.rerun()
 else:
     st.error("Nie udało się pobrać danych historycznych. Sprawdź połączenie z internetem lub spróbuj później.")
+
+# ==============================
+# TAB 4 — PREDYKCJE MODELU + AI KOMENTARZ
+# ==============================
+
+with tab4:
+
+    st.header("🔮 Predykcje Wyników — Relative Strength Model")
+
+    if strength_df.empty:
+        st.warning("Za mało danych do wygenerowania predykcji.")
+    else:
+
+        for _, mecz in mecze.iterrows():
+
+            h_raw = mecz['home_team']
+            a_raw = mecz['away_team']
+            h = map_nazwa(h_raw)
+            a = map_nazwa(a_raw)
+
+            if h in strength_df.index and a in strength_df.index:
+
+                lam_h = (
+                    strength_df.loc[h, "Attack Home"] *
+                    strength_df.loc[a, "Defence Away"] *
+                    league_avg_home
+                )
+
+                lam_a = (
+                    strength_df.loc[a, "Attack Away"] *
+                    strength_df.loc[h, "Defence Home"] *
+                    league_avg_away
+                )
+
+                p_home = 0
+                p_draw = 0
+                p_away = 0
+
+                for i in range(6):
+                    for j in range(6):
+                        p = poisson.pmf(i, lam_h) * poisson.pmf(j, lam_a)
+                        if i > j:
+                            p_home += p
+                        elif i == j:
+                            p_draw += p
+                        else:
+                            p_away += p
+
+                fair_home = 1 / p_home if p_home > 0 else 0
+                fair_draw = 1 / p_draw if p_draw > 0 else 0
+                fair_away = 1 / p_away if p_away > 0 else 0
+
+                p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
+
+                # TOP 3 wyniki
+                wyniki = []
+                for i in range(5):
+                    for j in range(5):
+                        p = poisson.pmf(i, lam_h) * poisson.pmf(j, lam_a)
+                        wyniki.append((f"{i}-{j}", p))
+
+                top3 = sorted(wyniki, key=lambda x: x[1], reverse=True)[:3]
+
+                with st.expander(f"📊 {h} vs {a}"):
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.subheader("1X2")
+                        st.write(f"🏠 Home: {p_home:.1%}  | Fair: {fair_home:.2f}")
+                        st.write(f"🤝 Draw: {p_draw:.1%}  | Fair: {fair_draw:.2f}")
+                        st.write(f"✈ Away: {p_away:.1%}  | Fair: {fair_away:.2f}")
+
+                    with col2:
+                        st.subheader("Dodatkowe")
+                        st.write(f"BTTS: {p_btts:.1%}")
+                        st.write(f"xG Model Home: {lam_h:.2f}")
+                        st.write(f"xG Model Away: {lam_a:.2f}")
+
+                    st.markdown("**Top 3 najbardziej prawdopodobne wyniki:**")
+                    for w, p in top3:
+                        st.write(f"{w} → {p:.1%}")
+
+                    # ==============================
+                    # AI STYLE KOMENTARZ
+                    # ==============================
+
+                    st.divider()
+                    st.subheader("🧠 Komentarz analityczny")
+
+                    commentary = []
+
+                    if p_home > 0.55:
+                        commentary.append("Model wyraźnie faworyzuje gospodarzy.")
+                    elif p_away > 0.55:
+                        commentary.append("Model wyraźnie wskazuje przewagę gości.")
+                    else:
+                        commentary.append("Mecz wygląda na stosunkowo wyrównany.")
+
+                    if p_btts > 0.65:
+                        commentary.append("Wysokie prawdopodobieństwo BTTS — obie drużyny regularnie strzelają.")
+                    elif p_btts < 0.40:
+                        commentary.append("Niskie BTTS — możliwy mecz z dominacją jednej strony.")
+
+                    if lam_h + lam_a > 3:
+                        commentary.append("Model sugeruje mecz o wysokiej liczbie goli.")
+                    elif lam_h + lam_a < 2:
+                        commentary.append("Prognoza wskazuje na niski total bramkowy.")
+
+                    best_score = top3[0][0]
+                    commentary.append(f"Najbardziej prawdopodobny wynik to {best_score}.")
+
+                    for line in commentary:
+                        st.write("• " + line)
