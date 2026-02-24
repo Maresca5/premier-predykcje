@@ -237,13 +237,40 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
 
 @st.cache_data
 def oblicz_srednie_ligowe(df_json: str) -> dict:
-    """Srednie ligowe potrzebne do normalizacji lambd."""
+    """
+    Średnie ligowe + kalibrowany rho Dixon-Coles.
+
+    rho obliczamy empirycznie:
+      rho_est = (obs_00 - exp_00) / (exp_00 * avg_h * avg_a)
+    gdzie obs/exp to udział meczów 0:0 w danych vs oczekiwanie Poissona.
+    Clampujemy do [-0.25, 0.0] – fizyczny zakres D-C.
+    """
     df = pd.read_json(df_json)
     if df.empty:
-        return {"avg_home": 1.5, "avg_away": 1.2}
+        return {"avg_home": 1.5, "avg_away": 1.2, "rho": -0.13}
+
+    avg_h = float(df["FTHG"].mean())
+    avg_a = float(df["FTAG"].mean())
+    n     = len(df)
+
+    # Obserwowane częstości niskich wyników
+    obs_00 = len(df[(df["FTHG"] == 0) & (df["FTAG"] == 0)]) / n
+    obs_11 = len(df[(df["FTHG"] == 1) & (df["FTAG"] == 1)]) / n
+
+    # Oczekiwane wg czystego Poissona
+    from scipy.stats import poisson as _poisson
+    exp_00 = _poisson.pmf(0, avg_h) * _poisson.pmf(0, avg_a)
+    exp_11 = _poisson.pmf(1, avg_h) * _poisson.pmf(1, avg_a)
+
+    # Estymacja rho z obu równań D-C, średnia
+    rho_from_00 = (obs_00 / exp_00 - 1) / (avg_h * avg_a) if exp_00 > 0 else -0.13
+    rho_from_11 = -(obs_11 / exp_11 - 1) if exp_11 > 0 else -0.13
+    rho = float(np.clip(np.mean([rho_from_00, rho_from_11]), -0.25, 0.0))
+
     return {
-        "avg_home": float(df["FTHG"].mean()),
-        "avg_away": float(df["FTAG"].mean()),
+        "avg_home": avg_h,
+        "avg_away": avg_a,
+        "rho":      rho,
     }
 
 
@@ -315,7 +342,6 @@ def tabela_ligowa(df: pd.DataFrame) -> pd.DataFrame:
 # MODEL POISSONA – PREDYKCJE
 # ===========================================================================
 
-MAX_GOLE = 6  # 0..5 (macierz 5x5 po przycięciu do top-wyników)
 
 def wybierz_typ(p_home: float, p_draw: float, p_away: float) -> tuple[str, float]:
     """
@@ -420,13 +446,15 @@ def confidence_score(p_home: float, p_draw: float, p_away: float) -> tuple:
         return "Coinflip", "🔴", f"Mecz bardzo wyrównany (spread {spread:.0%})"
 
 
-def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
+def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
+    # Dynamiczny zakres: ceil(max_lambda + 4), min 6, max 10
+    max_gole = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     M_raw = np.outer(
-        poisson.pmf(range(MAX_GOLE), lam_h),
-        poisson.pmf(range(MAX_GOLE), lam_a),
+        poisson.pmf(range(max_gole), lam_h),
+        poisson.pmf(range(max_gole), lam_a),
     )
-    # Dixon-Coles korekta remisów i niskich wyników
-    M = dixon_coles_adj(M_raw, lam_h, lam_a)
+    # Dixon-Coles z kalibrowanym rho per liga
+    M = dixon_coles_adj(M_raw, lam_h, lam_a, rho=rho)
 
     p_home = float(np.tril(M, -1).sum())
     p_draw = float(np.trace(M))
@@ -722,7 +750,19 @@ if not historical.empty:
                         lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                         lam_r = (srednie_df.loc[h, "Różne (dom)"]             + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
                         lam_k = (srednie_df.loc[h, "Kartki (dom)"]            + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
-                        p_g = oblicz_p(typ_gole,   linia_gole,   lam_h + lam_a)
+                        # Over/Under przez macierz D-C (dokładniejsze niż suma lambd)
+                        rho_c = srednie_lig["rho"]
+                        mg_c  = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
+                        M_c   = dixon_coles_adj(
+                            np.outer(poisson.pmf(range(mg_c), lam_h),
+                                     poisson.pmf(range(mg_c), lam_a)),
+                            lam_h, lam_a, rho=rho_c
+                        )
+                        linia_int = int(linia_gole)  # np. 2.5 → próg to i+j > 2
+                        p_over_m  = float(sum(M_c[i, j]
+                                              for i in range(mg_c) for j in range(mg_c)
+                                              if i + j > linia_int))
+                        p_g = p_over_m if typ_gole == "Over" else 1 - p_over_m
                         p_r = oblicz_p(typ_rogi,   linia_rogi,   lam_r)
                         p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
                         p_combo = p_g * p_r * p_k
@@ -736,7 +776,7 @@ if not historical.empty:
                         st.info("Brak meczów spełniających kryteria. Zmniejsz próg.")
 
                 with col2:
-                    st.write("**BTTS Ranking**")
+                    st.write("**BTTS Ranking** *(z macierzy D-C)*")
                     btts_data = []
                     for _, mecz in mecze.iterrows():
                         h = map_nazwa(mecz["home_team"])
@@ -744,7 +784,16 @@ if not historical.empty:
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
                         lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                        p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
+                        # BTTS z macierzy D-C – spójne z modelem predykcji
+                        rho = srednie_lig["rho"]
+                        mg  = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
+                        M_b = dixon_coles_adj(
+                            np.outer(poisson.pmf(range(mg), lam_h),
+                                     poisson.pmf(range(mg), lam_a)),
+                            lam_h, lam_a, rho=rho
+                        )
+                        # P(BTTS) = 1 - P(home=0) - P(away=0) + P(0:0)
+                        p_btts = float(1 - M_b[0, :].sum() - M_b[:, 0].sum() + M_b[0, 0])
                         btts_data.append((f"{h} - {a}", p_btts))
                     for ms, p in sorted(btts_data, key=lambda x: x[1], reverse=True):
                         st.write(f"{koloruj(p)} **{ms}**: {p:.1%}")
@@ -819,7 +868,7 @@ if not historical.empty:
                         continue
 
                     lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred  = predykcja_meczu(lam_h, lam_a)
+                    pred  = predykcja_meczu(lam_h, lam_a, rho=srednie_lig["rho"])
                     dopasowane += 1
                     data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
@@ -1055,7 +1104,12 @@ if not historical.empty:
         st.write("Dane uwzględniają atut własnego boiska + wagę ostatnich meczów (10 ostatnich).")
         st.dataframe(srednie_df.sort_index(), use_container_width=True)
         st.divider()
-        st.caption(f"📊 Liczba meczów w bazie: {len(historical)}")
+        col_inf1, col_inf2, col_inf3 = st.columns(3)
+        col_inf1.metric("Mecze w bazie",    len(historical))
+        col_inf2.metric("Kalibrowane ρ (rho)", f"{srednie_lig['rho']:.4f}",
+                        help="Dixon-Coles rho obliczone z historii tej ligi. Im bliżej 0, tym liga ma więcej remisów zgodnych z Poissonem.")
+        col_inf3.metric("Śr. gole dom / wyj.",
+                        f"{srednie_lig['avg_home']:.2f} / {srednie_lig['avg_away']:.2f}")
         st.caption(f"📅 Ostatnia aktualizacja: {historical['Date'].max().strftime('%d.%m.%Y')}")
         if st.button("🔄 Odśwież dane"):
             st.cache_data.clear()
