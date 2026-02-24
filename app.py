@@ -394,13 +394,13 @@ if not historical.empty:
         st.subheader("🎛️ Zbuduj własne combo")
         c1, c2, c3 = st.columns(3)
         with c1:
-            linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5], index=1)
+            linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5, 4.5], index=1)
             typ_gole = st.selectbox("Typ goli", ["Over", "Under"], index=0)
         with c2:
-            linia_rogi = st.selectbox("Linia rożnych", [6.5, 7.5, 8.5, 9.5, 10.5], index=1)
+            linia_rogi = st.selectbox("Linia rożnych", [6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5], index=1)
             typ_rogi = st.selectbox("Typ rożnych", ["Over", "Under"], index=0)
         with c3:
-            linia_kartki = st.selectbox("Linia kartek", [1.5, 2.5, 3.5, 4.5, 5.5], index=1)
+            linia_kartki = st.selectbox("Linia kartek", [1.5, 2.5, 3.5, 4.5, 5.5, 6.5], index=1)
             typ_kartki = st.selectbox("Typ kartek", ["Over", "Under"], index=0)
         
         min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
