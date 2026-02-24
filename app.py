@@ -95,6 +95,7 @@ NAZWY_MAP = {
     "Sassuolo": "Sassuolo",
     "Empoli": "Empoli",
     "Salernitana": "Salernitana",
+    "Hellas Verona": "Verona",
     "Lecce": "Lecce",
     
     # Ligue 1
