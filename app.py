@@ -5,24 +5,44 @@ from datetime import datetime
 import requests
 from io import StringIO
 import numpy as np
+import os
 
 # --- KONFIGURACJA ---
 st.set_page_config(page_title="Predykcje Top 5 Lig", layout="wide")
 st.title("Predykcje Top 5 Lig 2025/26")
-st.markdown("Model Poissona + home/away + wagi formy | Dane z football-data.co.uk + terminarze z repo")
+st.markdown("Model Poissona + home/away + wagi formy")
 
 # Wybór ligi
-ligi = {
-    "Premier League": {"historical": "E0.csv", "schedule": "terminarz_premier_league.csv"},
-    "La Liga": {"historical": "SP1.csv", "schedule": "terminarz_la_liga.csv"},
-    "Bundesliga": {"historical": "D1.csv", "schedule": "terminarz_bundesliga.csv"},
-    "Serie A": {"historical": "I1.csv", "schedule": "terminarz_serie_a.csv"},
-    "Ligue 1": {"historical": "F1.csv", "schedule": "terminarz_ligue_1.csv"},
+LIGI = {
+    "Premier League": {
+        "historical": "E0.csv",
+        "schedule_patterns": [
+            "terminarz_premier_league_2025.csv",
+            "terminarz_premier_2025.csv",
+            "terminarz_premier.csv"  # ewentualne inne warianty
+        ]
+    },
+    "La Liga": {
+        "historical": "SP1.csv",
+        "schedule_patterns": ["terminarz_la_liga_2025.csv"]
+    },
+    "Bundesliga": {
+        "historical": "D1.csv",
+        "schedule_patterns": ["terminarz_bundesliga_2025.csv"]
+    },
+    "Serie A": {
+        "historical": "I1.csv",
+        "schedule_patterns": ["terminarz_serie_a_2025.csv"]
+    },
+    "Ligue 1": {
+        "historical": "F1.csv",
+        "schedule_patterns": ["terminarz_ligue_1_2025.csv"]
+    },
 }
 
-wybrana_liga = st.selectbox("Wybierz ligę", list(ligi.keys()))
+wybrana_liga = st.selectbox("Wybierz ligę", list(LIGI.keys()))
 
-# Mapowanie nazw (dla Premier League – możesz rozszerzyć dla innych lig)
+# Mapowanie nazw (rozszerzone)
 NAZWY_MAP = {
     "Brighton & Hove Albion": "Brighton",
     "West Ham United": "West Ham",
@@ -38,7 +58,7 @@ NAZWY_MAP = {
 # --- DANE ---
 @st.cache_data(ttl=900)
 def load_historical():
-    kod = ligi[wybrana_liga]["historical"]
+    kod = LIGI[wybrana_liga]["historical"]
     url = f"https://www.football-data.co.uk/mmz4281/2526/{kod}"
     try:
         r = requests.get(url)
@@ -56,14 +76,19 @@ def load_historical():
 
 @st.cache_data(ttl=86400)
 def load_schedule():
-    plik = ligi[wybrana_liga]["schedule"]
-    try:
-        df = pd.read_csv(plik)
-        df['date'] = pd.to_datetime(df['date'])
-        return df.sort_values('date')
-    except:
-        st.error(f"Brak pliku terminarza dla {wybrana_liga}: {plik}")
-        return pd.DataFrame()
+    patterns = LIGI[wybrana_liga]["schedule_patterns"]
+    for pattern in patterns:
+        if os.path.exists(pattern):
+            try:
+                df = pd.read_csv(pattern)
+                df['date'] = pd.to_datetime(df['date'])
+                return df.sort_values('date')
+            except:
+                st.warning(f"Plik {pattern} istnieje, ale nie udało się go wczytać.")
+                continue
+    
+    st.error(f"Nie znaleziono żadnego pasującego pliku terminarza dla {wybrana_liga}. Sprawdź nazwy w repozytorium.")
+    return pd.DataFrame()
 
 historical = load_historical()
 schedule = load_schedule()
