@@ -135,7 +135,7 @@ NAZWY_MAP = {
     "Leipzig": "RB Leipzig",
     "Bayer 04 Leverkusen": "Leverkusen",
     "Leverkusen": "Leverkusen",
-    "Eintracht Frankfurt": "Eintracht",
+    "Eintracht Frankfurt": "Ein Frankfurt",
     "Eintracht": "Eintracht",
     "VfB Stuttgart": "Stuttgart",
     "Stuttgart": "Stuttgart",
