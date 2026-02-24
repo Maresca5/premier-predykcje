@@ -150,7 +150,7 @@ NAZWY_MAP = {
     "SC Freiburg": "Freiburg",
     "Freiburg": "Freiburg",
     "1. FC Köln": "Köln",
-    "FC Köln": "Köln",
+    "FC Köln": "Koln",
     "Köln": "Köln",
     "FSV Mainz 05": "Mainz",
     "Mainz": "Mainz",
