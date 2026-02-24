@@ -171,6 +171,7 @@ NAZWY_MAP = {
     # ===== SERIE A =====
     "AC Milan": "AC Milan",
     "Milan": "AC Milan",
+    "Milan": "Milan",
     "Inter": "Inter",
     "Internazionale": "Inter",
     "Juventus": "Juventus",
