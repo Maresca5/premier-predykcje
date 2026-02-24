@@ -24,9 +24,9 @@ kod_csv = LIGI_CONFIG[wybrana_liga]["csv"]
 fbref_path = LIGI_CONFIG[wybrana_liga]["fbref_id"]
 
 st.title(f"Analiza Analityczna: {wybrana_liga}")
-st.markdown(f"Model: Poisson + Wagi Formy + Auto-Schedule (Scraping)")
+st.markdown(f"Model: Poisson + Wagi Formy + Auto-Schedule (Scraping z nagłówkami)")
 
-# --- MAPOWANIE NAZW (Dostosowanie źródeł) ---
+# --- MAPOWANIE NAZW (Dostosowanie nazw z FBRef do nazw z Football-Data.co.uk) ---
 NAZWY_MAP = {
     "Manchester Utd": "Man United",
     "Manchester City": "Man City",
@@ -38,13 +38,22 @@ NAZWY_MAP = {
     "Tottenham Hotspur": "Tottenham",
     "Wolverhampton Wanderers": "Wolves",
     "Leicester City": "Leicester",
-    "Ipswich Town": "Ipswich"
+    "Ipswich Town": "Ipswich",
+    "Inter": "Inter",
+    "Milan": "Milan",
+    "Bayern Munich": "Bayern Munich",
+    "Dortmund": "Dortmund",
+    "Leverkusen": "Leverkusen",
+    "Atlético Madrid": "Ath Madrid",
+    "Real Madrid": "Real Madrid",
+    "FC Barcelona": "Barcelona"
 }
 
 # --- DANE HISTORYCZNE (CSV) ---
 @st.cache_data(ttl=3600)
 def load_historical(league_code):
     try:
+        # Pobieramy dane z bieżącego sezonu
         url = f"https://www.football-data.co.uk/mmz4281/2526/{league_code}.csv"
         r = requests.get(url, timeout=10)
         r.raise_for_status()
@@ -56,28 +65,35 @@ def load_historical(league_code):
         df['total_rozne'] = df['HC'] + df['AC']
         return df
     except Exception as e:
-        st.error(f"Nie udało się pobrać danych historycznych: {e}")
+        st.error(f"Nie udało się pobrać danych historycznych (CSV): {e}")
         return pd.DataFrame()
 
-# --- AUTOMATYCZNY TERMINARZ (SCRAPING) ---
-@st.cache_data(ttl=43200) # Odświeżaj co 12h
+# --- AUTOMATYCZNY TERMINARZ (SCRAPING Z FIXEM NA 403) ---
+@st.cache_data(ttl=43200) # 12h cache, by nie dostać bana na IP
 def load_schedule_auto(path):
     try:
         url = f"https://fbref.com/en/comps/{path}"
-        # Pobieranie tabel ze strony
-        all_tables = pd.read_html(url)
+        # Udajemy prawdziwą przeglądarkę, by uniknąć błędu 403 Forbidden
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        # Używamy StringIO, aby pandas nie musiał sam robić zapytania bez nagłówków
+        all_tables = pd.read_html(StringIO(response.text))
         df = all_tables[0]
         
-        # Filtrowanie i czyszczenie
+        # Czyszczenie i wybór kolumn
         df = df[['Date', 'Home', 'Away', 'Wk']].dropna(subset=['Home', 'Away'])
         df['Date'] = pd.to_datetime(df['Date'])
         
-        # Pobieramy mecze od wczoraj do +7 dni
+        # Zakres: od wczoraj do +8 dni
         dzis = datetime.now()
-        mask = (df['Date'] >= (dzis - timedelta(days=1))) & (df['Date'] <= (dzis + timedelta(days=7)))
+        mask = (df['Date'] >= (dzis - timedelta(days=2))) & (df['Date'] <= (dzis + timedelta(days=8)))
         return df.loc[mask].sort_values('Date')
     except Exception as e:
-        st.warning(f"Błąd automatycznego terminarza: {e}. Upewnij się, że masz połączenie z internetem.")
+        st.warning(f"Błąd automatycznego terminarza: {e}. Sprawdź połączenie lub odśwież za chwilę.")
         return pd.DataFrame()
 
 # --- LOGIKA OBLICZEŃ ---
@@ -150,7 +166,7 @@ def koloruj(p):
     elif p > 0.50: return "🟡"
     else: return "🔴"
 
-# --- GŁÓWNY PROCES ---
+# --- PROCES GŁÓWNY ---
 historical = load_historical(kod_csv)
 schedule = load_schedule_auto(fbref_path)
 
@@ -176,20 +192,20 @@ if not historical.empty:
         
         min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.1, 0.9, 0.40, 0.05)
 
-        st.subheader("📅 Nadchodzące mecze (Następne 7 dni)")
+        st.subheader("📅 Nadchodzące mecze (Następne 7-8 dni)")
         
         if not schedule.empty:
             col_pred1, col_pred2 = st.columns(2)
             
             with col_pred1:
-                st.write("**Combo Builder**")
+                st.write("**Propozycje Combo**")
                 for _, mecz in schedule.iterrows():
-                    # Mapowanie nazw ze scraping-u na CSV
+                    # Mapowanie nazw FBRef -> CSV
                     h = NAZWY_MAP.get(mecz['Home'], mecz['Home'])
                     a = NAZWY_MAP.get(mecz['Away'], mecz['Away'])
                     
                     if h in srednie_df.index and a in srednie_df.index:
-                        # Obliczanie parametrów Lambda
+                        # Lambdy Poisson
                         l_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
                         l_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                         l_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
@@ -208,7 +224,7 @@ if not historical.empty:
                                 st.write(f"{koloruj(p_g)} Gole {typ_gole} {linia_gole}: {p_g:.1%}")
                                 st.write(f"{koloruj(p_r)} Rożne {typ_rogi} {linia_rogi}: {p_r:.1%}")
                                 st.write(f"{koloruj(p_k)} Kartki {typ_kartki} {linia_kartki}: {p_k:.1%}")
-                                st.caption(f"Przewidywany xG: {l_h:.2f} - {l_a:.2f}")
+                                st.caption(f"Spodziewane gole: {l_h:.2f} - {l_a:.2f}")
 
             with col_pred2:
                 st.write("**BTTS Ranking**")
@@ -221,7 +237,7 @@ if not historical.empty:
                         p_btts = (1 - poisson.pmf(0, l_h)) * (1 - poisson.pmf(0, l_a))
                         st.write(f"{koloruj(p_btts)} **{h} - {a}**: {p_btts:.1%}")
         else:
-            st.info("Brak nadchodzących meczów w terminarzu (zakres 7 dni).")
+            st.info("Nie znaleziono meczów w podanym terminie. Spróbuj odświeżyć dane.")
 
     with tab2:
         st.subheader("📊 Aktualna Sytuacja")
@@ -241,3 +257,5 @@ if not historical.empty:
         if st.button("🔄 Wymuś odświeżenie danych"):
             st.cache_data.clear()
             st.rerun()
+else:
+    st.error("Brak danych historycznych. Jeśli sezon 2025/26 się nie zaczął, zmień rok w URL.")
