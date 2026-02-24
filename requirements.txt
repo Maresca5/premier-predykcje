@@ -4,3 +4,4 @@ scipy
 requests
 numpy
 lxml
+html5lib
