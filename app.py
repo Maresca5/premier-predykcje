@@ -484,4 +484,4 @@ with tab3:
     
     if st.button("🔄 Wymuś odświeżenie danych"):
         st.cache_data.clear()
-        st.rerun()
+        st.rerun()  
