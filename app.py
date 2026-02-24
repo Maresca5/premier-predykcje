@@ -423,6 +423,8 @@ if not historical.empty:
     srednie_df = oblicz_wszystkie_statystyki(historical)
     forma_dict = oblicz_forme(historical)
     tabela = tabela_ligowa(historical)
+# --- NOWY MODEL ---
+strength_df, league_avg_home, league_avg_away = model_relative_strength(historical)
     
     # --- GŁÓWNY INTERFEJS ---
     tab1, tab2, tab3 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu"])
