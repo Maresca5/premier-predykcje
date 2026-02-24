@@ -380,6 +380,43 @@ def tabela_ligowa(df):
 def koloruj(p):
     return "🟢" if p > 0.65 else "🟡" if p > 0.50 else "🔴"
 
+# ==============================
+# MODEL RELATIVE STRENGTH (NOWY)
+# ==============================
+
+@st.cache_data
+def model_relative_strength(df):
+
+    if df.empty:
+        return pd.DataFrame(), 0, 0
+
+    league_avg_home = df["FTHG"].mean()
+    league_avg_away = df["FTAG"].mean()
+
+    teams = pd.unique(df[['HomeTeam', 'AwayTeam']].values.ravel())
+    data = {}
+
+    for team in teams:
+        home = df[df["HomeTeam"] == team]
+        away = df[df["AwayTeam"] == team]
+
+        if len(home) < 5 or len(away) < 5:
+            continue
+
+        home_scored = home["FTHG"].mean()
+        home_conceded = home["FTAG"].mean()
+        away_scored = away["FTAG"].mean()
+        away_conceded = away["FTHG"].mean()
+
+        data[team] = {
+            "Attack Home": home_scored / league_avg_home,
+            "Defence Home": home_conceded / league_avg_away,
+            "Attack Away": away_scored / league_avg_away,
+            "Defence Away": away_conceded / league_avg_home
+        }
+
+    return pd.DataFrame(data).T.round(3), league_avg_home, league_avg_away
+
 # --- RENDEROWANIE ---
 if not historical.empty:
     # Oblicz statystyki
