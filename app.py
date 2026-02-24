@@ -85,6 +85,18 @@ def oblicz_srednie():
 srednie_df = oblicz_srednie()
 
 # ----------------------------------
+# FUNKCJA KOLORUJĄCA
+# ----------------------------------
+
+def koloruj(p):
+    if p > 0.65:
+        return "🟢"
+    elif p > 0.50:
+        return "🟡"
+    else:
+        return "🔴"
+
+# ----------------------------------
 # BET BUILDER
 # ----------------------------------
 
@@ -109,23 +121,16 @@ min_prob = st.slider("Minimalne prawdopodobieństwo combo",
                      0.0, 1.0, 0.40, 0.05)
 
 # ----------------------------------
-# PREDYKCJE
+# PREDYKCJE COMBO
 # ----------------------------------
 
-st.subheader("📅 Predykcje na najbliższą kolejkę")
-
-def koloruj(p):
-    if p > 0.65:
-        return "🟢"
-    elif p > 0.50:
-        return "🟡"
-    else:
-        return "🔴"
+st.subheader("📅 Predykcje combo – najbliższa kolejka")
 
 dzisiaj = datetime.now()
 nadchodzace = schedule[schedule['date'] > dzisiaj]
 
 if not nadchodzace.empty:
+
     min_round = nadchodzace['round'].min()
     mecze = nadchodzace[nadchodzace['round'] == min_round]
 
@@ -138,10 +143,17 @@ if not nadchodzace.empty:
 
         if home in srednie_df.index and away in srednie_df.index:
 
-            lambda_gole = (
+            lambda_home = (
                 srednie_df.loc[home, "Gole strzelone (dom)"] +
                 srednie_df.loc[away, "Gole stracone (wyjazd)"]
             ) / 2
+
+            lambda_away = (
+                srednie_df.loc[away, "Gole strzelone (wyjazd)"] +
+                srednie_df.loc[home, "Gole stracone (dom)"]
+            ) / 2
+
+            lambda_gole = lambda_home + lambda_away
 
             lambda_rogi = (
                 srednie_df.loc[home, "Różne (dom)"] +
@@ -162,6 +174,7 @@ if not nadchodzace.empty:
             p_gole = licz_prob(typ_gole, linia_gole, lambda_gole)
             p_rogi = licz_prob(typ_rogi, linia_rogi, lambda_rogi)
             p_kartki = licz_prob(typ_kartki, linia_kartki, lambda_kartki)
+
             p_combo = p_gole * p_rogi * p_kartki
 
             lista_meczy.append({
@@ -171,9 +184,8 @@ if not nadchodzace.empty:
                 "p_rogi": p_rogi,
                 "p_kartki": p_kartki,
                 "p_combo": p_combo,
-                "lambda_gole": lambda_gole,
-                "lambda_rogi": lambda_rogi,
-                "lambda_kartki": lambda_kartki
+                "lambda_home": lambda_home,
+                "lambda_away": lambda_away
             })
 
     lista_meczy = sorted(lista_meczy,
@@ -201,13 +213,67 @@ if not nadchodzace.empty:
                         f"Combo: {mecz['p_combo']*100:.2f}%")
 
             st.caption(
-                f"Model λ → gole: {mecz['lambda_gole']:.2f} | "
-                f"rożne: {mecz['lambda_rogi']:.2f} | "
-                f"kartki: {mecz['lambda_kartki']:.2f}"
+                f"Model λ → {mecz['home']}: {mecz['lambda_home']:.2f} | "
+                f"{mecz['away']}: {mecz['lambda_away']:.2f}"
             )
 
 else:
     st.warning("Brak nadchodzących meczów.")
+
+# ----------------------------------
+# SEKCJA BTTS
+# ----------------------------------
+
+st.markdown("---")
+st.subheader("⚽ BTTS – najbliższa kolejka")
+
+if not nadchodzace.empty:
+
+    lista_btts = []
+
+    for _, mecz in mecze.iterrows():
+
+        home = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
+        away = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
+
+        if home in srednie_df.index and away in srednie_df.index:
+
+            lambda_home = (
+                srednie_df.loc[home, "Gole strzelone (dom)"] +
+                srednie_df.loc[away, "Gole stracone (wyjazd)"]
+            ) / 2
+
+            lambda_away = (
+                srednie_df.loc[away, "Gole strzelone (wyjazd)"] +
+                srednie_df.loc[home, "Gole stracone (dom)"]
+            ) / 2
+
+            p_home_0 = poisson.pmf(0, lambda_home)
+            p_away_0 = poisson.pmf(0, lambda_away)
+
+            p_btts_yes = 1 - p_home_0 - p_away_0 + (p_home_0 * p_away_0)
+            p_btts_no = 1 - p_btts_yes
+
+            lista_btts.append({
+                "home": home,
+                "away": away,
+                "yes": p_btts_yes,
+                "no": p_btts_no
+            })
+
+    lista_btts = sorted(lista_btts,
+                        key=lambda x: x["yes"],
+                        reverse=True)
+
+    for mecz in lista_btts:
+
+        with st.expander(f"{mecz['home']} vs {mecz['away']}"):
+
+            st.write(f"{koloruj(mecz['yes'])} ⚽ BTTS TAK: "
+                     f"**{mecz['yes']*100:.1f}%**")
+
+            st.write(f"{koloruj(mecz['no'])} ❌ BTTS NIE: "
+                     f"**{mecz['no']*100:.1f}%**")
 
 # ----------------------------------
 # TABELA ŚREDNICH
