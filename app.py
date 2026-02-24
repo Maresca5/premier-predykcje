@@ -235,6 +235,42 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
     return pd.DataFrame(dane).T.round(2)
 
 
+@st.cache_data
+def oblicz_srednie_ligowe(df_json: str) -> dict:
+    """Srednie ligowe potrzebne do normalizacji lambd."""
+    df = pd.read_json(df_json)
+    if df.empty:
+        return {"avg_home": 1.5, "avg_away": 1.2}
+    return {
+        "avg_home": float(df["FTHG"].mean()),
+        "avg_away": float(df["FTAG"].mean()),
+    }
+
+
+def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame, srednie_lig: dict) -> tuple:
+    """
+    Dixon-Coles style: lam = avg_liga * sila_ataku * slabosc_obrony.
+    Normalizacja do sredniej ligowej sprawia ze lambdy sa zroznicowane
+    i nie spieszczaja sie do ~1 przy slabszych parach druzyn.
+    """
+    avg_h = max(srednie_lig["avg_home"], 0.5)
+    avg_a = max(srednie_lig["avg_away"], 0.5)
+
+    atak_h   = srednie_df.loc[h, "Gole strzelone (dom)"]    / avg_h
+    obrona_a = srednie_df.loc[a, "Gole stracone (wyjazd)"]  / avg_a
+    atak_a   = srednie_df.loc[a, "Gole strzelone (wyjazd)"] / avg_a
+    obrona_h = srednie_df.loc[h, "Gole stracone (dom)"]     / avg_h
+
+    lam_h = avg_h * atak_h   * obrona_a
+    lam_a = avg_a * atak_a   * obrona_h
+
+    # Clamp – zabezpieczenie na start sezonu gdy malo danych
+    lam_h = float(np.clip(lam_h, 0.3, 4.5))
+    lam_a = float(np.clip(lam_a, 0.3, 4.5))
+    return lam_h, lam_a
+
+
+
 def oblicz_forme(df: pd.DataFrame) -> dict:
     if df.empty:
         return {}
@@ -312,6 +348,35 @@ def wybierz_typ(p_home: float, p_draw: float, p_away: float) -> tuple[str, float
     return t, probs[t]
 
 
+def wybierz_wynik(M: np.ndarray, lam_h: float, lam_a: float) -> tuple:
+    """
+    Wybiera "przewidywany wynik" jako:
+    - Wartosc oczekiwana lambdy zaokraglona (np. lam=1.8 -> 2 gole)
+      JESLI roznica pomiedzy top-3 wynikami jest mala (maks spread < 4pp)
+      co wskazuje ze argmax jest przypadkowy
+    - W przeciwnym razie: argmax macierzy (jest wyrazny lider)
+    Pokazuje tez osobno p_exact dla wybranego wyniku.
+    """
+    idx_max = np.unravel_index(M.argmax(), M.shape)
+    p_max   = float(M[idx_max])
+
+    # Top-3 prawdopodobienstw
+    flat  = M.flatten()
+    top3  = np.sort(flat)[::-1][:3]
+    spread = float(top3[0] - top3[2])  # roznica miedzy 1. a 3.
+
+    # Jesli spread maly -> uzywamy zaokraglonej wartosci oczekiwanej
+    if spread < 0.04:
+        g_h = int(round(lam_h))
+        g_a = int(round(lam_a))
+        # Clamp do zakresu macierzy
+        g_h = min(g_h, M.shape[0] - 1)
+        g_a = min(g_a, M.shape[1] - 1)
+        return g_h, g_a, float(M[g_h, g_a])
+    else:
+        return int(idx_max[0]), int(idx_max[1]), p_max
+
+
 def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
     M = np.outer(
         poisson.pmf(range(MAX_GOLE), lam_h),
@@ -320,7 +385,8 @@ def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
     p_home = float(np.tril(M, -1).sum())
     p_draw = float(np.trace(M))
     p_away = float(np.triu(M, 1).sum())
-    idx    = np.unravel_index(M.argmax(), M.shape)
+
+    wynik_h, wynik_a, p_exact = wybierz_wynik(M, lam_h, lam_a)
 
     def fo(p: float) -> float:
         return round(1 / p, 2) if p > 0.001 else 999.0
@@ -333,9 +399,9 @@ def predykcja_meczu(lam_h: float, lam_a: float) -> dict:
         "p_home":  p_home,
         "p_draw":  p_draw,
         "p_away":  p_away,
-        "wynik_h": int(idx[0]),
-        "wynik_a": int(idx[1]),
-        "p_exact": float(M[idx]),
+        "wynik_h": wynik_h,
+        "wynik_a": wynik_a,
+        "p_exact": p_exact,
         "fo_home": fo(p_home),
         "fo_draw": fo(p_draw),
         "fo_away": fo(p_away),
@@ -527,9 +593,10 @@ historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
 if not historical.empty:
-    srednie_df = oblicz_wszystkie_statystyki(historical.to_json())
-    forma_dict = oblicz_forme(historical)
-    tabela     = tabela_ligowa(historical)
+    srednie_df  = oblicz_wszystkie_statystyki(historical.to_json())
+    srednie_lig = oblicz_srednie_ligowe(historical.to_json())
+    forma_dict  = oblicz_forme(historical)
+    tabela      = tabela_ligowa(historical)
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🎯 Bet Builder",
@@ -575,8 +642,7 @@ if not historical.empty:
                         a = map_nazwa(mecz["away_team"])
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
-                        lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"]    + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
-                        lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
+                        lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig)
                         lam_r = (srednie_df.loc[h, "Różne (dom)"]             + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
                         lam_k = (srednie_df.loc[h, "Kartki (dom)"]            + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
                         p_g = oblicz_p(typ_gole,   linia_gole,   lam_h + lam_a)
@@ -600,8 +666,7 @@ if not historical.empty:
                         a = map_nazwa(mecz["away_team"])
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
-                        lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"]    + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
-                        lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
+                        lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig)
                         p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
                         btts_data.append((f"{h} - {a}", p_btts))
                     for ms, p in sorted(btts_data, key=lambda x: x[1], reverse=True):
@@ -648,8 +713,7 @@ if not historical.empty:
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
 
-                    lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"]    + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
-                    lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
+                    lam_h, lam_a = oblicz_lambdy(h, a, srednie_df, srednie_lig)
                     pred  = predykcja_meczu(lam_h, lam_a)
                     dopasowane += 1
                     data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
