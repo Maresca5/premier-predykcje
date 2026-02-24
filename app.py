@@ -5,12 +5,11 @@ from datetime import datetime
 import requests
 from io import StringIO
 import numpy as np
-import os
 
 # --- KONFIGURACJA ---
 st.set_page_config(page_title="Predykcje Top 5 Lig", layout="wide")
 st.title("Predykcje Top 5 Lig 2025/26")
-st.markdown("Model Poissona + home/away + wagi formy")
+st.markdown("Model Poissona + home/away + wagi formy | Dane z football-data.co.uk")
 
 # Wybór ligi
 LIGI = {
@@ -18,8 +17,7 @@ LIGI = {
         "historical": "E0.csv",
         "schedule_patterns": [
             "terminarz_premier_league_2025.csv",
-            "terminarz_premier_2025.csv",
-            "terminarz_premier.csv"  # ewentualne inne warianty
+            "terminarz_premier_2025.csv"
         ]
     },
     "La Liga": {
@@ -42,7 +40,7 @@ LIGI = {
 
 wybrana_liga = st.selectbox("Wybierz ligę", list(LIGI.keys()))
 
-# Mapowanie nazw (rozszerzone)
+# Mapowanie nazw (rozszerzone – możesz dopisać dla innych lig)
 NAZWY_MAP = {
     "Brighton & Hove Albion": "Brighton",
     "West Ham United": "West Ham",
@@ -78,16 +76,16 @@ def load_historical():
 def load_schedule():
     patterns = LIGI[wybrana_liga]["schedule_patterns"]
     for pattern in patterns:
-        if os.path.exists(pattern):
-            try:
-                df = pd.read_csv(pattern)
-                df['date'] = pd.to_datetime(df['date'])
-                return df.sort_values('date')
-            except:
-                st.warning(f"Plik {pattern} istnieje, ale nie udało się go wczytać.")
-                continue
+        try:
+            df = pd.read_csv(pattern)
+            # Wymuszamy konwersję daty
+            df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True)
+            df = df.dropna(subset=['date'])
+            return df.sort_values('date')
+        except:
+            continue
     
-    st.error(f"Nie znaleziono żadnego pasującego pliku terminarza dla {wybrana_liga}. Sprawdź nazwy w repozytorium.")
+    st.error(f"Nie znaleziono pasującego pliku terminarza dla {wybrana_liga}. Sprawdź nazwy plików w repo.")
     return pd.DataFrame()
 
 historical = load_historical()
