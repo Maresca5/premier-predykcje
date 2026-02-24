@@ -77,7 +77,7 @@ NAZWY_MAP = {
     "Vallecano": "Rayo Vallecano",
     "Villarreal": "Villarreal",
     "Real Oviedo": "Oviedo",
-    "Oviedo": "Oviedo",
+    "Oviedo": "Real Oviedo",
     "Mallorca": "Mallorca",
     "RCD Mallorca": "Mallorca",
     "Barcelona": "Barcelona",
