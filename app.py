@@ -103,6 +103,7 @@ NAZWY_MAP = {
     "Espanyol": "Espanyol",
     "RCD Espanyol": "Espanyol",
     "Atlético Madrid": "Ath Madrid",
+    "Ath Madrid": "Atlético Madrid",
     "Atletico Madrid": "Ath Madrid",
     "Ath Madrid": "Ath Madrid",
     "Elche": "Elche",
