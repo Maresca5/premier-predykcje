@@ -21,8 +21,8 @@ LEAGUES = {
         "country": "Anglia",
         "icon": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
         "code": "E0",
-        "league_id": "ENG-Premier League",
-        "season": "2025-26",
+        "league_id": "ENG-Premier League",  # Format dla Sofascore
+        "season": "2025-2026",
         "data_url": "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
     },
     "La Liga": {
@@ -31,7 +31,7 @@ LEAGUES = {
         "icon": "🇪🇸",
         "code": "SP1",
         "league_id": "ESP-La Liga",
-        "season": "2025-26",
+        "season": "2025-2026",
         "data_url": "https://www.football-data.co.uk/mmz4281/2526/SP1.csv"
     },
     "Bundesliga": {
@@ -40,7 +40,7 @@ LEAGUES = {
         "icon": "🇩🇪",
         "code": "D1",
         "league_id": "GER-Bundesliga",
-        "season": "2025-26",
+        "season": "2025-2026",
         "data_url": "https://www.football-data.co.uk/mmz4281/2526/D1.csv"
     },
     "Serie A": {
@@ -49,7 +49,7 @@ LEAGUES = {
         "icon": "🇮🇹",
         "code": "I1",
         "league_id": "ITA-Serie A",
-        "season": "2025-26",
+        "season": "2025-2026",
         "data_url": "https://www.football-data.co.uk/mmz4281/2526/I1.csv"
     },
     "Ligue 1": {
@@ -58,13 +58,13 @@ LEAGUES = {
         "icon": "🇫🇷",
         "code": "F1",
         "league_id": "FRA-Ligue 1",
-        "season": "2025-26",
+        "season": "2025-2026",
         "data_url": "https://www.football-data.co.uk/mmz4281/2526/F1.csv"
     }
 }
 
 # ==========================================
-# MAPOWANIE NAZW DRUŻYN
+# MAPOWANIE NAZW DRUŻYN (rozszerzone)
 # ==========================================
 NAZWY_MAP = {
     # Premier League
@@ -123,7 +123,7 @@ NAZWY_MAP = {
     
     # Serie A
     "AC Milan": "AC Milan",
-    "Inter Milan": "Inter",
+    "Inter": "Inter",
     "Juventus": "Juventus",
     "AS Roma": "Roma",
     "Lazio": "Lazio",
@@ -137,7 +137,6 @@ NAZWY_MAP = {
     "Empoli": "Empoli",
     "Salernitana": "Salernitana",
     "Lecce": "Lecce",
-    "Spezia": "Spezia",
     
     # Ligue 1
     "Paris Saint-Germain": "PSG",
@@ -154,10 +153,8 @@ NAZWY_MAP = {
     "Toulouse": "Toulouse",
     "Reims": "Reims",
     "Brest": "Brest",
-    "Clermont Foot": "Clermont",
-    "Auxerre": "Auxerre",
-    "Ajaccio": "Ajaccio",
-    "Troyes": "Troyes"
+    "Clermont": "Clermont",
+    "Auxerre": "Auxerre"
 }
 
 # ==========================================
@@ -212,19 +209,22 @@ def load_historical(league_code, data_url):
         return pd.DataFrame()
 
 # ==========================================
-# POBIERANIE TERMINARZA (SOCCERDATA)
+# POBIERANIE TERMINARZA (SOFASCORE)
 # ==========================================
 @st.cache_data(ttl=3600)  # Cache na 1 godzinę
-def load_schedule_fbref(league_id, season):
-    """Pobiera terminarz dla wybranej ligi używając soccerdata/FBref"""
+def load_schedule_sofascore(league_id, season):
+    """Pobiera terminarz dla wybranej ligi używając soccerdata/Sofascore"""
     try:
-        # Inicjalizacja scrapera FBref
-        fbref = sd.FBref(league_id, season)
+        # Inicjalizacja scrapera Sofascore
+        sofascore = sd.Sofascore(leagues=league_id, seasons=season)
         
         # Pobierz terminarz
-        schedule_df = fbref.read_schedule()
+        schedule_df = sofascore.read_schedule()
         
         if schedule_df is not None and not schedule_df.empty:
+            # Reset index, żeby pozbyć się MultiIndex
+            schedule_df = schedule_df.reset_index()
+            
             # Przygotuj dane w formacie zgodnym z aplikacją
             schedule = pd.DataFrame({
                 'date': pd.to_datetime(schedule_df['date']),
@@ -238,11 +238,11 @@ def load_schedule_fbref(league_id, season):
             return pd.DataFrame()
             
     except Exception as e:
-        st.warning(f"Nie udało się pobrać terminarza z FBref: {e}")
+        st.warning(f"Nie udało się pobrać terminarza z Sofascore: {e}")
         return pd.DataFrame()
 
 # ==========================================
-# FUNKCJE OBLICZENIOWE (bez zmian)
+# FUNKCJE OBLICZENIOWE
 # ==========================================
 @st.cache_data
 def oblicz_wszystkie_statystyki(df):
@@ -345,7 +345,7 @@ st.markdown("Model Poissona + home/away + wagi formy")
 
 # Pobierz dane dla wybranej ligi
 historical = load_historical(league_config['code'], league_config['data_url'])
-schedule = load_schedule_fbref(league_config['league_id'], league_config['season'])
+schedule = load_schedule_sofascore(league_config['league_id'], league_config['season'])
 
 if historical.empty:
     st.error("Nie udało się pobrać danych historycznych. Spróbuj później.")
@@ -378,67 +378,72 @@ with tab1:
 
     st.subheader("📅 Predykcje – najbliższa kolejka")
     dzisiaj = datetime.now()
-    nadchodzace = schedule[schedule['date'] > dzisiaj] if not schedule.empty else pd.DataFrame()
+    
+    if not schedule.empty:
+        # Filtruj nadchodzące mecze
+        nadchodzace = schedule[schedule['date'] > dzisiaj]
+        
+        if not nadchodzace.empty:
+            min_round = nadchodzace['round'].min()
+            mecze = nadchodzace[nadchodzace['round'] == min_round]
+            
+            # Kontener na wyniki combo i BTTS
+            col_pred1, col_pred2 = st.columns(2)
+            
+            with col_pred1:
+                st.write("**Combo Builder**")
+                combo_count = 0
+                for _, mecz in mecze.iterrows():
+                    h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
+                    a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
+                    
+                    if h in srednie_df.index and a in srednie_df.index:
+                        # Gole
+                        lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
+                        lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
+                        lam_g = lam_h + lam_a
+                        # Rożne i Kartki
+                        lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
+                        lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
 
-    if not nadchodzace.empty:
-        min_round = nadchodzace['round'].min()
-        mecze = nadchodzace[nadchodzace['round'] == min_round]
-        
-        # Kontener na wyniki combo i BTTS
-        col_pred1, col_pred2 = st.columns(2)
-        
-        with col_pred1:
-            st.write("**Combo Builder**")
-            combo_count = 0
-            for _, mecz in mecze.iterrows():
-                h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
-                a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
+                        p_g = oblicz_prob_poisson(typ_gole, linia_gole, lam_g)
+                        p_r = oblicz_prob_poisson(typ_rogi, linia_rogi, lam_r)
+                        p_k = oblicz_prob_poisson(typ_kartki, linia_kartki, lam_k)
+                        p_combo = p_g * p_r * p_k
+
+                        if p_combo >= min_prob:
+                            combo_count += 1
+                            with st.expander(f"{h} vs {a} ({p_combo:.1%})"):
+                                st.write(f"{koloruj(p_g)} Gole {typ_gole} {linia_gole}: {p_g:.1%}")
+                                st.write(f"{koloruj(p_r)} Rożne {typ_rogi} {linia_rogi}: {p_r:.1%}")
+                                st.write(f"{koloruj(p_k)} Kartki {typ_kartki} {linia_kartki}: {p_k:.1%}")
                 
-                if h in srednie_df.index and a in srednie_df.index:
-                    # Gole
-                    lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
-                    lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
-                    lam_g = lam_h + lam_a
-                    # Rożne i Kartki
-                    lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
-                    lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
-
-                    p_g = oblicz_prob_poisson(typ_gole, linia_gole, lam_g)
-                    p_r = oblicz_prob_poisson(typ_rogi, linia_rogi, lam_r)
-                    p_k = oblicz_prob_poisson(typ_kartki, linia_kartki, lam_k)
-                    p_combo = p_g * p_r * p_k
-
-                    if p_combo >= min_prob:
-                        combo_count += 1
-                        with st.expander(f"{h} vs {a} ({p_combo:.1%})"):
-                            st.write(f"{koloruj(p_g)} Gole {typ_gole} {linia_gole}: {p_g:.1%}")
-                            st.write(f"{koloruj(p_r)} Rożne {typ_rogi} {linia_rogi}: {p_r:.1%}")
-                            st.write(f"{koloruj(p_k)} Kartki {typ_kartki} {linia_kartki}: {p_k:.1%}")
+                if combo_count == 0:
+                    st.info("Brak meczów spełniających kryteria. Zmniejsz próg.")
             
-            if combo_count == 0:
-                st.info("Brak meczów spełniających kryteria. Zmniejsz próg.")
-        
-        with col_pred2:
-            st.write("**BTTS Ranking**")
-            btts_data = []
-            for _, mecz in mecze.iterrows():
-                h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
-                a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
-                if h in srednie_df.index and a in srednie_df.index:
-                    lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
-                    lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
-                    p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
-                    btts_data.append({
-                        "Mecz": f"{h} - {a}",
-                        "BTTS": f"{p_btts:.1%}",
-                        "Kolor": koloruj(p_btts)
-                    })
-            
-            if btts_data:
-                for item in sorted(btts_data, key=lambda x: float(x["BTTS"].strip('%')), reverse=True):
-                    st.write(f"{item['Kolor']} **{item['Mecz']}**: {item['BTTS']}")
+            with col_pred2:
+                st.write("**BTTS Ranking**")
+                btts_data = []
+                for _, mecz in mecze.iterrows():
+                    h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
+                    a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
+                    if h in srednie_df.index and a in srednie_df.index:
+                        lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
+                        lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
+                        p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
+                        btts_data.append({
+                            "Mecz": f"{h} - {a}",
+                            "BTTS": f"{p_btts:.1%}",
+                            "Kolor": koloruj(p_btts)
+                        })
+                
+                if btts_data:
+                    for item in sorted(btts_data, key=lambda x: float(x["BTTS"].strip('%')), reverse=True):
+                        st.write(f"{item['Kolor']} **{item['Mecz']}**: {item['BTTS']}")
+        else:
+            st.warning("Brak nadchodzących meczów w terminarzu.")
     else:
-        st.warning("Brak nadchodzących meczów w terminarzu.")
+        st.warning("Nie udało się pobrać terminarza. Spróbuj ponownie później.")
 
 with tab2:
     st.subheader("📊 Aktualna Sytuacja")
@@ -458,5 +463,5 @@ with tab3:
     
     # Dodaj informacje o źródle danych
     st.divider()
-    st.caption(f"Źródło danych: football-data.co.uk | FBref via soccerdata")
+    st.caption(f"Źródło danych: football-data.co.uk | Sofascore via soccerdata")
     st.caption(f"Ostatnia aktualizacja danych historycznych: {historical['Date'].max().strftime('%d.%m.%Y') if not historical.empty else '—'}")
