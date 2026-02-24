@@ -382,35 +382,10 @@ def koloruj(p):
 
 # --- RENDEROWANIE ---
 if not historical.empty:
-    # Oblicz statystyki DOPIERO po sprawdzeniu czy historical nie jest puste
+    # Oblicz statystyki
     srednie_df = oblicz_wszystkie_statystyki(historical)
     forma_dict = oblicz_forme(historical)
     tabela = tabela_ligowa(historical)
-    
-    # --- DEBUG W SIDEBARZE (dopiero po obliczeniu srednie_df) ---
-    with st.sidebar.expander("🔍 Debugowanie", expanded=False):
-        st.write(f"Wybrana liga: {wybrana_liga}")
-        st.write(f"Dane historyczne: {len(historical)} meczów")
-        st.write(f"Terminarz: {len(schedule)} meczów")
-        st.write(f"Liczba drużyn w statystykach: {len(srednie_df)}")
-        
-        if not schedule.empty and not srednie_df.empty:
-            st.write(f"Zakres dat terminarza: {schedule['date'].min()} do {schedule['date'].max()}")
-            st.write(f"Dostępne kolejki: {sorted(schedule['round'].unique())}")
-            
-            # Sprawdź mapowanie dla pierwszych 5 meczów
-            st.write("**Test mapowania:**")
-            for i, (_, mecz) in enumerate(schedule.head(5).iterrows()):
-                h_raw = mecz['home_team']
-                a_raw = mecz['away_team']
-                h_map = map_nazwa(h_raw)
-                a_map = map_nazwa(a_raw)
-                
-                h_ok = h_map in srednie_df.index
-                a_ok = a_map in srednie_df.index
-                
-                status = "✅" if h_ok and a_ok else "❌"
-                st.write(f"{status} {i+1}. {h_raw} → {h_map}: {h_ok} | {a_raw} → {a_map}: {a_ok}")
     
     # --- GŁÓWNY INTERFEJS ---
     tab1, tab2, tab3 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu"])
@@ -422,26 +397,30 @@ if not historical.empty:
             linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5], index=1)
             typ_gole = st.selectbox("Typ goli", ["Over", "Under"], index=0)
         with c2:
-            linia_rogi = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5], index=1)
+            linia_rogi = st.selectbox("Linia rożnych", [6.5, 7.5, 8.5, 9.5, 10.5], index=1)
             typ_rogi = st.selectbox("Typ rożnych", ["Over", "Under"], index=0)
         with c3:
-            linia_kartki = st.selectbox("Linia kartek", [2.5, 3.5, 4.5, 5.5], index=1)
+            linia_kartki = st.selectbox("Linia kartek", [1.5, 2.5, 3.5, 4.5, 5.5], index=1)
             typ_kartki = st.selectbox("Typ kartek", ["Over", "Under"], index=0)
         
         min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
         
         st.subheader("📅 Predykcje – najbliższa kolejka")
         
-        # Wyświetlamy najbliższą kolejkę
+        # Znajdź najbliższą kolejkę (pierwsza której mecze jeszcze się nie odbyły)
         if not schedule.empty and not srednie_df.empty:
-            # Znajdź najniższy numer kolejki
-            wszystkie_kolejki = sorted(schedule['round'].unique())
+            # Aktualna data (bez czasu)
+            dzisiaj = datetime.now().date()
             
-            if wszystkie_kolejki:
-                najblizsza_kolejka = wszystkie_kolejki[0]
+            # Filtruj mecze które jeszcze się nie odbyły (data >= dzisiaj)
+            przyszle_mecze = schedule[schedule['date'].dt.date >= dzisiaj]
+            
+            if not przyszle_mecze.empty:
+                # Znajdź najniższy numer kolejki wśród przyszłych meczów
+                najblizsza_kolejka = przyszle_mecze['round'].min()
                 mecze = schedule[schedule['round'] == najblizsza_kolejka]
                 
-                st.caption(f"Kolejka {najblizsza_kolejka} – {len(mecze)} meczów")
+                st.caption(f"Kolejka {int(najblizsza_kolejka)} – {len(mecze)} meczów")
                 
                 # Funkcja do obliczania prawdopodobieństwa z uwzględnieniem typu
                 def oblicz_p(typ, linia, lam):
@@ -500,7 +479,7 @@ if not historical.empty:
                         for mecz, p in sorted(btts_data, key=lambda x: x[1], reverse=True):
                             st.write(f"{koloruj(p)} **{mecz}**: {p:.1%}")
             else:
-                st.warning("Brak danych o kolejkach w terminarzu.")
+                st.info("Brak nadchodzących meczów. Wszystkie mecze w terminarzu już się odbyły.")
         else:
             if schedule.empty:
                 st.warning("Brak danych terminarza.")
