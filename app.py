@@ -73,7 +73,7 @@ NAZWY_MAP = {
     # ===== LA LIGA =====
     "Girona FC": "Girona",
     "Girona": "Girona",
-    "Rayo Vallecano": "Rayo Vallecano",  # Ważne: w danych jest "Rayo Vallecano"
+    "Rayo Vallecano": "Rayo Vallecano",
     "Vallecano": "Rayo Vallecano",
     "Villarreal": "Villarreal",
     "Real Oviedo": "Oviedo",
@@ -89,7 +89,7 @@ NAZWY_MAP = {
     "Levante": "Levante",
     "Valencia": "Valencia",
     "Valencia CF": "Valencia",
-    "Real Sociedad": "Real Sociedad",  # Ważne: w danych jest "Real Sociedad"
+    "Real Sociedad": "Real Sociedad",
     "Sociedad": "Real Sociedad",
     "Celta Vigo": "Celta",
     "Celta": "Celta",
@@ -100,7 +100,7 @@ NAZWY_MAP = {
     "Ath Bilbao": "Ath Bilbao",
     "Sevilla": "Sevilla",
     "Sevilla FC": "Sevilla",
-    "Espanyol": "Espanyol",  # Ważne: w danych jest "Espanyol" (przez Y)
+    "Espanyol": "Espanyol",
     "RCD Espanyol": "Espanyol",
     "Atlético Madrid": "Ath Madrid",
     "Atletico Madrid": "Ath Madrid",
@@ -127,13 +127,13 @@ NAZWY_MAP = {
     "Bayern Munich": "Bayern Munich",
     "Bayern": "Bayern Munich",
     "Bayern München": "Bayern Munich",
-    "Borussia Dortmund": "Dortmund",  # Ważne: w danych jest "Dortmund"
+    "Borussia Dortmund": "Dortmund",
     "Dortmund": "Dortmund",
     "RB Leipzig": "RB Leipzig",
     "Leipzig": "RB Leipzig",
-    "Bayer Leverkusen": "Leverkusen",  # Ważne: w danych jest "Leverkusen"
+    "Bayer Leverkusen": "Leverkusen",
     "Leverkusen": "Leverkusen",
-    "Eintracht Frankfurt": "Eintracht",  # Ważne: w danych jest "Eintracht"
+    "Eintracht Frankfurt": "Eintracht",
     "Eintracht": "Eintracht",
     "VfB Stuttgart": "Stuttgart",
     "Stuttgart": "Stuttgart",
@@ -296,6 +296,7 @@ def load_schedule(filename):
         st.error(f"Problem z plikiem terminarza {filename}: {e}")
         return pd.DataFrame()
 
+# Pobierz dane
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule = load_schedule(LIGI[wybrana_liga]["file"])
 
@@ -374,35 +375,39 @@ def tabela_ligowa(df):
 def koloruj(p):
     return "🟢" if p > 0.65 else "🟡" if p > 0.50 else "🔴"
 
-# --- DEBUG W SIDEBARZE ---
-with st.sidebar.expander("🔍 Debugowanie", expanded=False):
-    st.write(f"Wybrana liga: {wybrana_liga}")
-    st.write(f"Dane historyczne: {len(historical)} meczów")
-    st.write(f"Terminarz: {len(schedule)} meczów")
-    
-    if not schedule.empty:
-        st.write(f"Zakres dat: {schedule['date'].min()} do {schedule['date'].max()}")
-        st.write(f"Dostępne kolejki: {sorted(schedule['round'].unique())}")
-        
-        # Sprawdź mapowanie dla pierwszych 5 meczów
-        st.write("**Test mapowania:**")
-        for i, (_, mecz) in enumerate(schedule.head(5).iterrows()):
-            h_raw = mecz['home_team']
-            a_raw = mecz['away_team']
-            h_map = map_nazwa(h_raw)
-            a_map = map_nazwa(a_raw)
-            
-            h_ok = h_map in srednie_df.index if not srednie_df.empty else False
-            a_ok = a_map in srednie_df.index if not srednie_df.empty else False
-            
-            st.write(f"{i+1}. {h_raw} → {h_map}: {h_ok} | {a_raw} → {a_map}: {a_ok}")
-
 # --- RENDEROWANIE ---
 if not historical.empty:
+    # Oblicz statystyki DOPIERO po sprawdzeniu czy historical nie jest puste
     srednie_df = oblicz_wszystkie_statystyki(historical)
     forma_dict = oblicz_forme(historical)
     tabela = tabela_ligowa(historical)
-   
+    
+    # --- DEBUG W SIDEBARZE (dopiero po obliczeniu srednie_df) ---
+    with st.sidebar.expander("🔍 Debugowanie", expanded=False):
+        st.write(f"Wybrana liga: {wybrana_liga}")
+        st.write(f"Dane historyczne: {len(historical)} meczów")
+        st.write(f"Terminarz: {len(schedule)} meczów")
+        st.write(f"Liczba drużyn w statystykach: {len(srednie_df)}")
+        
+        if not schedule.empty and not srednie_df.empty:
+            st.write(f"Zakres dat terminarza: {schedule['date'].min()} do {schedule['date'].max()}")
+            st.write(f"Dostępne kolejki: {sorted(schedule['round'].unique())}")
+            
+            # Sprawdź mapowanie dla pierwszych 5 meczów
+            st.write("**Test mapowania:**")
+            for i, (_, mecz) in enumerate(schedule.head(5).iterrows()):
+                h_raw = mecz['home_team']
+                a_raw = mecz['away_team']
+                h_map = map_nazwa(h_raw)
+                a_map = map_nazwa(a_raw)
+                
+                h_ok = h_map in srednie_df.index
+                a_ok = a_map in srednie_df.index
+                
+                status = "✅" if h_ok and a_ok else "❌"
+                st.write(f"{status} {i+1}. {h_raw} → {h_map}: {h_ok} | {a_raw} → {a_map}: {a_ok}")
+    
+    # --- GŁÓWNY INTERFEJS ---
     tab1, tab2, tab3 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu"])
     
     with tab1:
@@ -422,7 +427,7 @@ if not historical.empty:
         
         st.subheader("📅 Predykcje – najbliższa kolejka")
         
-        # Poprawka: wyświetlamy najbliższą kolejkę niezależnie od daty
+        # Wyświetlamy najbliższą kolejkę
         if not schedule.empty and not srednie_df.empty:
             # Znajdź najniższy numer kolejki
             wszystkie_kolejki = sorted(schedule['round'].unique())
@@ -492,7 +497,10 @@ if not historical.empty:
             else:
                 st.warning("Brak danych o kolejkach w terminarzu.")
         else:
-            st.warning("Brak danych terminarza lub statystyk drużyn.")
+            if schedule.empty:
+                st.warning("Brak danych terminarza.")
+            if srednie_df.empty:
+                st.warning("Brak statystyk drużyn (za mało danych historycznych).")
 
     with tab2:
         st.subheader("📊 Aktualna Sytuacja")
@@ -517,3 +525,5 @@ if not historical.empty:
         if st.button("🔄 Odśwież dane"):
             st.cache_data.clear()
             st.rerun()
+else:
+    st.error("Nie udało się pobrać danych historycznych. Sprawdź połączenie z internetem lub spróbuj później.")
