@@ -57,9 +57,10 @@ NAZWY_MAP = {
     "RCD Espanyol": "Espanyol",
     "Getafe": "Getafe",
     "Celta Vigo": "Celta",
-    "Girona": "Girona",
+    "Girona FC": "Girona",
     "Deportivo Alavés": "Alaves",
     "UD Las Palmas": "Las Palmas",
+    "Real Oviedo": "Oviedo",
     "CA Osasuna": "Osasuna",
     
     # Bundesliga
