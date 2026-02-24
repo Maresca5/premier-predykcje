@@ -5,8 +5,6 @@ from datetime import datetime
 import requests
 from io import StringIO
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # ==========================================
 # KONFIGURACJA STRONY
@@ -61,6 +59,11 @@ def oblicz_prob_poisson(typ, linia, lam):
         return 1 - poisson.cdf(linia, lam)
     else:
         return poisson.cdf(linia, lam)
+
+def pasek_postepu(p, szerokosc=20):
+    """Tworzy tekstowy pasek postępu"""
+    wypelnienie = int(p * szerokosc)
+    return "█" * wypelnienie + "░" * (szerokosc - wypelnienie)
 
 # ==========================================
 # WCZYTYWANIE DANYCH
@@ -346,8 +349,8 @@ with col4:
         0.0, 1.0, 0.40, 0.05
     )
     
-    pokaz_rozkład = st.checkbox(
-        "📊 Pokaż rozkład",
+    pokaz_szczegoly = st.checkbox(
+        "📊 Pokaż szczegóły",
         value=False
     )
 
@@ -415,74 +418,43 @@ if not schedule.empty and not mecze.empty:
         for m in bet_builder_results:
             with st.expander(f"{m['home']} vs {m['away']} ({m['data']})"):
                 
-                col_left, col_right = st.columns([2, 1])
+                # Główne prawdopodobieństwa
+                col1, col2, col3 = st.columns(3)
                 
-                with col_left:
-                    st.write(f"{koloruj(m['p_gole'])} ⚽ {typ_gole} {linia_gole}: **{m['p_gole']*100:.1f}%**")
-                    st.write(f"{koloruj(m['p_rogi'])} 🚩 {typ_rogi} {linia_rogi}: **{m['p_rogi']*100:.1f}%**")
-                    st.write(f"{koloruj(m['p_kartki'])} 🟨 {typ_kartki} {linia_kartki}: **{m['p_kartki']*100:.1f}%**")
-                    
+                with col1:
+                    st.markdown(f"### {koloruj(m['p_gole'])} ⚽")
+                    st.markdown(f"**{typ_gole} {linia_gole}**")
+                    st.markdown(f"# {m['p_gole']*100:.1f}%")
+                    st.caption(pasek_postepu(m['p_gole']))
+                
+                with col2:
+                    st.markdown(f"### {koloruj(m['p_rogi'])} 🚩")
+                    st.markdown(f"**{typ_rogi} {linia_rogi}**")
+                    st.markdown(f"# {m['p_rogi']*100:.1f}%")
+                    st.caption(pasek_postepu(m['p_rogi']))
+                
+                with col3:
+                    st.markdown(f"### {koloruj(m['p_kartki'])} 🟨")
+                    st.markdown(f"**{typ_kartki} {linia_kartki}**")
+                    st.markdown(f"# {m['p_kartki']*100:.1f}%")
+                    st.caption(pasek_postepu(m['p_kartki']))
+                
+                # Combo
+                st.markdown("---")
+                combo_col1, combo_col2, combo_col3 = st.columns([1,2,1])
+                with combo_col2:
+                    st.markdown(f"## 🎯 Combo: {m['p_combo']*100:.2f}%")
+                    st.caption(pasek_postepu(m['p_combo'], 30))
+                
+                # Szczegóły (opcjonalne)
+                if pokaz_szczegoly:
                     st.markdown("---")
-                    st.markdown(f"### 🎯 Combo: {m['p_combo']*100:.2f}%")
-                    
-                    st.caption(
-                        f"λ gole: {m['home']} {m['lambda_home']:.2f} – {m['away']} {m['lambda_away']:.2f} | "
-                        f"λ rogi: {m['lambda_rogi']:.2f} | λ kartki: {m['lambda_kartki']:.2f}"
-                    )
-                
-                with col_right:
-                    if pokaz_rozkład:
-                        # Wykres rozkładu Poissona
-                        fig = make_subplots(
-                            rows=2, cols=1,
-                            subplot_titles=("Rozkład goli", "Rozkład rożnych/kartek"),
-                            vertical_spacing=0.15
-                        )
-                        
-                        # Rozkład goli
-                        x_gole = list(range(0, 7))
-                        y_home = [poisson.pmf(i, m['lambda_home']) for i in x_gole]
-                        y_away = [poisson.pmf(i, m['lambda_away']) for i in x_gole]
-                        
-                        fig.add_trace(
-                            go.Bar(x=x_gole, y=y_home, name=m['home'], 
-                                  marker_color='#1f77b4', opacity=0.7),
-                            row=1, col=1
-                        )
-                        fig.add_trace(
-                            go.Bar(x=x_gole, y=y_away, name=m['away'], 
-                                  marker_color='#ff7f0e', opacity=0.7),
-                            row=1, col=1
-                        )
-                        
-                        # Rozkład rożnych i kartek
-                        x_extra = list(range(0, 21))
-                        y_rogi = [poisson.pmf(i, m['lambda_rogi']) for i in x_extra]
-                        y_kartki = [poisson.pmf(i, m['lambda_kartki']) for i in x_extra]
-                        
-                        fig.add_trace(
-                            go.Scatter(x=x_extra, y=y_rogi, name="Rożne", 
-                                      mode='lines+markers', line=dict(color='green')),
-                            row=2, col=1
-                        )
-                        fig.add_trace(
-                            go.Scatter(x=x_extra, y=y_kartki, name="Kartki", 
-                                      mode='lines+markers', line=dict(color='red')),
-                            row=2, col=1
-                        )
-                        
-                        fig.update_layout(
-                            height=450,
-                            showlegend=True,
-                            margin=dict(l=30, r=30, t=50, b=30)
-                        )
-                        
-                        fig.update_xaxes(title_text="Liczba goli", row=1, col=1)
-                        fig.update_yaxes(title_text="Prawdopodobieństwo", row=1, col=1)
-                        fig.update_xaxes(title_text="Liczba", row=2, col=1)
-                        fig.update_yaxes(title_text="Prawdopodobieństwo", row=2, col=1)
-                        
-                        st.plotly_chart(fig, use_container_width=True)
+                    st.markdown("**📊 Parametry modelu:**")
+                    st.markdown(f"""
+                    - λ gole: {m['home']} {m['lambda_home']:.2f} – {m['away']} {m['lambda_away']:.2f}
+                    - λ rogi: {m['lambda_rogi']:.2f}
+                    - λ kartki: {m['lambda_kartki']:.2f}
+                    """)
     else:
         st.info("ℹ️ Brak meczów spełniających kryteria. Zmniejsz próg minimalnego prawdopodobieństwa.")
 else:
@@ -523,13 +495,12 @@ if not schedule.empty and not mecze.empty:
             
             btts_list.append({
                 "Mecz": f"{home} vs {away}",
-                "BTTS": round(p_btts * 100, 1),
-                "λ_home": round(lambda_home, 2),
-                "λ_away": round(lambda_away, 2)
+                "BTTS": f"{p_btts*100:.1f}%",
+                "λ H/A": f"{lambda_home:.2f}/{lambda_away:.2f}"
             })
         
         if btts_list:
-            btts_df = pd.DataFrame(btts_list).sort_values("BTTS", ascending=False)
+            btts_df = pd.DataFrame(btts_list)
             st.dataframe(btts_df, use_container_width=True, hide_index=True)
 
     with col2:
@@ -556,12 +527,12 @@ if not schedule.empty and not mecze.empty:
             
             over_list.append({
                 "Mecz": f"{home} vs {away}",
-                "Over 2.5": round(p_over25 * 100, 1),
-                "λ_total": round(lambda_total, 2)
+                "Over 2.5": f"{p_over25*100:.1f}%",
+                "λ total": f"{lambda_total:.2f}"
             })
         
         if over_list:
-            over_df = pd.DataFrame(over_list).sort_values("Over 2.5", ascending=False)
+            over_df = pd.DataFrame(over_list)
             st.dataframe(over_df, use_container_width=True, hide_index=True)
 
 # ==========================================
@@ -585,7 +556,6 @@ with tab1:
     
     # Dodaj kolumny z procentami
     display_table['W%'] = (display_table['w'] / display_table['played'] * 100).round(1).astype(str) + '%'
-    display_table['ppg'] = display_table['ppg'].astype(str) + ' pkt/m'
     
     st.dataframe(display_table, use_container_width=True)
 
@@ -598,16 +568,10 @@ with tab2:
         "Gole strzelone (wyjazd)", "Gole stracone (wyjazd)",
         "Różne (dom)", "Różne (wyjazd)",
         "Kartki (dom)", "Kartki (wyjazd)",
-        "BTTS% (dom)", "Over2.5% (dom)"
     ]
     
     display_df = srednie_df[cols_to_show].copy()
     display_df.index.name = "Drużyna"
-    
-    # Formatowanie procentów
-    for col in ["BTTS% (dom)", "Over2.5% (dom)"]:
-        if col in display_df.columns:
-            display_df[col] = (display_df[col] * 100).round(1).astype(str) + '%'
     
     st.dataframe(display_df, use_container_width=True)
 
@@ -623,21 +587,6 @@ with tab3:
         return f.replace("W", "🟢 ").replace("D", "🟡 ").replace("L", "🔴 ")
     
     forma_df["Wizualizacja"] = forma_df["Forma"].apply(format_forma)
-    
-    # Dodaj kolorowanie dla ostatniego meczu
-    def ostatni_mecz_kolor(f):
-        if f == "—" or len(f) == 0:
-            return "⚪"
-        last = f[-1]
-        if last == "W":
-            return "🟢"
-        elif last == "D":
-            return "🟡"
-        elif last == "L":
-            return "🔴"
-        return "⚪"
-    
-    forma_df["Ostatni"] = forma_df["Forma"].apply(ostatni_mecz_kolor)
     
     st.dataframe(forma_df, use_container_width=True)
 
@@ -670,10 +619,3 @@ st.caption(
     f"Model Poisson z wagą formy | "
     f"Źródło: football-data.co.uk"
 )
-
-# ==========================================
-# PRZYCISK ODŚWIEŻANIA (dolny)
-# ==========================================
-if st.button("🔄 Odśwież dane (dolny)", use_container_width=True):
-    st.cache_data.clear()
-    st.rerun()
