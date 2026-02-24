@@ -6,29 +6,59 @@ import requests
 from io import StringIO
 import numpy as np
 
-# --- KONFIGURACJA ---
-st.set_page_config(page_title="Predykcje Premier League", layout="wide")
+# --- KONFIGURACJA API ---
+# Wstaw tutaj swój klucz z API-Football (RapidAPI)
+API_KEY = "5be25cbf05cce4c2957d4fc89e6da4f7" 
 
-st.title("Predykcje Premier League 2025/26")
-st.markdown("Model Poissona + home/away + wagi formy")
+LIGI_CONFIG = {
+    "Premier League": {"id": 39, "csv": "E0"},
+    "La Liga": {"id": 140, "csv": "SP1"},
+    "Bundesliga": {"id": 78, "csv": "D1"},
+    "Serie A": {"id": 135, "csv": "I1"},
+    "Ligue 1": {"id": 61, "csv": "F1"}
+}
 
+# --- KONFIGURACJA STRONY ---
+st.set_page_config(page_title="Football Predictor Pro", layout="wide")
+
+# --- SIDEBAR ---
+with st.sidebar:
+    st.header("⚙️ Ustawienia")
+    wybrana_liga = st.selectbox("Wybierz Ligę", list(LIGI_CONFIG.keys()))
+    kod_csv = LIGI_CONFIG[wybrana_liga]["csv"]
+    kod_id = LIGI_CONFIG[wybrana_liga]["id"]
+    
+    st.divider()
+    if st.button("🔄 Odśwież Dane"):
+        st.cache_data.clear()
+        st.rerun()
+
+st.title(f"Predykcje: {wybrana_liga} 2025/26")
+st.markdown("Model Poissona + API-Football + Wagi Formy")
+
+# --- MAPOWANIE NAZW (ROZSZERZONE) ---
 NAZWY_MAP = {
     "Brighton & Hove Albion": "Brighton",
     "West Ham United": "West Ham",
     "Newcastle United": "Newcastle",
     "Tottenham Hotspur": "Tottenham",
-    "Leeds United": "Leeds",
     "Manchester United": "Man United",
     "Manchester City": "Man City",
     "Nottingham Forest": "Nott'm Forest",
-    "Wolverhampton": "Wolves",
+    "Wolverhampton Wanderers": "Wolves",
+    "Sheffield United": "Sheffield Utd",
+    "Atletico Madrid": "Ath Madrid",
+    "AC Milan": "Milan",
+    "Inter Milan": "Inter",
+    "FC Barcelona": "Barcelona",
+    "Real Madrid": "Real Madrid"
 }
 
 # --- DANE ---
 @st.cache_data(ttl=900)
-def load_historical():
+def load_historical(league_csv):
     try:
-        url = "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
+        url = f"https://www.football-data.co.uk/mmz4281/2526/{league_csv}.csv"
         r = requests.get(url)
         r.raise_for_status()
         df = pd.read_csv(StringIO(r.text))
@@ -39,20 +69,40 @@ def load_historical():
         df['total_rozne'] = df['HC'] + df['AC']
         return df
     except:
-        st.error("Nie udało się pobrać danych historycznych.")
+        st.error(f"Nie udało się pobrać danych historycznych dla {wybrana_liga}.")
         return pd.DataFrame()
 
-@st.cache_data(ttl=86400)
-def load_schedule():
+@st.cache_data(ttl=3600)
+def load_schedule_api(league_id):
+    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+    # Pobieramy najbliższe 15 meczów
+    headers = {
+        "x-rapidapi-key": API_KEY,
+        "x-rapidapi-host": "api-football-v1.p.rapidapi.com"
+    }
+    params = {"league": str(league_id), "season": "2025", "next": "15"}
+    
     try:
-        df = pd.read_csv("terminarz_premier_2025.csv")
-        df['date'] = pd.to_datetime(df['date'])
-        return df.sort_values('date')
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        data = response.json()
+        fixtures = []
+        for res in data.get("response", []):
+            fixtures.append({
+                "date": res["fixture"]["date"],
+                "home_team": res["teams"]["home"]["name"],
+                "away_team": res["teams"]["away"]["name"],
+                "round": res["league"]["round"]
+            })
+        df = pd.DataFrame(fixtures)
+        if not df.empty:
+            df['date'] = pd.to_datetime(df['date'])
+        return df
     except:
+        st.warning("Nie udało się połączyć z API-Football. Upewnij się, że klucz jest poprawny.")
         return pd.DataFrame()
 
-historical = load_historical()
-schedule = load_schedule()
+historical = load_historical(kod_csv)
+schedule = load_schedule_api(kod_id)
 
 # --- LOGIKA OBLICZEŃ ---
 def weighted_mean(values):
@@ -62,15 +112,14 @@ def weighted_mean(values):
 
 @st.cache_data
 def oblicz_wszystkie_statystyki(df):
+    if df.empty: return pd.DataFrame()
     druzyny = pd.unique(df[['HomeTeam', 'AwayTeam']].values.ravel())
     dane = {}
 
     for d in druzyny:
         home = df[df['HomeTeam'] == d].tail(10)
         away = df[df['AwayTeam'] == d].tail(10)
-
-        if len(home) < 3 or len(away) < 3:
-            continue
+        if len(home) < 3 or len(away) < 3: continue
 
         dane[d] = {
             "Gole strzelone (dom)": weighted_mean(home['FTHG']),
@@ -85,6 +134,7 @@ def oblicz_wszystkie_statystyki(df):
     return pd.DataFrame(dane).T.round(2)
 
 def oblicz_forme(df):
+    if df.empty: return {}
     druzyny = pd.unique(df[['HomeTeam', 'AwayTeam']].values.ravel())
     forma = {}
     for d in druzyny:
@@ -103,6 +153,7 @@ def oblicz_forme(df):
     return forma
 
 def tabela_ligowa(df):
+    if df.empty: return pd.DataFrame()
     table = {}
     for _, m in df.iterrows():
         home, away = m['HomeTeam'], m['AwayTeam']
@@ -129,13 +180,12 @@ def koloruj(p):
     elif p > 0.50: return "🟡"
     else: return "🔴"
 
-# Przygotowanie danych do zakładek
+# Przygotowanie danych
 if not historical.empty:
     srednie_df = oblicz_wszystkie_statystyki(historical)
     forma_dict = oblicz_forme(historical)
     tabela = tabela_ligowa(historical)
     
-    # --- INTERFEJS Z ZAKŁADKAMI ---
     tab1, tab2, tab3 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu"])
 
     with tab1:
@@ -153,29 +203,24 @@ if not historical.empty:
         
         min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
 
-        st.subheader("📅 Predykcje – najbliższa kolejka")
-        dzisiaj = datetime.now()
-        nadchodzace = schedule[schedule['date'] > dzisiaj] if not schedule.empty else pd.DataFrame()
+        st.subheader("📅 Nadchodzące mecze (API Live)")
 
-        if not nadchodzace.empty:
-            min_round = nadchodzace['round'].min()
-            mecze = nadchodzace[nadchodzace['round'] == min_round]
-            
-            # Kontener na wyniki combo i BTTS
+        if not schedule.empty:
             col_pred1, col_pred2 = st.columns(2)
             
             with col_pred1:
                 st.write("**Combo Builder**")
-                for _, mecz in mecze.iterrows():
-                    h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
-                    a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
+                for _, mecz in schedule.iterrows():
+                    # Próba dopasowania nazw z API do nazw z CSV
+                    h_raw = mecz['home_team']
+                    a_raw = mecz['away_team']
+                    h = NAZWY_MAP.get(h_raw, h_raw)
+                    a = NAZWY_MAP.get(a_raw, a_raw)
                     
                     if h in srednie_df.index and a in srednie_df.index:
-                        # Gole
                         lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
                         lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                         lam_g = lam_h + lam_a
-                        # Rożne i Kartki
                         lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
                         lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
 
@@ -192,10 +237,11 @@ if not historical.empty:
                                 st.write(f"{koloruj(p_g)} Gole: {p_g:.1%}")
                                 st.write(f"{koloruj(p_r)} Rożne: {p_r:.1%}")
                                 st.write(f"{koloruj(p_k)} Kartki: {p_k:.1%}")
+                                st.caption(f"Data: {mecz['date'].strftime('%d.%m %H:%M')}")
             
             with col_pred2:
                 st.write("**BTTS Ranking**")
-                for _, mecz in mecze.iterrows():
+                for _, mecz in schedule.iterrows():
                     h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
                     a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
                     if h in srednie_df.index and a in srednie_df.index:
@@ -204,10 +250,10 @@ if not historical.empty:
                         p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
                         st.write(f"{koloruj(p_btts)} **{h} - {a}**: {p_btts:.1%}")
         else:
-            st.warning("Załaduj plik 'terminarz_premier_2025.csv', aby zobaczyć predykcje.")
+            st.info("Brak nadchodzących meczów do wyświetlenia.")
 
     with tab2:
-        st.subheader("📊 Aktualna Sytuacja")
+        st.subheader(f"📊 Sytuacja w lidze: {wybrana_liga}")
         c_l, c_f = st.columns([2, 1])
         with c_l:
             st.write("Tabela Ligowa")
@@ -219,9 +265,4 @@ if not historical.empty:
 
     with tab3:
         st.subheader("📊 Średnie ważone drużyn")
-        st.write("Dane uwzględniają atut własnego boiska oraz wagę ostatnich meczów.")
         st.dataframe(srednie_df.sort_index(), use_container_width=True)
-        
-        if st.button("🔄 Wymuś odświeżenie danych"):
-            st.cache_data.clear()
-            st.rerun()
