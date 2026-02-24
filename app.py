@@ -5,7 +5,6 @@ from datetime import datetime
 import requests
 from io import StringIO
 import numpy as np
-import soccerdata as sd
 
 # ==========================================
 # KONFIGURACJA STRONY
@@ -21,50 +20,45 @@ LEAGUES = {
         "country": "Anglia",
         "icon": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
         "code": "E0",
-        "league_id": "ENG-Premier League",  # Format dla Sofascore
-        "season": "2025-2026",
-        "data_url": "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/E0.csv",
+        "fixtures_url": "https://www.football-data.co.uk/fixtures/2025/26/E0.csv"
     },
     "La Liga": {
         "name": "La Liga",
         "country": "Hiszpania",
         "icon": "🇪🇸",
         "code": "SP1",
-        "league_id": "ESP-La Liga",
-        "season": "2025-2026",
-        "data_url": "https://www.football-data.co.uk/mmz4281/2526/SP1.csv"
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/SP1.csv",
+        "fixtures_url": "https://www.football-data.co.uk/fixtures/2025/26/SP1.csv"
     },
     "Bundesliga": {
         "name": "Bundesliga",
         "country": "Niemcy",
         "icon": "🇩🇪",
         "code": "D1",
-        "league_id": "GER-Bundesliga",
-        "season": "2025-2026",
-        "data_url": "https://www.football-data.co.uk/mmz4281/2526/D1.csv"
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/D1.csv",
+        "fixtures_url": "https://www.football-data.co.uk/fixtures/2025/26/D1.csv"
     },
     "Serie A": {
         "name": "Serie A",
         "country": "Włochy",
         "icon": "🇮🇹",
         "code": "I1",
-        "league_id": "ITA-Serie A",
-        "season": "2025-2026",
-        "data_url": "https://www.football-data.co.uk/mmz4281/2526/I1.csv"
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/I1.csv",
+        "fixtures_url": "https://www.football-data.co.uk/fixtures/2025/26/I1.csv"
     },
     "Ligue 1": {
         "name": "Ligue 1",
         "country": "Francja",
         "icon": "🇫🇷",
         "code": "F1",
-        "league_id": "FRA-Ligue 1",
-        "season": "2025-2026",
-        "data_url": "https://www.football-data.co.uk/mmz4281/2526/F1.csv"
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/F1.csv",
+        "fixtures_url": "https://www.football-data.co.uk/fixtures/2025/26/F1.csv"
     }
 }
 
 # ==========================================
-# MAPOWANIE NAZW DRUŻYN (rozszerzone)
+# MAPOWANIE NAZW DRUŻYN
 # ==========================================
 NAZWY_MAP = {
     # Premier League
@@ -187,7 +181,7 @@ def oblicz_prob_poisson(typ, linia, lam):
 # WCZYTYWANIE DANYCH HISTORYCZNYCH
 # ==========================================
 @st.cache_data(ttl=900)
-def load_historical(league_code, data_url):
+def load_historical(data_url):
     """Pobiera dane historyczne dla wybranej ligi"""
     try:
         r = requests.get(data_url, timeout=10)
@@ -205,40 +199,68 @@ def load_historical(league_code, data_url):
         
         return df
     except Exception as e:
-        st.error(f"Nie udało się pobrać danych historycznych dla {league_code}: {e}")
+        st.error(f"Nie udało się pobrać danych historycznych: {e}")
         return pd.DataFrame()
 
 # ==========================================
-# POBIERANIE TERMINARZA (SOFASCORE)
+# POBIERANIE TERMINARZA Z FOOTBALL-DATA.CO.UK
 # ==========================================
-@st.cache_data(ttl=3600)  # Cache na 1 godzinę
-def load_schedule_sofascore(league_id, season):
-    """Pobiera terminarz dla wybranej ligi używając soccerdata/Sofascore"""
+@st.cache_data(ttl=3600)
+def load_fixtures(fixtures_url):
+    """
+    Pobiera terminarz (nadchodzące mecze) z football-data.co.uk
+    Format: https://www.football-data.co.uk/fixtures/2025/26/E0.csv
+    """
     try:
-        # Inicjalizacja scrapera Sofascore
-        sofascore = sd.Sofascore(leagues=league_id, seasons=season)
+        st.info(f"Próbuję pobrać terminarz z: {fixtures_url}")
+        r = requests.get(fixtures_url, timeout=15)
+        r.raise_for_status()
         
-        # Pobierz terminarz
-        schedule_df = sofascore.read_schedule()
+        # Wczytaj dane
+        df = pd.read_csv(StringIO(r.text))
         
-        if schedule_df is not None and not schedule_df.empty:
-            # Reset index, żeby pozbyć się MultiIndex
-            schedule_df = schedule_df.reset_index()
-            
-            # Przygotuj dane w formacie zgodnym z aplikacją
-            schedule = pd.DataFrame({
-                'date': pd.to_datetime(schedule_df['date']),
-                'round': schedule_df['week'].astype(int),
-                'home_team': schedule_df['home_team'],
-                'away_team': schedule_df['away_team']
-            })
-            
-            return schedule.sort_values('date')
-        else:
+        # Sprawdź czy są wymagane kolumny
+        required_cols = ['Date', 'Home', 'Away']
+        if not all(col in df.columns for col in required_cols):
+            st.warning(f"Brak wymaganych kolumn w pliku. Dostępne: {list(df.columns)}")
             return pd.DataFrame()
-            
+        
+        # Konwersja daty
+        df['date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+        
+        # Usuń wiersze z błędnymi datami
+        df = df.dropna(subset=['date'])
+        
+        # Określenie kolejki
+        if 'Wk' in df.columns:
+            round_col = 'Wk'
+        else:
+            # Jeśli nie ma kolumny z kolejką, tworzymy własną na podstawie dat
+            df = df.sort_values('date')
+            unique_dates = df['date'].dt.date.unique()
+            date_to_round = {date: i+1 for i, date in enumerate(unique_dates)}
+            df['round'] = df['date'].dt.date.map(date_to_round)
+            round_col = 'round'
+        
+        # Przygotuj DataFrame w formacie aplikacji
+        fixtures = pd.DataFrame({
+            'date': df['date'],
+            'round': df[round_col].astype(int),
+            'home_team': df['Home'].str.strip(),
+            'away_team': df['Away'].str.strip()
+        })
+        
+        # Posortuj według daty
+        fixtures = fixtures.sort_values('date').reset_index(drop=True)
+        
+        st.success(f"Pobrano {len(fixtures)} meczów z terminarza")
+        return fixtures
+        
+    except requests.exceptions.RequestException as e:
+        st.warning(f"Błąd połączenia: {e}")
+        return pd.DataFrame()
     except Exception as e:
-        st.warning(f"Nie udało się pobrać terminarza z Sofascore: {e}")
+        st.warning(f"Nie udało się przetworzyć terminarza: {e}")
         return pd.DataFrame()
 
 # ==========================================
@@ -331,25 +353,30 @@ with st.sidebar:
     league_config = LEAGUES[selected_league]
     
     st.caption(f"🇪🇺 Kraj: {league_config['country']}")
-    st.caption(f"📅 Sezon: {league_config['season']}")
+    st.caption(f"📅 Kod ligi: {league_config['code']}")
     
     st.divider()
     
+    # Przycisk odświeżania
     if st.button("🔄 Odśwież dane"):
         st.cache_data.clear()
         st.rerun()
 
-# Główny tytuł z nazwą wybranej ligi
+# Główny tytuł
 st.title(f"{league_config['icon']} Predykcje {selected_league} 2025/26")
 st.markdown("Model Poissona + home/away + wagi formy")
 
 # Pobierz dane dla wybranej ligi
-historical = load_historical(league_config['code'], league_config['data_url'])
-schedule = load_schedule_sofascore(league_config['league_id'], league_config['season'])
+with st.spinner('Pobieranie danych historycznych...'):
+    historical = load_historical(league_config['data_url'])
 
 if historical.empty:
     st.error("Nie udało się pobrać danych historycznych. Spróbuj później.")
     st.stop()
+
+# Pobierz terminarz
+with st.spinner('Pobieranie terminarza...'):
+    fixtures = load_fixtures(league_config['fixtures_url'])
 
 # Oblicz statystyki
 srednie_df = oblicz_wszystkie_statystyki(historical)
@@ -379,13 +406,15 @@ with tab1:
     st.subheader("📅 Predykcje – najbliższa kolejka")
     dzisiaj = datetime.now()
     
-    if not schedule.empty:
+    if not fixtures.empty:
         # Filtruj nadchodzące mecze
-        nadchodzace = schedule[schedule['date'] > dzisiaj]
+        nadchodzace = fixtures[fixtures['date'] > dzisiaj]
         
         if not nadchodzace.empty:
             min_round = nadchodzace['round'].min()
             mecze = nadchodzace[nadchodzace['round'] == min_round]
+            
+            st.caption(f"Kolejka {min_round} – {len(mecze)} meczów")
             
             # Kontener na wyniki combo i BTTS
             col_pred1, col_pred2 = st.columns(2)
@@ -443,7 +472,9 @@ with tab1:
         else:
             st.warning("Brak nadchodzących meczów w terminarzu.")
     else:
-        st.warning("Nie udało się pobrać terminarza. Spróbuj ponownie później.")
+        st.warning("Nie udało się pobrać terminarza. Wyświetlam wszystkie dostępne mecze:")
+        if not fixtures.empty:
+            st.dataframe(fixtures, use_container_width=True)
 
 with tab2:
     st.subheader("📊 Aktualna Sytuacja")
@@ -463,5 +494,6 @@ with tab3:
     
     # Dodaj informacje o źródle danych
     st.divider()
-    st.caption(f"Źródło danych: football-data.co.uk | Sofascore via soccerdata")
-    st.caption(f"Ostatnia aktualizacja danych historycznych: {historical['Date'].max().strftime('%d.%m.%Y') if not historical.empty else '—'}")
+    st.caption(f"📊 Dane historyczne: {len(historical)} meczów")
+    st.caption(f"📅 Ostatnia aktualizacja: {historical['Date'].max().strftime('%d.%m.%Y') if not historical.empty else '—'}")
+    st.caption(f"📋 Źródło: football-data.co.uk")
