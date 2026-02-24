@@ -5,11 +5,64 @@ from datetime import datetime
 import requests
 from io import StringIO
 import numpy as np
-# --- KONFIGURACJA ---
-st.set_page_config(page_title="Predykcje Premier League", layout="wide")
-st.title("Predykcje Premier League 2025/26")
-st.markdown("Model Poissona + home/away + wagi formy")
+import os
+
+# ==========================================
+# KONFIGURACJA STRONY
+# ==========================================
+st.set_page_config(page_title="Predykcje Top 5 Lig", layout="wide")
+
+# ==========================================
+# KONFIGURACJA LIG
+# ==========================================
+LEAGUES = {
+    "Premier League": {
+        "name": "Premier League",
+        "country": "Anglia",
+        "icon": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+        "code": "E0",
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/E0.csv",
+        "schedule_file": "terminarz_premier_2025.csv"
+    },
+    "La Liga": {
+        "name": "La Liga",
+        "country": "Hiszpania",
+        "icon": "🇪🇸",
+        "code": "SP1",
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/SP1.csv",
+        "schedule_file": "terminarz_la_liga_2025.csv"
+    },
+    "Bundesliga": {
+        "name": "Bundesliga",
+        "country": "Niemcy",
+        "icon": "🇩🇪",
+        "code": "D1",
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/D1.csv",
+        "schedule_file": "terminarz_bundesliga_2025.csv"
+    },
+    "Serie A": {
+        "name": "Serie A",
+        "country": "Włochy",
+        "icon": "🇮🇹",
+        "code": "I1",
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/I1.csv",
+        "schedule_file": "terminarz_serie_a_2025.csv"
+    },
+    "Ligue 1": {
+        "name": "Ligue 1",
+        "country": "Francja",
+        "icon": "🇫🇷",
+        "code": "F1",
+        "data_url": "https://www.football-data.co.uk/mmz4281/2526/F1.csv",
+        "schedule_file": "terminarz_ligue_1_2025.csv"
+    }
+}
+
+# ==========================================
+# MAPOWANIE NAZW DRUŻYN (rozszerzone)
+# ==========================================
 NAZWY_MAP = {
+    # Premier League
     "Brighton & Hove Albion": "Brighton",
     "West Ham United": "West Ham",
     "Newcastle United": "Newcastle",
@@ -18,49 +71,190 @@ NAZWY_MAP = {
     "Manchester United": "Man United",
     "Manchester City": "Man City",
     "Nottingham Forest": "Nott'm Forest",
+    "Wolverhampton Wanderers": "Wolves",
     "Wolverhampton": "Wolves",
+    "Sheffield United": "Sheffield Utd",
+    "Leicester City": "Leicester",
+    "Southampton": "Southampton",
+    "Crystal Palace": "Crystal Palace",
+    
+    # La Liga
+    "Athletic Club": "Athletic Bilbao",
+    "Atlético Madrid": "Atletico Madrid",
+    "Barcelona": "Barcelona",
+    "Real Madrid": "Real Madrid",
+    "Real Sociedad": "Real Sociedad",
+    "Real Betis": "Betis",
+    "Villarreal": "Villarreal",
+    "Valencia": "Valencia",
+    "Sevilla": "Sevilla",
+    "Rayo Vallecano": "Rayo Vallecano",
+    "RCD Mallorca": "Mallorca",
+    "RCD Espanyol": "Espanyol",
+    "Getafe": "Getafe",
+    "Celta Vigo": "Celta",
+    "Girona": "Girona",
+    "Deportivo Alavés": "Alaves",
+    "UD Las Palmas": "Las Palmas",
+    "CA Osasuna": "Osasuna",
+    
+    # Bundesliga
+    "Bayern Munich": "Bayern Monachium",
+    "Borussia Dortmund": "Borussia Dortmund",
+    "RB Leipzig": "RB Leipzig",
+    "Bayer Leverkusen": "Bayer Leverkusen",
+    "Eintracht Frankfurt": "Eintracht",
+    "VfB Stuttgart": "Stuttgart",
+    "VfL Wolfsburg": "Wolfsburg",
+    "Borussia Mönchengladbach": "Gladbach",
+    "1. FC Union Berlin": "Union Berlin",
+    "SC Freiburg": "Freiburg",
+    "1. FC Köln": "FC Koln",
+    "FSV Mainz 05": "Mainz",
+    "TSG Hoffenheim": "Hoffenheim",
+    "Werder Bremen": "Werder Bremen",
+    "VfL Bochum": "Bochum",
+    "FC Augsburg": "Augsburg",
+    
+    # Serie A
+    "AC Milan": "AC Milan",
+    "Inter": "Inter",
+    "Juventus": "Juventus",
+    "AS Roma": "Roma",
+    "Lazio": "Lazio",
+    "Napoli": "Napoli",
+    "Atalanta": "Atalanta",
+    "Fiorentina": "Fiorentina",
+    "Torino": "Torino",
+    "Bologna": "Bologna",
+    "Udinese": "Udinese",
+    "Sassuolo": "Sassuolo",
+    "Empoli": "Empoli",
+    "Salernitana": "Salernitana",
+    "Lecce": "Lecce",
+    
+    # Ligue 1
+    "Paris Saint-Germain": "PSG",
+    "Marseille": "Marseille",
+    "Monaco": "Monaco",
+    "Lyon": "Lyon",
+    "Lille": "Lille",
+    "Rennes": "Rennes",
+    "Nice": "Nice",
+    "Lens": "Lens",
+    "Strasbourg": "Strasbourg",
+    "Nantes": "Nantes",
+    "Montpellier": "Montpellier",
+    "Toulouse": "Toulouse",
+    "Reims": "Reims",
+    "Brest": "Brest",
+    "Clermont": "Clermont",
+    "Auxerre": "Auxerre"
 }
-# --- DANE ---
-@st.cache_data(ttl=900)
-def load_historical():
-    try:
-        url = "https://www.football-data.co.uk/mmz4281/2526/E0.csv"
-        r = requests.get(url)
-        r.raise_for_status()
-        df = pd.read_csv(StringIO(r.text))
-        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
-        df = df.sort_values('Date')
-        df['total_gole'] = df['FTHG'] + df['FTAG']
-        df['total_kartki'] = df['HY'] + df['AY'] + df['HR']*2 + df['AR']*2
-        df['total_rozne'] = df['HC'] + df['AC']
-        return df
-    except:
-        st.error("Nie udało się pobrać danych historycznych.")
-        return pd.DataFrame()
-@st.cache_data(ttl=86400)
-def load_schedule():
-    try:
-        df = pd.read_csv("terminarz_premier_2025.csv")
-        df['date'] = pd.to_datetime(df['date'])
-        return df.sort_values('date')
-    except:
-        return pd.DataFrame()
-historical = load_historical()
-schedule = load_schedule()
-# --- LOGIKA OBLICZEŃ ---
+
+# ==========================================
+# FUNKCJE POMOCNICZE
+# ==========================================
 def weighted_mean(values):
-    if len(values) == 0: return 0
+    """Oblicza średnią ważoną z wagami liniowo rosnącymi (1 → 2)"""
+    if len(values) == 0:
+        return 0
     weights = np.linspace(1, 2, len(values))
     return np.average(values, weights=weights)
+
+def koloruj(p):
+    """Zwraca emoji w zależności od prawdopodobieństwa"""
+    if p > 0.65:
+        return "🟢"
+    elif p > 0.50:
+        return "🟡"
+    else:
+        return "🔴"
+
+def oblicz_prob_poisson(typ, linia, lam):
+    """Oblicza prawdopodobieństwo Over/Under dla rozkładu Poissona"""
+    if typ == "Over":
+        return 1 - poisson.cdf(linia, lam)
+    else:
+        return poisson.cdf(linia, lam)
+
+# ==========================================
+# WCZYTYWANIE DANYCH HISTORYCZNYCH
+# ==========================================
+@st.cache_data(ttl=900)
+def load_historical(data_url, league_code):
+    """Pobiera dane historyczne dla wybranej ligi z football-data.co.uk"""
+    try:
+        with st.spinner(f'Pobieranie danych historycznych dla {league_code}...'):
+            r = requests.get(data_url, timeout=10)
+            r.raise_for_status()
+            df = pd.read_csv(StringIO(r.text))
+            df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
+            df = df.sort_values('Date')
+            
+            # Oblicz dodatkowe statystyki
+            df['total_gole'] = df['FTHG'] + df['FTAG']
+            df['total_kartki'] = df['HY'] + df['AY'] + df['HR']*2 + df['AR']*2
+            df['total_rozne'] = df['HC'] + df['AC']
+            df['btts'] = ((df['FTHG'] > 0) & (df['FTAG'] > 0)).astype(int)
+            df['over25'] = (df['total_gole'] > 2.5).astype(int)
+            
+            return df
+    except Exception as e:
+        st.error(f"Nie udało się pobrać danych historycznych dla {league_code}: {e}")
+        return pd.DataFrame()
+
+# ==========================================
+# WCZYTYWANIE TERMINARZA Z PLIKU
+# ==========================================
+@st.cache_data(ttl=3600)
+def load_schedule_from_file(filename):
+    """Wczytuje terminarz z pliku CSV"""
+    try:
+        if not os.path.exists(filename):
+            st.warning(f"Plik {filename} nie istnieje")
+            return pd.DataFrame()
+            
+        df = pd.read_csv(filename)
+        
+        # Sprawdź czy są wymagane kolumny
+        required_cols = ['date', 'home_team', 'away_team']
+        if not all(col in df.columns for col in required_cols):
+            st.warning(f"Plik {filename} nie zawiera wymaganych kolumn. Oczekiwano: date, home_team, away_team")
+            return pd.DataFrame()
+        
+        # Konwersja daty
+        df['date'] = pd.to_datetime(df['date'])
+        
+        # Jeśli brak kolumny 'round', utwórz ją na podstawie dat
+        if 'round' not in df.columns:
+            df = df.sort_values('date')
+            unique_dates = df['date'].dt.date.unique()
+            date_to_round = {date: i+1 for i, date in enumerate(unique_dates)}
+            df['round'] = df['date'].dt.date.map(date_to_round)
+        
+        return df.sort_values('date').reset_index(drop=True)
+        
+    except Exception as e:
+        st.warning(f"Błąd wczytywania pliku {filename}: {e}")
+        return pd.DataFrame()
+
+# ==========================================
+# FUNKCJE OBLICZENIOWE
+# ==========================================
 @st.cache_data
 def oblicz_wszystkie_statystyki(df):
+    """Oblicza średnie statystyki dla każdej drużyny"""
     druzyny = pd.unique(df[['HomeTeam', 'AwayTeam']].values.ravel())
     dane = {}
+
     for d in druzyny:
         home = df[df['HomeTeam'] == d].tail(10)
         away = df[df['AwayTeam'] == d].tail(10)
+
         if len(home) < 3 or len(away) < 3:
             continue
+
         dane[d] = {
             "Gole strzelone (dom)": weighted_mean(home['FTHG']),
             "Gole stracone (dom)": weighted_mean(home['FTAG']),
@@ -72,7 +266,9 @@ def oblicz_wszystkie_statystyki(df):
             "Kartki (wyjazd)": weighted_mean(away['total_kartki']),
         }
     return pd.DataFrame(dane).T.round(2)
+
 def oblicz_forme(df):
+    """Oblicza formę drużyny (ostatnie 5 meczów)"""
     druzyny = pd.unique(df[['HomeTeam', 'AwayTeam']].values.ravel())
     forma = {}
     for d in druzyny:
@@ -89,69 +285,125 @@ def oblicz_forme(df):
                 else: wyniki.append("D")
         forma[d] = "".join(wyniki)
     return forma
+
 def tabela_ligowa(df):
+    """Tworzy aktualną tabelę ligową"""
     table = {}
     for _, m in df.iterrows():
         home, away = m['HomeTeam'], m['AwayTeam']
         hg, ag = m['FTHG'], m['FTAG']
         for team in [home, away]:
-            if team not in table: table[team] = {"pts":0,"gf":0,"ga":0,"played":0}
+            if team not in table: 
+                table[team] = {"pts": 0, "gf": 0, "ga": 0, "played": 0}
         table[home]["gf"] += hg
         table[home]["ga"] += ag
         table[home]["played"] += 1
         table[away]["gf"] += ag
         table[away]["ga"] += hg
         table[away]["played"] += 1
-        if hg > ag: table[home]["pts"] += 3
-        elif hg < ag: table[away]["pts"] += 3
+        if hg > ag: 
+            table[home]["pts"] += 3
+        elif hg < ag: 
+            table[away]["pts"] += 3
         else:
             table[home]["pts"] += 1
             table[away]["pts"] += 1
     res = pd.DataFrame(table).T
     res["diff"] = res["gf"] - res["ga"]
-    return res.sort_values(["pts","diff","gf"], ascending=False)
-def koloruj(p):
-    if p > 0.65: return "🟢"
-    elif p > 0.50: return "🟡"
-    else: return "🔴"
-# Przygotowanie danych do zakładek
-if not historical.empty:
-    srednie_df = oblicz_wszystkie_statystyki(historical)
-    forma_dict = oblicz_forme(historical)
-    tabela = tabela_ligowa(historical)
-   
-    # --- INTERFEJS Z ZAKŁADKAMI ---
-    tab1, tab2, tab3 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu"])
-    with tab1:
-        st.subheader("🎛️ Zbuduj własne combo")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5, 4.5], index=1)
-            typ_gole = st.selectbox("Typ goli", ["Over", "Under"])
-        with c2:
-            linia_rogi = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5, 11.5, 12.5], index=2)
-            typ_rogi = st.selectbox("Typ rożnych", ["Over", "Under"])
-        with c3:
-            linia_kartki = st.selectbox("Linia kartek", [2.5, 3.5, 4.5, 5.5], index=1)
-            typ_kartki = st.selectbox("Typ kartek", ["Over", "Under"])
-       
-        min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
-        st.subheader("📅 Predykcje – najbliższa kolejka")
-        dzisiaj = datetime.now()
-        nadchodzace = schedule[schedule['date'] > dzisiaj] if not schedule.empty else pd.DataFrame()
+    return res.sort_values(["pts", "diff", "gf"], ascending=False)
+
+# ==========================================
+# INTERFEJS UŻYTKOWNIKA
+# ==========================================
+
+# Wybór ligi w sidebarze
+with st.sidebar:
+    st.header("🏆 Wybierz ligę")
+    
+    selected_league = st.selectbox(
+        "Liga:",
+        options=list(LEAGUES.keys()),
+        format_func=lambda x: f"{LEAGUES[x]['icon']} {x}"
+    )
+    
+    league_config = LEAGUES[selected_league]
+    
+    st.caption(f"🇪🇺 Kraj: {league_config['country']}")
+    st.caption(f"📊 Kod ligi: {league_config['code']}")
+    st.caption(f"📋 Plik terminarza: {league_config['schedule_file']}")
+    
+    st.divider()
+    
+    # Przycisk odświeżania
+    if st.button("🔄 Odśwież dane"):
+        st.cache_data.clear()
+        st.rerun()
+
+# Główny tytuł
+st.title(f"{league_config['icon']} Predykcje {selected_league} 2025/26")
+st.markdown("Model Poissona + home/away + wagi formy")
+
+# Pobierz dane dla wybranej ligi
+historical = load_historical(league_config['data_url'], league_config['code'])
+
+if historical.empty:
+    st.error("Nie udało się pobrać danych historycznych. Spróbuj później.")
+    st.stop()
+
+# Wczytaj terminarz z pliku
+schedule = load_schedule_from_file(league_config['schedule_file'])
+
+if schedule.empty:
+    st.warning(f"Nie udało się wczytać terminarza z pliku {league_config['schedule_file']}. Predykcje nie będą dostępne.")
+
+# Oblicz statystyki
+srednie_df = oblicz_wszystkie_statystyki(historical)
+forma_dict = oblicz_forme(historical)
+tabela = tabela_ligowa(historical)
+
+# ==========================================
+# INTERFEJS Z ZAKŁADKAMI
+# ==========================================
+tab1, tab2, tab3 = st.tabs(["🎯 Bet Builder & Predykcje", "📊 Tabela i Forma", "📈 Statystyki Modelu"])
+
+with tab1:
+    st.subheader("🎛️ Zbuduj własne combo")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        linia_gole = st.selectbox("Linia goli", [1.5, 2.5, 3.5, 4.5], index=1, key="gole")
+        typ_gole = st.selectbox("Typ goli", ["Over", "Under"], key="typ_gole")
+    with c2:
+        linia_rogi = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5, 11.5, 12.5], index=2, key="rogi")
+        typ_rogi = st.selectbox("Typ rożnych", ["Over", "Under"], key="typ_rogi")
+    with c3:
+        linia_kartki = st.selectbox("Linia kartek", [2.5, 3.5, 4.5, 5.5], index=1, key="kartki")
+        typ_kartki = st.selectbox("Typ kartek", ["Over", "Under"], key="typ_kartki")
+    
+    min_prob = st.slider("Minimalne prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
+
+    st.subheader("📅 Predykcje – najbliższa kolejka")
+    dzisiaj = datetime.now()
+    
+    if not schedule.empty:
+        # Filtruj nadchodzące mecze
+        nadchodzace = schedule[schedule['date'] > dzisiaj]
+        
         if not nadchodzace.empty:
             min_round = nadchodzace['round'].min()
             mecze = nadchodzace[nadchodzace['round'] == min_round]
-           
+            
+            st.caption(f"Kolejka {min_round} – {len(mecze)} meczów")
+            
             # Kontener na wyniki combo i BTTS
             col_pred1, col_pred2 = st.columns(2)
-           
+            
             with col_pred1:
                 st.write("**Combo Builder**")
+                combo_count = 0
                 for _, mecz in mecze.iterrows():
                     h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
                     a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
-                   
+                    
                     if h in srednie_df.index and a in srednie_df.index:
                         # Gole
                         lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
@@ -160,20 +412,25 @@ if not historical.empty:
                         # Rożne i Kartki
                         lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
                         lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
-                        def licz_p(typ, linia, lam):
-                            return 1 - poisson.cdf(linia, lam) if typ == "Over" else poisson.cdf(linia, lam)
-                        p_g = licz_p(typ_gole, linia_gole, lam_g)
-                        p_r = licz_p(typ_rogi, linia_rogi, lam_r)
-                        p_k = licz_p(typ_kartki, linia_kartki, lam_k)
+
+                        p_g = oblicz_prob_poisson(typ_gole, linia_gole, lam_g)
+                        p_r = oblicz_prob_poisson(typ_rogi, linia_rogi, lam_r)
+                        p_k = oblicz_prob_poisson(typ_kartki, linia_kartki, lam_k)
                         p_combo = p_g * p_r * p_k
+
                         if p_combo >= min_prob:
+                            combo_count += 1
                             with st.expander(f"{h} vs {a} ({p_combo:.1%})"):
-                                st.write(f"{koloruj(p_g)} Gole: {p_g:.1%}")
-                                st.write(f"{koloruj(p_r)} Rożne: {p_r:.1%}")
-                                st.write(f"{koloruj(p_k)} Kartki: {p_k:.1%}")
-           
+                                st.write(f"{koloruj(p_g)} Gole {typ_gole} {linia_gole}: {p_g:.1%}")
+                                st.write(f"{koloruj(p_r)} Rożne {typ_rogi} {linia_rogi}: {p_r:.1%}")
+                                st.write(f"{koloruj(p_k)} Kartki {typ_kartki} {linia_kartki}: {p_k:.1%}")
+                
+                if combo_count == 0:
+                    st.info("Brak meczów spełniających kryteria. Zmniejsz próg.")
+            
             with col_pred2:
                 st.write("**BTTS Ranking**")
+                btts_data = []
                 for _, mecz in mecze.iterrows():
                     h = NAZWY_MAP.get(mecz['home_team'], mecz['home_team'])
                     a = NAZWY_MAP.get(mecz['away_team'], mecz['away_team'])
@@ -181,24 +438,50 @@ if not historical.empty:
                         lam_h = (srednie_df.loc[h, "Gole strzelone (dom)"] + srednie_df.loc[a, "Gole stracone (wyjazd)"]) / 2
                         lam_a = (srednie_df.loc[a, "Gole strzelone (wyjazd)"] + srednie_df.loc[h, "Gole stracone (dom)"]) / 2
                         p_btts = (1 - poisson.pmf(0, lam_h)) * (1 - poisson.pmf(0, lam_a))
-                        st.write(f"{koloruj(p_btts)} **{h} - {a}**: {p_btts:.1%}")
+                        btts_data.append({
+                            "Mecz": f"{h} - {a}",
+                            "BTTS": f"{p_btts:.1%}",
+                            "Kolor": koloruj(p_btts)
+                        })
+                
+                if btts_data:
+                    for item in sorted(btts_data, key=lambda x: float(x["BTTS"].strip('%')), reverse=True):
+                        st.write(f"{item['Kolor']} **{item['Mecz']}**: {item['BTTS']}")
         else:
-            st.warning("Załaduj plik 'terminarz_premier_2025.csv', aby zobaczyć predykcje.")
-    with tab2:
-        st.subheader("📊 Aktualna Sytuacja")
-        c_l, c_f = st.columns([2, 1])
-        with c_l:
-            st.write("Tabela Ligowa")
-            st.dataframe(tabela, use_container_width=True)
-        with c_f:
-            st.write("Forma (5 ostatnich)")
-            forma_df = pd.DataFrame.from_dict(forma_dict, orient="index", columns=["Forma"])
-            st.dataframe(forma_df, use_container_width=True)
-    with tab3:
-        st.subheader("📊 Średnie ważone drużyn")
-        st.write("Dane uwzględniają atut własnego boiska oraz wagę ostatnich meczów.")
-        st.dataframe(srednie_df.sort_index(), use_container_width=True)
-       
-        if st.button("🔄 Wymuś odświeżenie danych"):
-            st.cache_data.clear()
-            st.rerun()
+            st.warning("Brak nadchodzących meczów w terminarzu.")
+    else:
+        st.warning("Brak danych terminarza. Załaduj plik CSV, aby zobaczyć predykcje.")
+
+with tab2:
+    st.subheader("📊 Aktualna Sytuacja")
+    c_l, c_f = st.columns([2, 1])
+    with c_l:
+        st.write("**Tabela Ligowa**")
+        st.dataframe(tabela, use_container_width=True)
+    with c_f:
+        st.write("**Forma (5 ostatnich)**")
+        forma_df = pd.DataFrame.from_dict(forma_dict, orient="index", columns=["Forma"])
+        st.dataframe(forma_df, use_container_width=True)
+
+with tab3:
+    st.subheader("📊 Średnie ważone drużyn")
+    st.write("Dane uwzględniają atut własnego boiska oraz wagę ostatnich meczów (ostatnie 10 meczów).")
+    st.dataframe(srednie_df.sort_index(), use_container_width=True)
+    
+    # Dodaj informacje o źródle danych
+    st.divider()
+    
+    col_info1, col_info2, col_info3 = st.columns(3)
+    with col_info1:
+        st.metric("📊 Liczba meczów w bazie", len(historical))
+    with col_info2:
+        st.metric("🔄 Ostatnia aktualizacja", historical['Date'].max().strftime('%d.%m.%Y') if not historical.empty else '—')
+    with col_info3:
+        st.metric("📋 Drużyn w lidze", len(srednie_df))
+    
+    st.caption(f"Źródło danych historycznych: football-data.co.uk")
+    st.caption(f"Źródło terminarza: plik {league_config['schedule_file']}")
+    
+    if st.button("🔄 Wymuś odświeżenie danych"):
+        st.cache_data.clear()
+        st.rerun()
