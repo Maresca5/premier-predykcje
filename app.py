@@ -128,7 +128,7 @@ NAZWY_MAP = {
     # ===== BUNDESLIGA =====
     "Bayern Munich": "Bayern Munich",
     "Bayern": "Bayern Munich",
-    "Bayern München": "Bayern Munich",
+    "FC Bayern München": "Bayern Munich",
     "Borussia Dortmund": "Dortmund",
     "Dortmund": "Dortmund",
     "RB Leipzig": "RB Leipzig",
