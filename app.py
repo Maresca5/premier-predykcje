@@ -871,12 +871,18 @@ if not historical.empty:
                     # Karta w odpowiedniej kolumnie
                     kolumna = kol_a if idx % 2 == 0 else kol_b
 
+                    # Etykieta expandera – tylko plaintext (HTML tu nie działa)
+                    ikony_typ = {"1": "🔵", "X": "🟠", "2": "🔴", "1X": "🟣", "X2": "🟣"}
+                    ikona_typ = ikony_typ.get(pred["typ"], "⚪")
+                    conf_ikona = "🟢" if pred["conf_level"] == "High" else ("🟡" if pred["conf_level"] == "Medium" else "🔴")
+                    label_exp = (
+                        f"{conf_ikona} {h} vs {a}"
+                        f"  ·  {ikona_typ} {pred['typ']} @ {pred['fo_typ']:.2f}"
+                        f"  ·  {data_meczu}"
+                    )
+
                     with kolumna:
-                        with st.expander(
-                            f"{'🟢' if pred['conf_level']=='High' else '🟡' if pred['conf_level']=='Medium' else '🔴'} "
-                            f"**{h}** vs **{a}**  ·  {badge_typ(pred['typ'])} @ {pred['fo_typ']:.2f}  ·  {data_meczu}",
-                            expanded=True
-                        ):
+                        with st.expander(label_exp, expanded=True):
                             # Nagłówek drużyny
                             ch, cmid, ca = st.columns([5, 2, 5])
                             with ch:
