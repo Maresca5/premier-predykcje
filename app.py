@@ -154,10 +154,13 @@ def map_nazwa(nazwa: str) -> str:
     return nazwa
 
 # ===========================================================================
-# BAZA DANYCH
+# BAZA DANYCH (poprawiona inicjalizacja)
 # ===========================================================================
 def init_db():
+    """Inicjalizuje bazę danych – bezpieczne tworzenie tabel"""
     con = sqlite3.connect(DB_FILE)
+    
+    # Tabela predykcje
     con.execute("""
         CREATE TABLE IF NOT EXISTS predykcje (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,6 +177,8 @@ def init_db():
             UNIQUE(liga, home, away, round)
         )
     """)
+    
+    # Tabela kupony – z pełną strukturą
     con.execute("""
         CREATE TABLE IF NOT EXISTS kupony (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,6 +191,7 @@ def init_db():
             data           TEXT
         )
     """)
+    
     con.commit()
     con.close()
 
@@ -474,13 +480,13 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
     return sorted(zdarzenia, key=lambda x: -x[2])
 
 # ===========================================================================
-# SZYBKI GENERATOR KUPONU (OPTYMALIZACJA)
+# SZYBKI GENERATOR KUPONU (optymalizacja wyszukiwania)
 # ===========================================================================
 def generuj_kupon_szybki(mecze_data: list, target_ako: float = 5.0,
                          max_nog: int = 5, min_nog: int = 3) -> dict | None:
     """
-    Szybki generator kuponu – używa algorytmu zachłannego + local search.
-    Złożoność O(n log n) – działa poniżej 1 sekundy.
+    Szybki generator kuponu – stara się trafić jak najbliżej target_ako.
+    Zwraca też informację dlaczego nie udało się trafić idealnie.
     """
     if len(mecze_data) < min_nog:
         return None
@@ -489,6 +495,9 @@ def generuj_kupon_szybki(mecze_data: list, target_ako: float = 5.0,
     kandydaci = [z for z in mecze_data 
                  if 1.25 <= z["fair"] <= 2.50 and z["p"] >= 0.55]
     
+    if len(kandydaci) < min_nog:
+        return None
+    
     # 2. Grupuj po meczach i bierz najlepsze 2 z każdego
     mecze_grupy = {}
     for z in kandydaci:
@@ -496,7 +505,6 @@ def generuj_kupon_szybki(mecze_data: list, target_ako: float = 5.0,
             mecze_grupy[z["mecz"]] = []
         mecze_grupy[z["mecz"]].append(z)
     
-    # Dla każdego meczu bierzemy max 2 najlepsze zdarzenia (wg p)
     ograniczeni = []
     for m, zd in mecze_grupy.items():
         najlepsze = sorted(zd, key=lambda x: -x["p"])[:2]
@@ -505,82 +513,40 @@ def generuj_kupon_szybki(mecze_data: list, target_ako: float = 5.0,
     if len(ograniczeni) < min_nog:
         return None
     
-    # 3. Sortuj według fair odds (od najniższych)
-    ograniczeni.sort(key=lambda x: x["fair"])
-    
-    # 4. Algorytm zachłanny
+    # 3. Przeszukiwanie – najpierw próbuj różne długości
     najlepszy_kupon = None
     najlepsza_roznica = float('inf')
+    najlepsze_ako = None
     
     for n in range(min_nog, min(max_nog + 1, len(ograniczeni) + 1)):
-        # Weź n najpewniejszych
+        # Weź n najpewniejszych jako bazę
         najpewniejsze = sorted(ograniczeni, key=lambda x: -x["p"])[:n*3]
         
-        # Sprawdź kombinacje
-        for i in range(len(najpewniejsze) - n + 1):
-            for j in range(i + n, len(najpewniejsze) + 1):
-                if j - i != n:
-                    continue
-                kandydat = najpewniejsze[i:j]
-                
-                # Sprawdź limit 2 na mecz
-                licznik = {}
-                ok = True
-                for z in kandydat:
-                    licznik[z["mecz"]] = licznik.get(z["mecz"], 0) + 1
-                    if licznik[z["mecz"]] > 2:
-                        ok = False
-                        break
-                if not ok:
-                    continue
-                
-                ako = float(np.prod([z["fair"] for z in kandydat]))
-                p_combo = float(np.prod([z["p"] for z in kandydat]))
-                roznica = abs(ako - target_ako)
-                
-                if roznica < najlepsza_roznica:
-                    najlepsza_roznica = roznica
-                    najlepszy_kupon = {
-                        "zdarzenia": kandydat,
-                        "ako": round(ako, 2),
-                        "p_combo": round(p_combo, 3)
-                    }
-    
-    # 5. Local search
-    if najlepszy_kupon and len(ograniczeni) > len(najlepszy_kupon["zdarzenia"]):
-        obecny = najlepszy_kupon["zdarzenia"]
-        obecne_mecze = {z["mecz"] for z in obecny}
-        
-        for i, z in enumerate(obecny):
-            for pot in ograniczeni:
-                if pot in obecny:
-                    continue
-                if pot["mecz"] in obecne_mecze and pot["mecz"] != z["mecz"]:
-                    continue
-                    
-                nowy = obecny.copy()
-                nowy[i] = pot
-                
-                licznik = {}
-                ok = True
-                for zz in nowy:
-                    licznik[zz["mecz"]] = licznik.get(zz["mecz"], 0) + 1
-                    if licznik[zz["mecz"]] > 2:
-                        ok = False
-                        break
-                if not ok:
-                    continue
-                
-                ako = float(np.prod([zz["fair"] for zz in nowy]))
-                roznica = abs(ako - target_ako)
-                
-                if roznica < najlepsza_roznica:
-                    najlepsza_roznica = roznica
-                    najlepszy_kupon = {
-                        "zdarzenia": nowy,
-                        "ako": round(ako, 2),
-                        "p_combo": round(np.prod([zz["p"] for zz in nowy]), 3)
-                    }
+        from itertools import combinations
+        for combo in combinations(najpewniejsze, n):
+            # Sprawdź limit 2 na mecz
+            licznik = {}
+            ok = True
+            for z in combo:
+                licznik[z["mecz"]] = licznik.get(z["mecz"], 0) + 1
+                if licznik[z["mecz"]] > 2:
+                    ok = False
+                    break
+            if not ok:
+                continue
+            
+            ako = float(np.prod([z["fair"] for z in combo]))
+            roznica = abs(ako - target_ako)
+            
+            if roznica < najlepsza_roznica:
+                najlepsza_roznica = roznica
+                najlepszy_kupon = {
+                    "zdarzenia": list(combo),
+                    "ako": round(ako, 2),
+                    "p_combo": round(float(np.prod([z["p"] for z in combo])), 3),
+                    "roznica_do_celu": round(roznica, 2)
+                }
+                najlepsze_ako = ako
     
     return najlepszy_kupon
 
@@ -603,17 +569,36 @@ def zapisz_kupon_db(kupon: dict, liga: str, kolejnosc: int, typ_kuponu: str = "A
         con.close()
 
 def wczytaj_kupony(liga: str) -> list:
-    init_db()
-    con = sqlite3.connect(DB_FILE)
-    rows = con.execute(
-        "SELECT id,kolejnosc,typ_kuponu,zdarzenia_json,ako,p_combo,data "
-        "FROM kupony WHERE liga=? ORDER BY kolejnosc DESC, id DESC",
-        (liga,)
-    ).fetchall()
-    con.close()
-    return [{"id": r[0], "kolejnosc": r[1], "typ_kuponu": r[2],
-             "zdarzenia": json.loads(r[3]), "ako": r[4],
-             "p_combo": r[5], "data": r[6]} for r in rows]
+    """Bezpieczne wczytywanie kuponów z bazy"""
+    init_db()  # Upewnij się że tabela istnieje
+    try:
+        con = sqlite3.connect(DB_FILE)
+        rows = con.execute(
+            "SELECT id, kolejnosc, typ_kuponu, zdarzenia_json, ako, p_combo, data "
+            "FROM kupony WHERE liga=? ORDER BY kolejnosc DESC, id DESC",
+            (liga,)
+        ).fetchall()
+        con.close()
+        
+        result = []
+        for r in rows:
+            try:
+                zdarzenia = json.loads(r[3]) if r[3] else []
+                result.append({
+                    "id": r[0],
+                    "kolejnosc": r[1],
+                    "typ_kuponu": r[2],
+                    "zdarzenia": zdarzenia,
+                    "ako": r[4],
+                    "p_combo": r[5],
+                    "data": r[6]
+                })
+            except:
+                continue  # Pomijaj uszkodzone wpisy
+        return result
+    except Exception as e:
+        st.warning(f"Problem z odczytem kuponów: {e}")
+        return []
 
 def weryfikuj_kupon(kupon: dict, hist: pd.DataFrame) -> str:
     if "_sezon" in hist.columns:
@@ -1191,11 +1176,11 @@ if not historical.empty:
         st.subheader("🎲 Kupon kolejki – AKO ~5.0")
         st.caption(
             "Model wybiera optymalny zestaw 3–5 zdarzeń z całej kolejki. "
-            "⚠️ Kursy to **fair odds** (bez marży)."
+            "⚠️ Kursy to **fair odds** (bez marży). Suwak pozwala wybrać docelowe AKO."
         )
 
         target_slider = st.slider("Docelowe AKO", 3.0, 10.0, 5.0, 0.5,
-                                  help="Możesz zmienić cel – np. 3.0 to bezpieczniejszy 3-pak.")
+                                  help="Im wyższe AKO, tym więcej ryzyka. System szuka kombinacji najbliższej tej wartości.")
 
         if not schedule.empty and not srednie_df.empty:
             dzisiaj = datetime.now().date()
@@ -1216,7 +1201,8 @@ if not historical.empty:
                         pred = predykcja_meczu(lam_h, lam_a, rho=rho)
                         mecz_str = f"{h} – {a}"
 
-                        if pred["p_typ"] >= 0.62:
+                        # Typ główny – tylko pewne
+                        if pred["p_typ"] >= 0.60:
                             wszystkie_zd.append({
                                 "mecz": mecz_str,
                                 "typ": pred["typ"],
@@ -1226,6 +1212,7 @@ if not historical.empty:
                                 "emoji": "🏟️"
                             })
 
+                        # Alternatywne – max 3 najlepsze na mecz
                         alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.58)
                         for emoji, nazwa, p, fo, kat in alt[:3]:
                             wszystkie_zd.append({
@@ -1240,7 +1227,14 @@ if not historical.empty:
                     kupon = generuj_kupon_szybki(wszystkie_zd, target_ako=target_slider)
 
                 if kupon:
-                    ako_color = "#4CAF50" if abs(kupon["ako"] - target_slider) < 0.5 else "#FF9800"
+                    # Kolor w zależności od odległości od celu
+                    if kupon.get("roznica_do_celu", 1.0) < 0.5:
+                        ako_color = "#4CAF50"  # Zielony – blisko celu
+                    elif kupon.get("roznica_do_celu", 1.0) < 1.0:
+                        ako_color = "#FF9800"  # Pomarańczowy – średnio
+                    else:
+                        ako_color = "#F44336"  # Czerwony – daleko
+                    
                     st.markdown(
                         f"<div style='background:#1a1a2e;border:1px solid #333;border-radius:10px;"
                         f"padding:16px;margin-bottom:12px'>"
@@ -1251,11 +1245,13 @@ if not historical.empty:
                         f"<div style='color:#888;font-size:0.85em;margin-top:4px'>"
                         f"Łączne p_combo: <b style='color:#aaa'>{kupon['p_combo']:.1%}</b> &nbsp;|&nbsp; "
                         f"{len(kupon['zdarzenia'])} nogi &nbsp;|&nbsp; "
-                        f"wybrano z {len(wszystkie_zd)} kandydatów</div>"
+                        f"różnica od celu: <b>{kupon.get('roznica_do_celu', 0):.2f}</b> &nbsp;|&nbsp; "
+                        f"przeszukano {len(wszystkie_zd)} kandydatów</div>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
 
+                    # Wyświetlanie kuponu
                     cat_colors = {"1X2":"#2196F3","Gole":"#4CAF50","BTTS":"#9C27B0",
                                   "Rożne":"#FF9800","Kartki":"#F44336"}
                     nogi_html = []
@@ -1300,35 +1296,44 @@ if not historical.empty:
                         st.download_button("⬇️ CSV", data=kupon_csv,
                                            file_name=f"kupon_kolejka{int(nb)}.csv", mime="text/csv")
                 else:
-                    st.warning("Nie udało się wygenerować kuponu – za mało zdarzeń spełniających kryteria.")
+                    st.warning("Nie udało się wygenerować kuponu – za mało zdarzeń spełniających kryteria. "
+                              "Spróbuj niższe AKO lub poczekaj na więcej meczów w kolejce.")
 
-                st.divider()
-                st.markdown("### 📋 Historia kuponów")
-                kupony_hist = wczytaj_kupony(wybrana_liga)
-                if kupony_hist:
-                    for k in kupony_hist:
-                        status_k = weryfikuj_kupon(k, historical)
-                        bg_k = {"✅ Trafiony":"#1a2e1a","❌ Chybiony":"#2e1a1a"}.get(status_k, "transparent")
+            # Historia kuponów (z obsługą błędów)
+            st.divider()
+            st.markdown("### 📋 Historia kuponów")
+            kupony_hist = wczytaj_kupony(wybrana_liga)
+            
+            if kupony_hist:
+                cat_colors = {"1X2":"#2196F3","Gole":"#4CAF50","BTTS":"#9C27B0",
+                              "Rożne":"#FF9800","Kartki":"#F44336"}
+                for k in kupony_hist:
+                    try:
+                        status_k = weryfikuj_kupon(k, historical) if k.get("zdarzenia") else "⏳ Oczekuje"
+                        bg_k = {"✅ Trafiony":"#1a2e1a", "❌ Chybiony":"#2e1a1a"}.get(status_k, "transparent")
+                        
                         with st.expander(
                             f"{status_k}  ·  Kolejka {k['kolejnosc']}  "
-                            f"·  AKO {k['ako']:.2f}  ·  {k['typ_kuponu']}  ·  {k['data']}",
+                            f"·  AKO {k['ako']:.2f}  ·  {k.get('typ_kuponu', 'Kupon')}  ·  {k['data']}",
                             expanded=False
                         ):
-                            for z in k["zdarzenia"]:
+                            for z in k.get("zdarzenia", []):
                                 cc = cat_colors.get(z.get("kategoria",""), "#888")
                                 st.markdown(
                                     f"<div style='background:{bg_k};padding:4px 8px;border-radius:4px;margin-bottom:3px'>"
                                     f"{z.get('emoji','⚽')} **{z['mecz']}** – "
                                     f"<span style='color:{cc}'>{z['typ']}</span> "
-                                    f"({z['p']:.0%} · fair {z['fair']:.2f})"
+                                    f"({z.get('p', 0):.0%} · fair {z.get('fair', 0):.2f})"
                                     f"</div>",
                                     unsafe_allow_html=True,
                                 )
-                            st.caption(f"p_combo: {k['p_combo']:.1%}")
-                else:
-                    st.info("Brak zapisanych kuponów dla tej ligi.")
+                            st.caption(f"p_combo: {k.get('p_combo', 0):.1%}")
+                    except Exception as e:
+                        st.error(f"Błąd wyświetlania kuponu: {e}")
             else:
-                st.info("Brak nadchodzących meczów w terminarzu.")
+                st.info("Brak zapisanych kuponów dla tej ligi. Zapisz pierwszy kupon powyżej!")
+        else:
+            st.info("Brak nadchodzących meczów w terminarzu.")
 
     # =========================================================================
     # TAB 4 – WERYFIKACJA PREDYKCJI
