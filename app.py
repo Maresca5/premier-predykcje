@@ -1312,7 +1312,7 @@ if not historical.empty:
                 st.info("Brak nadchodzących meczów w terminarzu.")
 
     # =========================================================================
-    # TAB 3 – KUPONY MODELOWE (NOWA STRUKTURA)
+    # TAB 3 – KUPONY MODELOWE
     # =========================================================================
     with tab3:
         st.subheader("🎲 Rekomendacje modelowe")
@@ -1411,33 +1411,66 @@ if not historical.empty:
                             ako_color = "#F44336"
                         
                         st.markdown(
-                            f"<div style='background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:12px;margin:8px 0'>"
-                            f"<div style='display:flex;justify-content:space-between'>"
-                            f"<span><b>AKO {kupon_ako['ako']:.2f}</b></span>"
-                            f"<span style='color:{ako_color}'>różnica: {kupon_ako.get('roznica_do_celu',0):.2f}</span>"
-                            f"</div>"
-                            f"<div style='font-size:0.9em;margin-top:8px'>",
-                            unsafe_allow_html=True
+                            f"<div style='background:#1a1a2e;border:1px solid #333;border-radius:10px;"
+                            f"padding:16px;margin-bottom:12px'>"
+                            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                            f"<div style='font-size:1.1em;font-weight:bold'>🎲 Kupon eksperymentalny</div>"
+                            f"<div style='font-size:2em;font-weight:bold;color:{ako_color}'>"
+                            f"AKO {kupon_ako['ako']:.2f}</div></div>"
+                            f"<div style='color:#888;font-size:0.85em;margin-top:4px'>"
+                            f"p_combo: <b style='color:#aaa'>{kupon_ako['p_combo']:.1%}</b> &nbsp;|&nbsp; "
+                            f"{len(kupon_ako['zdarzenia'])} nogi &nbsp;|&nbsp; "
+                            f"różnica od celu: <b>{kupon_ako.get('roznica_do_celu', 0):.2f}</b></div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
                         )
                         
-                        for z in kupon_ako["zdarzenia"][:3]:
-                            st.markdown(f"• {z['emoji']} {z['mecz']} – {z['typ']} ({z['p']:.0%})")
+                        cat_colors = {"1X2":"#2196F3","Gole":"#4CAF50","BTTS":"#9C27B0",
+                                      "Rożne":"#FF9800","Kartki":"#F44336"}
                         
-                        if len(kupon_ako["zdarzenia"]) > 3:
-                            st.caption(f"... i {len(kupon_ako['zdarzenia'])-3} więcej")
+                        nogi_html = []
+                        for i, z in enumerate(kupon_ako["zdarzenia"], 1):
+                            cc = cat_colors.get(z.get("kategoria",""), "#888")
+                            nogi_html.append(
+                                f"<tr>"
+                                f"<td style='padding:8px 12px;color:#888;width:40px'>{i}</td>"
+                                f"<td style='padding:8px 12px'>{z.get('emoji','⚽')} <b>{z['mecz']}</b></td>"
+                                f"<td style='padding:8px 12px'>"
+                                f"  <span style='background:{cc}22;color:{cc};padding:4px 10px;"
+                                f"border-radius:12px;font-size:0.9em'>{z['typ']}</span>"
+                                f"</td>"
+                                f"<td style='padding:8px 12px;text-align:right;color:#aaa'>{z['p']:.0%}</td>"
+                                f"<td style='padding:8px 12px;text-align:right;font-weight:bold;color:#4CAF50'>"
+                                f"{z['fair']:.2f}</td>"
+                                f"</tr>"
+                            )
                         
-                        st.markdown("</div>", unsafe_allow_html=True)
+                        st.markdown(
+                            f"<div style='border:1px solid #333;border-radius:8px;overflow:hidden;margin-bottom:16px'>"
+                            f"<table style='width:100%;border-collapse:collapse;font-size:0.95em'>"
+                            f"<thead><tr style='background:#1e1e2e;color:#888;font-size:0.85em;text-transform:uppercase'>"
+                            f"<th style='padding:10px 12px'>#</th>"
+                            f"<th style='padding:10px 12px;text-align:left'>Mecz</th>"
+                            f"<th style='padding:10px 12px;text-align:left'>Zdarzenie</th>"
+                            f"<th style='padding:10px 12px;text-align:right'>P</th>"
+                            f"<th style='padding:10px 12px;text-align:right'>Fair Odds</th>"
+                            f"</tr></thead>"
+                            f"<tbody>{''.join(nogi_html)}</tbody>"
+                            f"</table></div>",
+                            unsafe_allow_html=True,
+                        )
                         
                         col_save, col_csv = st.columns(2)
                         with col_save:
-                            if st.button("💾 Zapisz eksperymentalny", key="save_ako_coupon"):
+                            if st.button("💾 Zapisz eksperymentalny", key="save_ako_coupon", use_container_width=True):
                                 zapisz_kupon_db(kupon_ako, wybrana_liga, int(nb),
                                               typ_kuponu=f"AKO ~{target_slider:.1f}")
                                 st.success("✅ Zapisano")
                         with col_csv:
                             kupon_csv = pd.DataFrame(kupon_ako["zdarzenia"]).to_csv(index=False, decimal=",")
-                            st.download_button("⬇️ CSV", data=kupon_csv,
-                                             file_name=f"kupon_ako_{int(nb)}.csv", mime="text/csv")
+                            st.download_button("⬇️ Pobierz CSV", data=kupon_csv,
+                                             file_name=f"kupon_ako_{int(nb)}.csv", mime="text/csv",
+                                             use_container_width=True)
                     else:
                         st.info("Brak kombinacji spełniających kryteria")
 
