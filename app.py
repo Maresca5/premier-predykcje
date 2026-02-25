@@ -402,6 +402,30 @@ def wybierz_wynik(M: np.ndarray, lam_h: float, lam_a: float) -> tuple:
     return int(idx_max[0]), int(idx_max[1]), p_max
 
 
+def entropy_meczu(p_home: float, p_draw: float, p_away: float) -> float:
+    """
+    Entropia Shannona rozkładu 1X2 (w bitach).
+    Maks = log2(3) ≈ 1.585 bitów (rozkład 33/33/33 – totalny chaos).
+    Min → 0 bitów (pewność 100%).
+    Intuicja: każdy bit powyżej 1.2 to wyraźnie nieprzewidywalny mecz.
+    """
+    ps = [p for p in [p_home, p_draw, p_away] if p > 0]
+    return float(-sum(p * np.log2(p) for p in ps))
+
+
+def chaos_label(entropy: float) -> tuple:
+    """Etykieta czytelna dla użytkownika + emoji + pasek."""
+    pct = entropy / np.log2(3)   # normalizacja do [0,1]
+    if pct < 0.55:
+        return "Pewny",    "🔒", pct
+    elif pct < 0.75:
+        return "Klarowny", "🎯", pct
+    elif pct < 0.90:
+        return "Otwarty",  "⚡", pct
+    else:
+        return "Chaos",    "🌀", pct
+
+
 def confidence_score(p_home: float, p_draw: float, p_away: float) -> tuple:
     vals  = sorted([p_home, p_draw, p_away], reverse=True)
     spread = vals[0] - vals[2]
@@ -432,6 +456,8 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
 
     typ, p_typ = wybierz_typ(p_home, p_draw, p_away)
     conf_level, conf_emoji, conf_opis = confidence_score(p_home, p_draw, p_away)
+    ent   = entropy_meczu(p_home, p_draw, p_away)
+    ch_label, ch_emoji, ch_pct = chaos_label(ent)
 
     return {
         "lam_h": lam_h, "lam_a": lam_a,
@@ -440,6 +466,8 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
         "fo_home": fo(p_home), "fo_draw": fo(p_draw), "fo_away": fo(p_away),
         "typ": typ, "p_typ": p_typ, "fo_typ": fo(p_typ),
         "conf_level": conf_level, "conf_emoji": conf_emoji, "conf_opis": conf_opis,
+        "entropy": ent, "chaos_label": ch_label, "chaos_emoji": ch_emoji,
+        "chaos_pct": ch_pct,
         "macierz": M,
     }
 
@@ -712,11 +740,12 @@ if not historical.empty:
                 )
 
     # ── TABS ─────────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🎯 Bet Builder",
         "⚽ Przewidywane Wyniki",
         "✅ Weryfikacja",
         "📊 Tabela i Forma",
+        "🏆 Power Rating",
         "📈 Model & Dane",
     ])
 
@@ -904,18 +933,31 @@ if not historical.empty:
                                 unsafe_allow_html=True,
                             )
 
-                            # Typ + confidence
+                            # Typ + confidence + chaos index
                             conf_colors = {"High": "#4CAF50", "Medium": "#FF9800", "Coinflip": "#F44336"}
                             conf_c = conf_colors.get(pred["conf_level"], "#888")
+                            chaos_colors = {"Pewny": "#4CAF50", "Klarowny": "#8BC34A",
+                                            "Otwarty": "#FF9800", "Chaos": "#F44336"}
+                            ch_c      = chaos_colors.get(pred["chaos_label"], "#888")
+                            bar_w     = int(pred["chaos_pct"] * 100)
+                            bar_color = ch_c
                             st.markdown(
                                 f"<div style='text-align:center;margin-bottom:4px'>"
                                 f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
                                 f"<span style='font-size:0.88em;color:#888'>"
                                 f"Fair Odds: <b>{pred['fo_typ']:.2f}</b> ({pred['p_typ']:.1%})"
                                 f"</span></div>"
-                                f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:8px'>"
+                                f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:6px'>"
                                 f"{pred['conf_emoji']} <b>{pred['conf_level']}</b> · {pred['conf_opis']}"
-                                f"</div>",
+                                f"</div>"
+                                f"<div style='margin:0 8px 8px 8px'>"
+                                f"<div style='display:flex;align-items:center;gap:8px;font-size:0.78em;color:#888'>"
+                                f"<span>{pred['chaos_emoji']} Chaos Index: <b style='color:{ch_c}'>{pred['chaos_label']}</b>"
+                                f" ({pred['entropy']:.2f} bits)</span>"
+                                f"</div>"
+                                f"<div style='background:#333;border-radius:4px;height:4px;margin-top:4px'>"
+                                f"<div style='background:{bar_color};width:{bar_w}%;height:4px;border-radius:4px;transition:width 0.3s'></div>"
+                                f"</div></div>",
                                 unsafe_allow_html=True,
                             )
 
@@ -1040,6 +1082,95 @@ if not historical.empty:
                         per_typ[["Mecze","Trafione","Hit %"]].sort_values("Hit %", ascending=False),
                         use_container_width=True, height=220,
                     )
+
+                # ── Reliability Curve (kalibracja) ───────────────────────
+                pred_z_prob = zakonczone[zakonczone["Brier"].notna()].copy()
+                if len(pred_z_prob) >= 15:
+                    st.markdown("**📐 Reliability Curve** *(kalibracja modelu – czy prawdopodobieństwa są trafne?)*")
+
+                    # Grupujemy predykcje po koszykach p_typ (pewność modelu)
+                    # i sprawdzamy jaki był rzeczywisty % trafień w każdym koszyku
+                    bins   = [0, 0.40, 0.50, 0.60, 0.70, 0.80, 1.01]
+                    labels_b = ["<40%","40-50%","50-60%","60-70%","70-80%",">80%"]
+                    # Odtwarzamy p_typ z Fair Odds (1/odds)
+                    pred_z_prob = pred_z_prob.copy()
+                    pred_z_prob["p_typ_est"] = pred_z_prob["Fair Odds"].apply(
+                        lambda o: 1/o if o > 0 else 0.5
+                    )
+                    pred_z_prob["koszyk"] = pd.cut(
+                        pred_z_prob["p_typ_est"], bins=bins, labels=labels_b, right=False
+                    )
+                    rel = (
+                        pred_z_prob.groupby("koszyk", observed=True)["Trafiony"]
+                        .agg(["mean","count"])
+                        .rename(columns={"mean":"Hit Rate","count":"N"})
+                        .reset_index()
+                    )
+                    rel = rel[rel["N"] >= 3]   # min 3 próby w koszyku
+
+                    if len(rel) >= 2:
+                        # Buduj wykres jako HTML – prosta, czytelna wizualizacja
+                        w_rc, h_rc = 500, 300
+                        pad_rc = 50
+                        pts = []
+                        for _, rrow in rel.iterrows():
+                            bin_mid = {
+                                "<40%": 0.35, "40-50%": 0.45, "50-60%": 0.55,
+                                "60-70%": 0.65, "70-80%": 0.75, ">80%": 0.85
+                            }.get(str(rrow["koszyk"]), 0.5)
+                            pts.append((bin_mid, rrow["Hit Rate"], rrow["N"]))
+
+                        def rc_px(xv, yv):
+                            px = pad_rc + (xv - 0.3) / 0.6 * (w_rc - 2*pad_rc)
+                            py = h_rc - pad_rc - yv * (h_rc - 2*pad_rc)
+                            return px, py
+
+                        diag = []
+                        for t in [0.3, 0.5, 0.7, 0.9]:
+                            diag.append(rc_px(t, t))
+
+                        diag_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag)
+                        circles_rc = []
+                        for xv, yv, n in pts:
+                            px, py = rc_px(xv, yv)
+                            r_size = min(max(int(n * 1.5), 5), 20)
+                            diff   = yv - xv
+                            col_rc = "#4CAF50" if abs(diff) < 0.05 else ("#FF9800" if abs(diff) < 0.12 else "#F44336")
+                            circles_rc.append(
+                                f"<circle cx='{px:.0f}' cy='{py:.0f}' r='{r_size}' "
+                                f"fill='{col_rc}' fill-opacity='0.8' stroke='white' stroke-width='1.5'>"
+                                f"<title>Model: {xv:.0%} | Rzeczywisty hit: {yv:.0%} | N={n}</title></circle>"
+                                f"<text x='{px+r_size+3:.0f}' y='{py+4:.0f}' "
+                                f"font-size='9' fill='#aaa' font-family='sans-serif'>"
+                                f"{yv:.0%} (n={n})</text>"
+                            )
+
+                        svg_rc = f"""
+                        <svg width="{w_rc}" height="{h_rc}"
+                             style="background:#0e1117;border-radius:8px;display:block;margin:auto">
+                          <polyline points="{diag_line}" fill="none" stroke="#444"
+                                    stroke-width="1.5" stroke-dasharray="6,4"/>
+                          <text x="{w_rc-pad_rc+4}" y="{pad_rc-4}" font-size="9"
+                                fill="#555" font-family="sans-serif">idealny model</text>
+                          {"".join(circles_rc)}
+                          <text x="{w_rc//2}" y="{h_rc-6}" text-anchor="middle"
+                                font-size="10" fill="#888" font-family="sans-serif">
+                            Pewność modelu (p_typ) →</text>
+                          <text x="12" y="{h_rc//2}" text-anchor="middle"
+                                font-size="10" fill="#888" font-family="sans-serif"
+                                transform="rotate(-90,12,{h_rc//2})">Rzeczywisty Hit Rate →</text>
+                        </svg>
+                        """
+                        st.markdown(svg_rc, unsafe_allow_html=True)
+                        st.caption(
+                            "Punkty na przekątnej = model idealnie skalibrowany. "
+                            "Powyżej = model za ostrożny (niedoszacowuje pewność). "
+                            "Poniżej = model za pewny siebie (przeszacowuje)."
+                        )
+                    else:
+                        st.caption("Za mało danych w koszykach – potrzeba min. 3 predykcje na przedział.")
+                elif 5 <= len(pred_z_prob) < 15:
+                    st.info(f"📐 Reliability curve dostępna po min. 15 predykcjach z wynikami. Masz {len(pred_z_prob)}.")
 
                 # Skuteczność per liga – tylko jeśli więcej niż jedna
                 per_liga = (
@@ -1169,9 +1300,173 @@ if not historical.empty:
             )
 
     # =========================================================================
-    # TAB 5 – MODEL & DANE
+    # TAB 5 – POWER RATING
     # =========================================================================
     with tab5:
+        st.subheader("🏆 Power Rating drużyn")
+        st.caption(
+            "Siła ataku i obrony normalizowana do średniej ligowej (=1.0). "
+            "Wielkość bąbelka = łączna siła ataku+obrony. Kolor = forma ostatnich 5 meczów."
+        )
+
+        if not srednie_df.empty:
+            avg_h = srednie_lig["avg_home"]
+            avg_a = srednie_lig["avg_away"]
+
+            power_rows = []
+            for team in srednie_df.index:
+                row = srednie_df.loc[team]
+                # Siła ataku = średnia z dom i wyjazd, znormalizowana
+                atak  = ((row["Gole strzelone (dom)"] / avg_h) +
+                          (row["Gole strzelone (wyjazd)"] / avg_a)) / 2
+                # Siła obrony = im mniej straconych tym lepiej → odwracamy
+                obrona = 2 - ((row["Gole stracone (dom)"] / avg_h) +
+                               (row["Gole stracone (wyjazd)"] / avg_a)) / 2
+                forma  = forma_dict.get(team, "")
+                wins   = forma.count("W")
+                losses = forma.count("L")
+                forma_score = wins - losses  # -5 do +5
+                power_rows.append({
+                    "Drużyna":      team,
+                    "Atak":         round(atak, 3),
+                    "Obrona":       round(obrona, 3),
+                    "Forma score":  forma_score,
+                    "Forma":        forma if forma else "?",
+                    "Power":        round((atak + obrona) / 2, 3),
+                })
+
+            df_power = pd.DataFrame(power_rows).sort_values("Power", ascending=False).reset_index(drop=True)
+
+            # ── Scatter plot: Atak (X) vs Obrona (Y) ─────────────────────────
+            # Budujemy jako HTML canvas z SVG – czyste, bez dodatkowych bibliotek
+            x_vals = df_power["Atak"].tolist()
+            y_vals = df_power["Obrona"].tolist()
+            names  = df_power["Drużyna"].tolist()
+            forma_s = df_power["Forma score"].tolist()
+
+            x_min, x_max = min(x_vals) - 0.1, max(x_vals) + 0.1
+            y_min, y_max = min(y_vals) - 0.1, max(y_vals) + 0.1
+
+            W, H   = 700, 480
+            pad    = 60
+
+            def to_px(xv, yv):
+                px = pad + (xv - x_min) / (x_max - x_min) * (W - 2*pad)
+                py = H - pad - (yv - y_min) / (y_max - y_min) * (H - 2*pad)
+                return px, py
+
+            # Kolory wg formy: czerwony=słaba, szary=neutralna, zielony=dobra
+            def forma_color(fs):
+                if fs >= 2:   return "#4CAF50"
+                elif fs <= -2: return "#F44336"
+                else:          return "#FF9800"
+
+            circles = []
+            labels  = []
+            for i, (name, xv, yv, fs) in enumerate(zip(names, x_vals, y_vals, forma_s)):
+                px, py = to_px(xv, yv)
+                col    = forma_color(fs)
+                circles.append(
+                    f"<circle cx='{px:.1f}' cy='{py:.1f}' r='7' "
+                    f"fill='{col}' fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
+                    f"<title>{name}\nAtak: {xv:.2f} | Obrona: {yv:.2f} | Forma: {df_power.loc[i,'Forma']}</title>"
+                    f"</circle>"
+                )
+                # Etykieta – tylko skrót nazwy, odsunięta od punktu
+                short = name[:8]
+                labels.append(
+                    f"<text x='{px+9:.1f}' y='{py+4:.1f}' "
+                    f"font-size='9' fill='#ccc' font-family='sans-serif'>{short}</text>"
+                )
+
+            # Linie środka (benchmark = 1.0)
+            cx, _ = to_px(1.0, y_min)
+            _, cy = to_px(x_min, 1.0)
+
+            svg = f"""
+            <svg width="{W}" height="{H}" style="background:#0e1117;border-radius:8px;display:block;margin:auto">
+              <!-- osie -->
+              <line x1="{pad}" y1="{H-pad}" x2="{W-pad}" y2="{H-pad}" stroke="#444" stroke-width="1"/>
+              <line x1="{pad}" y1="{pad}"   x2="{pad}"   y2="{H-pad}" stroke="#444" stroke-width="1"/>
+              <!-- linie benchmarku (avg liga = 1.0) -->
+              <line x1="{cx:.1f}" y1="{pad}" x2="{cx:.1f}" y2="{H-pad}"
+                    stroke="#555" stroke-width="1" stroke-dasharray="4,4"/>
+              <line x1="{pad}" y1="{cy:.1f}" x2="{W-pad}" y2="{cy:.1f}"
+                    stroke="#555" stroke-width="1" stroke-dasharray="4,4"/>
+              <!-- etykiety ćwiartek -->
+              <text x="{cx+6:.1f}" y="{cy-8:.1f}" font-size="9" fill="#555" font-family="sans-serif">silny atak + silna obrona</text>
+              <!-- opisy osi -->
+              <text x="{W//2}" y="{H-8}" text-anchor="middle" font-size="11" fill="#888" font-family="sans-serif">Siła ataku →</text>
+              <text x="12" y="{H//2}" text-anchor="middle" font-size="11" fill="#888"
+                    font-family="sans-serif" transform="rotate(-90,12,{H//2})">Siła obrony →</text>
+              {"".join(circles)}
+              {"".join(labels)}
+              <!-- legenda -->
+              <circle cx="{W-120}" cy="20" r="6" fill="#4CAF50" stroke="white" stroke-width="1"/>
+              <text x="{W-110}" y="25" font-size="9" fill="#aaa" font-family="sans-serif">Dobra forma (≥2W)</text>
+              <circle cx="{W-120}" cy="38" r="6" fill="#FF9800" stroke="white" stroke-width="1"/>
+              <text x="{W-110}" y="43" font-size="9" fill="#aaa" font-family="sans-serif">Neutralna</text>
+              <circle cx="{W-120}" cy="56" r="6" fill="#F44336" stroke="white" stroke-width="1"/>
+              <text x="{W-110}" y="61" font-size="9" fill="#aaa" font-family="sans-serif">Słaba forma (≥2L)</text>
+            </svg>
+            """
+            st.markdown(svg, unsafe_allow_html=True)
+            st.caption("Hover nad punktem = pełna nazwa i statystyki. Przerywane linie = średnia ligi (1.0).")
+
+            # ── Tabela rankingowa ─────────────────────────────────────────────
+            st.divider()
+            st.markdown("**Ranking Power Rating** *(Atak + Obrona / 2, znormalizowane do średniej ligi)*")
+
+            df_display = df_power[["Drużyna","Power","Atak","Obrona","Forma"]].copy()
+            df_display.index = range(1, len(df_display) + 1)
+
+            # HTML tabela z paskami
+            max_power = df_display["Power"].max()
+            html_rows_pr = []
+            for rank, row in df_display.iterrows():
+                bar_w_pr = int(row["Power"] / max_power * 100)
+                power_col = "#4CAF50" if row["Power"] >= 1.0 else "#F44336"
+                html_rows_pr.append(
+                    f"<tr>"
+                    f"<td style='padding:5px 8px;color:#888;width:30px'>{rank}</td>"
+                    f"<td style='padding:5px 8px;font-weight:bold'>{row['Drużyna']}</td>"
+                    f"<td style='padding:5px 8px;width:160px'>"
+                    f"  <div style='display:flex;align-items:center;gap:6px'>"
+                    f"    <div style='flex:1;background:#333;border-radius:3px;height:6px'>"
+                    f"      <div style='background:{power_col};width:{bar_w_pr}%;height:6px;border-radius:3px'></div>"
+                    f"    </div>"
+                    f"    <span style='color:{power_col};font-weight:bold;font-size:0.85em;min-width:36px'>{row['Power']:.3f}</span>"
+                    f"  </div>"
+                    f"</td>"
+                    f"<td style='padding:5px 8px;text-align:center;color:#4CAF50'>{row['Atak']:.3f}</td>"
+                    f"<td style='padding:5px 8px;text-align:center;color:#2196F3'>{row['Obrona']:.3f}</td>"
+                    f"<td style='padding:5px 8px;font-family:monospace;letter-spacing:2px'>{row['Forma']}</td>"
+                    f"</tr>"
+                )
+            html_pr = f"""
+            <div style='overflow-x:auto;border-radius:8px;border:1px solid #333;margin-top:8px'>
+            <table style='width:100%;border-collapse:collapse;font-size:0.88em'>
+            <thead>
+              <tr style='background:#1e1e2e;color:#aaa;font-size:0.80em;text-transform:uppercase;letter-spacing:0.05em'>
+                <th style='padding:8px'>#</th>
+                <th style='padding:8px;text-align:left'>Drużyna</th>
+                <th style='padding:8px;text-align:left'>Power Rating</th>
+                <th style='padding:8px;text-align:center'>Atak</th>
+                <th style='padding:8px;text-align:center'>Obrona</th>
+                <th style='padding:8px;text-align:left'>Forma</th>
+              </tr>
+            </thead>
+            <tbody>{"".join(html_rows_pr)}</tbody>
+            </table></div>
+            """
+            st.markdown(html_pr, unsafe_allow_html=True)
+        else:
+            st.info("Brak danych do wygenerowania Power Rating.")
+
+    # =========================================================================
+    # TAB 6 – MODEL & DANE
+    # =========================================================================
+    with tab6:
         st.subheader("📈 Parametry modelu i dane")
 
         # Info o blend sezonów
