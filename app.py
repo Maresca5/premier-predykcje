@@ -27,7 +27,7 @@ DB_FILE    = "predykcje.db"
 def waga_poprzedniego(n_biezacy: int) -> float:
     return float(np.clip(0.8 - (n_biezacy / 30) * 0.6, 0.2, 0.8))
 
-st.set_page_config(page_title="Predykcje Piłkarskie Top 5", layout="wide")
+st.set_page_config(page_title="System Analityczny Piłkarski Top 5", layout="wide")
 
 # ===========================================================================
 # MAPOWANIA NAZW
@@ -153,13 +153,13 @@ def map_nazwa(nazwa: str) -> str:
     return nazwa
 
 # ===========================================================================
-# BAZA DANYCH – MIGRACJA SCHEMATU
+# BAZA DANYCH – NOWA STRUKTURA
 # ===========================================================================
 def init_db():
-    """Inicjalizuje bazę danych z migracją schematu"""
+    """Inicjalizuje bazę danych z nową strukturą analityczną"""
     con = sqlite3.connect(DB_FILE)
     
-    # Tabela predykcje
+    # Tabela predykcje (stara, dla kompatybilności)
     con.execute("""
         CREATE TABLE IF NOT EXISTS predykcje (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,74 +177,40 @@ def init_db():
         )
     """)
     
-    # Sprawdź czy tabela kupony istnieje
-    cursor = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='kupony'")
-    table_exists = cursor.fetchone() is not None
+    # NOWA TABELA: zdarzenia (każda noga osobno)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS zdarzenia (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            liga        TEXT,
+            kolejnosc   INTEGER,
+            mecz        TEXT,
+            home        TEXT,
+            away        TEXT,
+            rynek       TEXT,
+            linia       REAL,
+            typ         TEXT,
+            p_model     REAL,
+            fair_odds   REAL,
+            wynik       TEXT,
+            trafione    BOOLEAN,
+            data        TEXT,
+            UNIQUE(liga, kolejnosc, mecz, rynek, typ, linia)
+        )
+    """)
     
-    if not table_exists:
-        # Nowa tabela z pełnym schematem
-        con.execute("""
-            CREATE TABLE kupony (
-                id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                liga           TEXT,
-                kolejnosc      INTEGER,
-                typ_kuponu     TEXT,
-                zdarzenia_json TEXT,
-                ako            REAL,
-                p_combo        REAL,
-                data           TEXT
-            )
-        """)
-    else:
-        # Migracja – sprawdź czy kolumna zdarzenia_json istnieje
-        cursor = con.execute("PRAGMA table_info(kupony)")
-        columns = [col[1] for col in cursor.fetchall()]
-        
-        if 'zdarzenia_json' not in columns:
-            # Backup starej tabeli
-            con.execute("ALTER TABLE kupony RENAME TO kupony_old")
-            
-            # Utwórz nową tabelę
-            con.execute("""
-                CREATE TABLE kupony (
-                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                    liga           TEXT,
-                    kolejnosc      INTEGER,
-                    typ_kuponu     TEXT,
-                    zdarzenia_json TEXT,
-                    ako            REAL,
-                    p_combo        REAL,
-                    data           TEXT
-                )
-            """)
-            
-            # Skopiuj dane ze starej tabeli
-            try:
-                # Sprawdź jakie kolumny były w starej tabeli
-                cursor = con.execute("PRAGMA table_info(kupony_old)")
-                old_columns = [col[1] for col in cursor.fetchall()]
-                
-                if 'mecze_json' in old_columns:
-                    # Stara struktura z mecze_json
-                    con.execute("""
-                        INSERT INTO kupony (id, liga, kolejnosc, typ_kuponu, zdarzenia_json, ako, p_combo, data)
-                        SELECT id, liga, kolejnosc, typ_kuponu, mecze_json, ako, p_combo, data
-                        FROM kupony_old
-                    """)
-                elif 'zdarzenia' in old_columns:
-                    # Inna stara struktura
-                    con.execute("""
-                        INSERT INTO kupony (id, liga, kolejnosc, typ_kuponu, zdarzenia_json, ako, p_combo, data)
-                        SELECT id, liga, kolejnosc, typ_kuponu, zdarzenia, ako, p_combo, data
-                        FROM kupony_old
-                    """)
-                
-                # Usuń starą tabelę
-                con.execute("DROP TABLE kupony_old")
-            except Exception as e:
-                print(f"Błąd migracji: {e}")
-                # Jeśli się nie uda, zostaw starą tabelę
-                pass
+    # Tabela kupony (opcjonalna, dla historycznych danych)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS kupony (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            liga           TEXT,
+            kolejnosc      INTEGER,
+            typ_kuponu     TEXT,
+            zdarzenia_json TEXT,
+            ako            REAL,
+            p_combo        REAL,
+            data           TEXT
+        )
+    """)
     
     con.commit()
     con.close()
@@ -512,358 +478,191 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
         p_over = float(sum(M[i,j] for i in range(mg) for j in range(mg) if i+j > linia))
         p_under = 1 - p_over
         if p_over >= prog_min:
-            zdarzenia.append(("⚽", f"Over {linia} goli",  p_over,  fair_odds(p_over),  "Gole"))
+            zdarzenia.append(("⚽", f"Over {linia} goli",  p_over,  fair_odds(p_over),  "Gole", linia))
         if p_under >= prog_min:
-            zdarzenia.append(("⚽", f"Under {linia} goli", p_under, fair_odds(p_under), "Gole"))
+            zdarzenia.append(("⚽", f"Under {linia} goli", p_under, fair_odds(p_under), "Gole", linia))
 
     p_btts   = float(1 - M[0,:].sum() - M[:,0].sum() + M[0,0])
     p_nobtts = 1 - p_btts
-    if p_btts   >= prog_min: zdarzenia.append(("⚽", "BTTS – Tak",  p_btts,   fair_odds(p_btts),   "BTTS"))
-    if p_nobtts >= prog_min: zdarzenia.append(("⚽", "BTTS – Nie",  p_nobtts, fair_odds(p_nobtts), "BTTS"))
+    if p_btts   >= prog_min: zdarzenia.append(("⚽", "BTTS – Tak",  p_btts,   fair_odds(p_btts),   "BTTS", 0))
+    if p_nobtts >= prog_min: zdarzenia.append(("⚽", "BTTS – Nie",  p_nobtts, fair_odds(p_nobtts), "BTTS", 0))
 
     for linia in [7.5, 8.5, 9.5, 10.5]:
         p_over = float(1 - poisson.cdf(int(linia), lam_r))
         if p_over >= prog_min:
-            zdarzenia.append(("🚩", f"Over {linia} rożnych", p_over, fair_odds(p_over), "Rożne"))
+            zdarzenia.append(("🚩", f"Over {linia} rożnych", p_over, fair_odds(p_over), "Rożne", linia))
 
     for linia in [2.5, 3.5, 4.5]:
         p_over = float(1 - poisson.cdf(int(linia), lam_k))
         if p_over >= prog_min:
-            zdarzenia.append(("🟨", f"Over {linia} kartek", p_over, fair_odds(p_over), "Kartki"))
+            zdarzenia.append(("🟨", f"Over {linia} kartek", p_over, fair_odds(p_over), "Kartki", linia))
 
     return sorted(zdarzenia, key=lambda x: -x[2])
 
 # ===========================================================================
-# KUPON MODELOWY (oparty o edge, nie target AKO)
+# ZAPIS ZDARZEŃ DO BAZY (tracking skuteczności)
 # ===========================================================================
-def generuj_kupon_modelowy(mecze_data: list, max_nog: int = 4) -> dict | None:
-    """
-    Generuje kupon oparty o najwyższe prawdopodobieństwa.
-    Nie optymalizuje pod target AKO, tylko pod jakość modelu.
-    """
-    if len(mecze_data) < 2:
-        return None
-    
-    # Filtruj tylko zdarzenia z wysokim p
-    kandydaci = [z for z in mecze_data if z["p"] >= 0.60]
-    
-    if len(kandydaci) < 2:
-        return None
-    
-    # Sortuj po p (najwyższe pierwsze)
-    kandydaci.sort(key=lambda x: -x["p"])
-    
-    # Buduj kupon – max 1 zdarzenie z meczu
-    wybrane = []
-    used_mecze = set()
-    
-    for z in kandydaci:
-        if z["mecz"] not in used_mecze and len(wybrane) < max_nog:
-            wybrane.append(z)
-            used_mecze.add(z["mecz"])
-    
-    if len(wybrane) < 2:
-        return None
-    
-    # Oblicz parametry
-    ako = float(np.prod([z["fair"] for z in wybrane]))
-    p_combo = float(np.prod([z["p"] for z in wybrane]))
-    
-    # Określ typ kuponu
-    if len(wybrane) == 2:
-        typ = "🟢 DOUBLE (Model)"
-    elif len(wybrane) == 3:
-        typ = "🟡 TRIPLE (Model)"
-    else:
-        typ = "🔴 TAŚMA (Model)"
-    
-    return {
-        "zdarzenia": wybrane,
-        "ako": round(ako, 2),
-        "p_combo": round(p_combo, 3),
-        "typ": typ,
-        "opis": f"{len(wybrane)} nogi, łączna pewność {p_combo:.1%}"
-    }
-
-# ===========================================================================
-# GENERATOR KUPONU POD TARGET AKO (eksperymentalny)
-# ===========================================================================
-def generuj_kupon_ako(mecze_data: list, target_ako: float = 5.0,
-                      max_nog: int = 5, min_nog: int = 3) -> dict | None:
-    """
-    Eksperymentalny generator – szuka kombinacji najbliższej zadanemu AKO.
-    """
-    if len(mecze_data) < min_nog:
-        return None
-    
-    # Filtruj kandydatów
-    kandydaci = [z for z in mecze_data 
-                 if 1.25 <= z["fair"] <= 2.50 and z["p"] >= 0.55]
-    
-    if len(kandydaci) < min_nog:
-        return None
-    
-    # Grupuj po meczach i bierz najlepsze 2 z każdego
-    mecze_grupy = {}
-    for z in kandydaci:
-        if z["mecz"] not in mecze_grupy:
-            mecze_grupy[z["mecz"]] = []
-        mecze_grupy[z["mecz"]].append(z)
-    
-    ograniczeni = []
-    for m, zd in mecze_grupy.items():
-        najlepsze = sorted(zd, key=lambda x: -x["p"])[:2]
-        ograniczeni.extend(najlepsze)
-    
-    if len(ograniczeni) < min_nog:
-        return None
-    
-    # Przeszukiwanie kombinacji
-    najlepszy_kupon = None
-    najlepsza_roznica = float('inf')
-    
-    for n in range(min_nog, min(max_nog + 1, len(ograniczeni) + 1)):
-        from itertools import combinations
-        for combo in combinations(ograniczeni, n):
-            # Sprawdź limit 2 na mecz
-            licznik = {}
-            ok = True
-            for z in combo:
-                licznik[z["mecz"]] = licznik.get(z["mecz"], 0) + 1
-                if licznik[z["mecz"]] > 2:
-                    ok = False
-                    break
-            if not ok:
-                continue
-            
-            ako = float(np.prod([z["fair"] for z in combo]))
-            roznica = abs(ako - target_ako)
-            
-            if roznica < najlepsza_roznica:
-                najlepsza_roznica = roznica
-                najlepszy_kupon = {
-                    "zdarzenia": list(combo),
-                    "ako": round(ako, 2),
-                    "p_combo": round(float(np.prod([z["p"] for z in combo])), 3),
-                    "roznica_do_celu": round(roznica, 2)
-                }
-    
-    return najlepszy_kupon
-
-# ===========================================================================
-# FUNKCJE BAZY DANYCH DLA KUPONÓW
-# ===========================================================================
-def zapisz_kupon_db(kupon: dict, liga: str, kolejnosc: int, typ_kuponu: str = "Kupon"):
-    """Bezpieczny zapis kuponu do bazy"""
+def zapisz_zdarzenia(liga: str, kolejnosc: int, mecz: str, home: str, away: str,
+                     rynek: str, typ: str, linia: float, p_model: float, fair_odds: float):
+    """Zapisuje pojedyncze zdarzenie do bazy (do późniejszej weryfikacji)"""
     init_db()
-    con = None
+    con = sqlite3.connect(DB_FILE)
     try:
-        con = sqlite3.connect(DB_FILE)
-        
-        # Przygotuj dane JSON
-        zdarzenia_json = json.dumps(kupon["zdarzenia"], ensure_ascii=False, default=str)
-        
         con.execute(
-            "INSERT INTO kupony (liga, kolejnosc, typ_kuponu, zdarzenia_json, ako, p_combo, data) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (liga, kolejnosc, typ_kuponu,
-             zdarzenia_json,
-             float(kupon["ako"]), 
-             float(kupon.get("p_combo", 0)),
-             datetime.now().strftime("%Y-%m-%d %H:%M"))
+            """INSERT OR IGNORE INTO zdarzenia 
+               (liga, kolejnosc, mecz, home, away, rynek, linia, typ, p_model, fair_odds, data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (liga, kolejnosc, mecz, home, away, rynek, linia, typ, p_model, fair_odds,
+             datetime.now().strftime("%Y-%m-%d"))
         )
         con.commit()
     except Exception as e:
-        st.error(f"Błąd zapisu kuponu: {e}")
+        st.warning(f"Błąd zapisu zdarzenia: {e}")
     finally:
-        if con:
-            con.close()
-
-def wczytaj_kupony(liga: str) -> list:
-    """Bezpieczne wczytywanie kuponów z bazy"""
-    init_db()
-    try:
-        con = sqlite3.connect(DB_FILE)
-        
-        # Sprawdź czy kolumna zdarzenia_json istnieje
-        cursor = con.execute("PRAGMA table_info(kupony)")
-        columns = [col[1] for col in cursor.fetchall()]
-        
-        if 'zdarzenia_json' not in columns:
-            con.close()
-            init_db()
-            con = sqlite3.connect(DB_FILE)
-        
-        rows = con.execute(
-            "SELECT id, kolejnosc, typ_kuponu, zdarzenia_json, ako, p_combo, data "
-            "FROM kupony WHERE liga=? ORDER BY kolejnosc DESC, id DESC",
-            (liga,)
-        ).fetchall()
         con.close()
-        
-        result = []
-        for r in rows:
-            try:
-                zdarzenia = json.loads(r[3]) if r[3] and r[3] != 'null' else []
-                result.append({
-                    "id": r[0],
-                    "kolejnosc": r[1],
-                    "typ_kuponu": r[2] or "Kupon",
-                    "zdarzenia": zdarzenia,
-                    "ako": r[4] or 0,
-                    "p_combo": r[5] or 0,
-                    "data": r[6] or ""
-                })
-            except Exception:
-                continue
-        return result
-    except Exception as e:
-        st.warning(f"Problem z odczytem kuponów: {e}")
-        return []
 
-def weryfikuj_kupon(kupon: dict, hist: pd.DataFrame) -> str:
+def aktualizuj_wynik_zdarzenia(home: str, away: str, hist: pd.DataFrame):
+    """Po meczu aktualizuje wszystkie zdarzenia dla danego meczu"""
     if "_sezon" in hist.columns:
         hist = hist[hist["_sezon"] == "biezacy"]
-
-    for z in kupon["zdarzenia"]:
-        parts = z["mecz"].split(" – ")
-        if len(parts) != 2:
-            return "⏳ Oczekuje"
-        h_z, a_z = parts[0].strip(), parts[1].strip()
-        match = hist[(hist["HomeTeam"] == h_z) & (hist["AwayTeam"] == a_z)]
-        if match.empty:
-            return "⏳ Oczekuje"
-
-        row  = match.iloc[-1]
-        hg   = int(row["FTHG"]); ag = int(row["FTAG"])
-        wynik_1x2 = "1" if hg > ag else ("2" if ag > hg else "X")
-        typ  = z["typ"]
-
-        if   typ == "1":           ok = wynik_1x2 == "1"
-        elif typ == "X":           ok = wynik_1x2 == "X"
-        elif typ == "2":           ok = wynik_1x2 == "2"
-        elif typ == "1X":          ok = wynik_1x2 in ("1", "X")
-        elif typ == "X2":          ok = wynik_1x2 in ("X", "2")
-        elif typ.startswith("Over") and "goli" in typ:
-            linia = float(typ.split()[1])
-            ok = (hg + ag) > linia
-        elif typ.startswith("Under") and "goli" in typ:
-            linia = float(typ.split()[1])
-            ok = (hg + ag) < linia
-        elif typ == "BTTS – Tak":  ok = hg > 0 and ag > 0
-        elif typ == "BTTS – Nie":  ok = hg == 0 or ag == 0
-        elif typ.startswith("Over") and "rożnych" in typ:
-            linia = float(typ.split()[1])
-            rzuty = int(row.get("HC", 0)) + int(row.get("AC", 0))
-            ok = rzuty > linia
-        elif typ.startswith("Over") and "kartek" in typ:
-            linia = float(typ.split()[1])
-            kartki = int(row.get("HY", 0)) + int(row.get("AY", 0)) + \
-                     (int(row.get("HR", 0)) + int(row.get("AR", 0))) * 2
-            ok = kartki > linia
-        else:
-            return "⏳ Oczekuje"
-
-        if not ok:
-            return "❌ Chybiony"
-
-    return "✅ Trafiony"
+    
+    match = hist[(hist["HomeTeam"] == home) & (hist["AwayTeam"] == away)]
+    if match.empty:
+        return
+    
+    row = match.iloc[-1]
+    hg = int(row["FTHG"]); ag = int(row["FTAG"])
+    wynik_1x2 = "1" if hg > ag else ("2" if ag > hg else "X")
+    rzuty = int(row.get("HC", 0)) + int(row.get("AC", 0))
+    kartki = int(row.get("HY", 0)) + int(row.get("AY", 0)) + \
+             (int(row.get("HR", 0)) + int(row.get("AR", 0))) * 2
+    
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    
+    # Pobierz wszystkie zdarzenia dla tego meczu
+    zdarzenia = con.execute(
+        "SELECT id, rynek, typ, linia FROM zdarzenia WHERE home=? AND away=? AND trafione IS NULL",
+        (home, away)
+    ).fetchall()
+    
+    for z in zdarzenia:
+        zid, rynek, typ, linia = z
+        trafione = False
+        
+        if rynek == "Gole":
+            if "Over" in typ:
+                trafione = (hg + ag) > linia
+            elif "Under" in typ:
+                trafione = (hg + ag) < linia
+        elif rynek == "BTTS":
+            if typ == "BTTS – Tak":
+                trafione = (hg > 0 and ag > 0)
+            else:
+                trafione = (hg == 0 or ag == 0)
+        elif rynek == "Rożne":
+            trafione = rzuty > linia
+        elif rynek == "Kartki":
+            trafione = kartki > linia
+        elif rynek == "1X2":
+            if typ == "1": trafione = (wynik_1x2 == "1")
+            elif typ == "X": trafione = (wynik_1x2 == "X")
+            elif typ == "2": trafione = (wynik_1x2 == "2")
+            elif typ == "1X": trafione = (wynik_1x2 in ("1", "X"))
+            elif typ == "X2": trafione = (wynik_1x2 in ("X", "2"))
+        
+        con.execute(
+            "UPDATE zdarzenia SET wynik=?, trafione=? WHERE id=?",
+            (f"{hg}:{ag}", trafione, zid)
+        )
+    
+    con.commit()
+    con.close()
 
 # ===========================================================================
-# RANKING ZDARZEŃ KOLEJKI
+# STATYSTYKI SKUTECZNOŚCI
 # ===========================================================================
-def ranking_zdarzen(mecze_data: list) -> pd.DataFrame:
-    """Zwraca DataFrame z rankingiem wszystkich zdarzeń kolejki"""
-    if not mecze_data:
+def statystyki_skutecznosci(liga: str = None) -> pd.DataFrame:
+    """Zwraca DataFrame ze statystykami skuteczności per rynek"""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    
+    query = "SELECT rynek, typ, linia, p_model, fair_odds, trafione FROM zdarzenia WHERE trafione IS NOT NULL"
+    params = []
+    if liga:
+        query += " AND liga=?"
+        params.append(liga)
+    
+    df = pd.read_sql_query(query, con, params=params)
+    con.close()
+    
+    if df.empty:
         return pd.DataFrame()
     
-    df = pd.DataFrame(mecze_data)
-    df = df[df["p"] >= 0.55]
-    
-    # Dodaj kolumny pomocnicze
-    df["bezpieczenstwo"] = (df["p"] * 100).round(0).astype(int).astype(str) + "%"
-    df["kolor"] = df["p"].apply(lambda x: 
-        "🟢" if x >= 0.65 else ("🟡" if x >= 0.60 else "🔴"))
-    
-    # Sortuj po p
-    df = df.sort_values("p", ascending=False)
-    
-    return df[["kolor", "mecz", "typ", "bezpieczenstwo", "fair", "kategoria"]]
-
-# ===========================================================================
-# WERYFIKACJA PREDYKCJI
-# ===========================================================================
-def wczytaj_predykcje() -> list:
-    init_db()
-    con = sqlite3.connect(DB_FILE)
-    rows = con.execute(
-        "SELECT liga,home,away,round,typ,fo_typ,p_home,p_draw,p_away,data "
-        "FROM predykcje ORDER BY data,round"
-    ).fetchall()
-    con.close()
-    keys = ["liga","home","away","round","typ","fo_typ","p_home","p_draw","p_away","data"]
-    return [dict(zip(keys, r)) for r in rows]
-
-def zapisz_predykcje_db(nowe: list) -> int:
-    init_db()
-    con = sqlite3.connect(DB_FILE)
-    dodane = 0
-    for p in nowe:
-        try:
-            con.execute(
-                "INSERT OR IGNORE INTO predykcje "
-                "(liga,home,away,round,typ,fo_typ,p_home,p_draw,p_away,data) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (p["liga"], p["home"], p["away"], p["round"],
-                 p["typ"], p["fo_typ"], p["p_home"], p["p_draw"], p["p_away"], p["data"])
-            )
-            dodane += con.execute("SELECT changes()").fetchone()[0]
-        except Exception:
-            pass
-    con.commit()
-    con.close()
-    return dodane
-
-def usun_wszystkie_predykcje():
-    init_db()
-    con = sqlite3.connect(DB_FILE)
-    con.execute("DELETE FROM predykcje")
-    con.commit()
-    con.close()
-
-def weryfikuj_predykcje(predykcje: list, hist: pd.DataFrame) -> pd.DataFrame:
-    if "_sezon" in hist.columns:
-        hist = hist[hist["_sezon"] == "biezacy"]
-    wyniki = []
-    for p in predykcje:
-        h, a = p["home"], p["away"]
-        match = hist[(hist["HomeTeam"] == h) & (hist["AwayTeam"] == a)]
-        brier = None
-        if match.empty:
-            status = "⏳ oczekuje"; wynik_r = "–"; trafiony = None
-        else:
-            row = match.iloc[-1]
-            hg, ag   = int(row["FTHG"]), int(row["FTAG"])
-            wynik_r  = f"{hg}:{ag}"
-            rzecz    = "1" if hg > ag else ("2" if hg < ag else "X")
-            typ_pred = p["typ"]
-            if   typ_pred == "1X": trafiony = rzecz in ("1", "X")
-            elif typ_pred == "X2": trafiony = rzecz in ("X", "2")
-            else:                  trafiony = (rzecz == typ_pred)
-            status = "✅ trafiony" if trafiony else "❌ chybiony"
-            if all(p.get(k) is not None for k in ("p_home", "p_draw", "p_away")):
-                r1 = 1.0 if rzecz=="1" else 0.0
-                rx = 1.0 if rzecz=="X" else 0.0
-                r2 = 1.0 if rzecz=="2" else 0.0
-                brier = round((p["p_home"]-r1)**2 + (p["p_draw"]-rx)**2 + (p["p_away"]-r2)**2, 3)
-        wyniki.append({
-            "Liga": p.get("liga","–"), "Mecz": f"{h} vs {a}",
-            "Kolejka": p.get("round","–"), "Typ": p["typ"],
-            "Fair Odds": p["fo_typ"], "Wynik": wynik_r,
-            "Status": status, "Trafiony": trafiony,
-            "Brier": brier, "Data": p.get("data","–"),
+    # Grupuj po rynku
+    stats = []
+    for (rynek, typ, linia), group in df.groupby(['rynek', 'typ', 'linia']):
+        nazwa = f"{rynek}"
+        if linia and linia > 0:
+            nazwa += f" {linia}"
+        if typ and typ not in ["Tak", "Nie"] and "Over" not in typ and "Under" not in typ:
+            nazwa += f" {typ}"
+        
+        trafione = group['trafione'].sum()
+        wszystkie = len(group)
+        skutecznosc = trafione / wszystkie if wszystkie > 0 else 0
+        sr_p_model = group['p_model'].mean()
+        sr_fair = group['fair_odds'].mean()
+        
+        # ROI = (trafione * (śr_fair - 1) - (wszystkie - trafione)) / wszystkie
+        roi = (trafione * (sr_fair - 1) - (wszystkie - trafione)) / wszystkie if wszystkie > 0 else 0
+        
+        stats.append({
+            "Rynek": nazwa,
+            "Typów": wszystkie,
+            "Trafione": trafione,
+            "Skuteczność": f"{skutecznosc:.1%}",
+            "Śr. P model": f"{sr_p_model:.1%}",
+            "Śr. Fair": f"{sr_fair:.2f}",
+            "ROI": f"{roi:+.1%}",
+            "Kolor": "🟢" if roi > 0.03 else ("🟡" if roi > -0.03 else "🔴")
         })
-    return pd.DataFrame(wyniki) if wyniki else pd.DataFrame()
+    
+    return pd.DataFrame(stats).sort_values("Typów", ascending=False)
+
+def kalibracja_modelu(liga: str = None) -> pd.DataFrame:
+    """Zwraca dane do wykresu kalibracji"""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    
+    query = "SELECT p_model, trafione FROM zdarzenia WHERE trafione IS NOT NULL"
+    params = []
+    if liga:
+        query += " AND liga=?"
+        params.append(liga)
+    
+    df = pd.read_sql_query(query, con, params=params)
+    con.close()
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Podziel na przedziały
+    bins = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 1.0]
+    labels = ["50-55%", "55-60%", "60-65%", "65-70%", "70-75%", "75-80%", "80%+"]
+    
+    df['przedzial'] = pd.cut(df['p_model'], bins=bins, labels=labels, right=False)
+    
+    kalibracja = df.groupby('przedzial').agg(
+        liczba=('trafione', 'count'),
+        trafione=('trafione', 'sum'),
+        p_srednia=('p_model', 'mean')
+    ).reset_index()
+    
+    kalibracja['skutecznosc'] = kalibracja['trafione'] / kalibracja['liczba']
+    kalibracja['rozbieznosc'] = kalibracja['skutecznosc'] - kalibracja['p_srednia']
+    
+    return kalibracja
 
 # ===========================================================================
 # KOMENTARZ
@@ -964,41 +763,6 @@ def render_macierz_html(M: np.ndarray, home: str, away: str) -> str:
     rows.append("</tbody></table>")
     return "".join(rows)
 
-def render_alt_zdarzenia_html(zdarzenia: list) -> str:
-    if not zdarzenia:
-        return "<p style='color:#888;font-size:0.85em'>Brak zdarzeń spełniających próg 55%.</p>"
-    prog_kol = {"Gole": "#2196F3", "BTTS": "#9C27B0", "Rożne": "#FF9800", "Kartki": "#F44336"}
-    rows = []
-    for emoji, nazwa, p, fo, kat in zdarzenia[:8]:
-        kol    = prog_kol.get(kat, "#888")
-        bar_w  = int(p * 100)
-        fo_col = "#4CAF50" if fo <= 1.60 else ("#FF9800" if fo <= 2.00 else "#aaa")
-        rows.append(
-            f"<tr>"
-            f"<td style='padding:4px 6px;font-size:0.9em'>{emoji} {nazwa}</td>"
-            f"<td style='padding:4px 6px;width:120px'>"
-            f"  <div style='display:flex;align-items:center;gap:5px'>"
-            f"    <div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-            f"      <div style='background:{kol};width:{bar_w}%;height:5px;border-radius:3px'></div>"
-            f"    </div>"
-            f"    <span style='color:{kol};font-size:0.82em;min-width:32px'>{p:.0%}</span>"
-            f"  </div>"
-            f"</td>"
-            f"<td style='padding:4px 6px;text-align:right;color:{fo_col};font-weight:bold;font-size:0.88em'>"
-            f"  {fo:.2f}</td>"
-            f"</tr>"
-        )
-    return (
-        "<table style='width:100%;border-collapse:collapse;margin-top:4px'>"
-        "<thead><tr style='color:#666;font-size:0.75em;text-transform:uppercase'>"
-        "<th style='padding:3px 6px;text-align:left'>Rynek</th>"
-        "<th style='padding:3px 6px;text-align:left'>Prawdopodob.</th>"
-        "<th style='padding:3px 6px;text-align:right'>Fair Odds</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
-        "<p style='color:#555;font-size:0.72em;margin-top:4px'>"
-        "⚠️ Rożne i kartki – Poisson bez korelacji. Traktuj orientacyjnie.</p>"
-    )
-
 def macierz_goli_p(lam_h, lam_a, rho, linia_int, typ_gole):
     mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     M  = dixon_coles_adj(
@@ -1018,8 +782,8 @@ debug_mode   = st.sidebar.checkbox("🔧 Debug – niezmapowane nazwy", value=Fa
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
-st.title(f"Predykcje {wybrana_liga} 2025/26")
-st.markdown("Dixon-Coles • Blend sezonów • Forma • Fair Odds • Kupon Modelowy • SQLite")
+st.title(f"System Analityczny – {wybrana_liga} 2025/26")
+st.markdown("Dixon-Coles • Tracking skuteczności • Kalibracja modelu")
 
 if not historical.empty:
     srednie_df  = oblicz_wszystkie_statystyki(historical.to_json())
@@ -1054,22 +818,22 @@ if not historical.empty:
                     unsafe_allow_html=True,
                 )
 
-    # TABS
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "🎯 Bet Builder",
-        "⚽ Przewidywane Wyniki",
-        "🎲 Kupony Modelowe",
-        "✅ Weryfikacja",
-        "📊 Tabela i Forma",
-        "🏆 Power Rating",
-        "📈 Model & Dane",
+    # TABS – NOWA STRUKTURA
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🎯 Bet Builder (Laboratorium)",
+        "⚽ Analiza Meczu",
+        "📊 Ranking Zdarzeń",
+        "📈 Skuteczność + ROI",
+        "📉 Kalibracja Modelu"
     ])
 
     # =========================================================================
-    # TAB 1 – BET BUILDER
+    # TAB 1 – BET BUILDER (Laboratorium)
     # =========================================================================
     with tab1:
-        st.subheader("🎛️ Combo Builder")
+        st.subheader("🎛️ Bet Builder – laboratorium modelu")
+        st.caption("Eksperymentuj z kombinacjami zdarzeń. Nie są to rekomendacje, tylko symulacje.")
+
         c1, c2, c3 = st.columns(3)
         with c1:
             linia_gole   = st.selectbox("Linia goli",    [1.5, 2.5, 3.5], index=1)
@@ -1080,7 +844,7 @@ if not historical.empty:
         with c3:
             linia_kartki = st.selectbox("Linia kartek",  [2.5, 3.5, 4.5, 5.5], index=1)
             typ_kartki   = st.selectbox("Typ kartek",    ["Over", "Under"])
-        min_prob = st.slider("Min. prawdopodobieństwo combo", 0.0, 1.0, 0.40, 0.05)
+        min_prob = st.slider("Min. prawdopodobieństwo", 0.0, 1.0, 0.40, 0.05)
 
         if not schedule.empty and not srednie_df.empty:
             dzisiaj  = datetime.now().date()
@@ -1089,90 +853,44 @@ if not historical.empty:
                 nb    = przyszle["round"].min()
                 mecze = schedule[schedule["round"] == nb]
                 st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
-                col1, col2 = st.columns(2)
 
-                with col1:
-                    st.write("**Combo Builder**")
-                    combo_count = 0
-                    for _, mecz in mecze.iterrows():
-                        h = map_nazwa(mecz["home_team"])
-                        a = map_nazwa(mecz["away_team"])
-                        if h not in srednie_df.index or a not in srednie_df.index:
-                            continue
-                        lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                        p_g     = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
-                        p_r     = oblicz_p(typ_rogi,   linia_rogi,   lam_r)
-                        p_k     = oblicz_p(typ_kartki, linia_kartki, lam_k)
+                for _, mecz in mecze.iterrows():
+                    h = map_nazwa(mecz["home_team"])
+                    a = map_nazwa(mecz["away_team"])
+                    if h not in srednie_df.index or a not in srednie_df.index:
+                        continue
+                    
+                    lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    
+                    with st.expander(f"{h} vs {a}"):
+                        p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
+                        p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
+                        p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
                         p_combo = p_g * p_r * p_k
-                        fo_g    = fair_odds(p_g); fo_r = fair_odds(p_r); fo_k = fair_odds(p_k)
-                        fo_c    = fair_odds(p_combo)
-                        if p_combo >= min_prob:
-                            combo_count += 1
-                            with st.expander(f"{h} vs {a}  ·  {p_combo:.1%}  ·  Fair AKO: {fo_c:.2f}"):
-                                st.write(f"{koloruj(p_g)} Gole {typ_gole} {linia_gole}: {p_g:.1%}  *(fair {fo_g:.2f})*")
-                                st.write(f"{koloruj(p_r)} Rożne {typ_rogi} {linia_rogi}: {p_r:.1%}  *(fair {fo_r:.2f})*")
-                                st.write(f"{koloruj(p_k)} Kartki {typ_kartki} {linia_kartki}: {p_k:.1%}  *(fair {fo_k:.2f})*")
-                                st.caption(f"Łączne fair AKO combo: **{fo_c:.2f}** | p_combo: {p_combo:.1%}")
-                    if combo_count == 0:
-                        st.info("Brak meczów spełniających kryteria. Zmniejsz próg.")
-
-                with col2:
-                    st.write("**BTTS Ranking**")
-                    btts_data = []
-                    for _, mecz in mecze.iterrows():
-                        h = map_nazwa(mecz["home_team"])
-                        a = map_nazwa(mecz["away_team"])
-                        if h not in srednie_df.index or a not in srednie_df.index:
-                            continue
-                        lam_h, lam_a, _, _ = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                        mg  = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
-                        M_b = dixon_coles_adj(
-                            np.outer(poisson.pmf(range(mg), lam_h), poisson.pmf(range(mg), lam_a)),
-                            lam_h, lam_a, rho=rho
-                        )
-                        p_btts = float(1 - M_b[0,:].sum() - M_b[:,0].sum() + M_b[0,0])
-                        btts_data.append((f"{h} - {a}", p_btts, fair_odds(p_btts)))
-                    for ms, p, fo in sorted(btts_data, key=lambda x: x[1], reverse=True):
-                        st.write(f"{koloruj(p)} **{ms}**: {p:.1%}  *(fair {fo:.2f})*")
-
-                st.divider()
-                vc1, vc2 = st.columns(2)
-                with vc1:
-                    st.write("**🔥 Power Index – największa różnica sił**")
-                    power_data = []
-                    for _, mecz in mecze.iterrows():
-                        h2 = map_nazwa(mecz["home_team"]); a2 = map_nazwa(mecz["away_team"])
-                        if h2 not in srednie_df.index or a2 not in srednie_df.index: continue
-                        lh2, la2, _, _ = oblicz_lambdy(h2, a2, srednie_df, srednie_lig, forma_dict)
-                        power_data.append((f"{h2} vs {a2}", abs(lh2-la2), lh2, la2))
-                    for label, diff, lh2, la2 in sorted(power_data, key=lambda x: x[1], reverse=True)[:5]:
-                        st.write(f"⚡ **{label}** – gap {diff:.2f} (λ {lh2:.2f} vs {la2:.2f})")
-                with vc2:
-                    st.write("**⚽ Najbardziej bramkowy mecz**")
-                    gole_data = []
-                    for _, mecz in mecze.iterrows():
-                        h2 = map_nazwa(mecz["home_team"]); a2 = map_nazwa(mecz["away_team"])
-                        if h2 not in srednie_df.index or a2 not in srednie_df.index: continue
-                        lh2, la2, _, _ = oblicz_lambdy(h2, a2, srednie_df, srednie_lig, forma_dict)
-                        gole_data.append((f"{h2} vs {a2}", lh2 + la2))
-                    for label, total in sorted(gole_data, key=lambda x: x[1], reverse=True)[:5]:
-                        st.write(f"🎯 **{label}** – śr. {total:.2f} goli")
-            else:
-                st.info("Brak nadchodzących meczów w terminarzu.")
+                        
+                        col_left, col_right = st.columns(2)
+                        
+                        with col_left:
+                            st.metric(f"{typ_gole} {linia_gole}", f"{p_g:.1%}", f"fair {fair_odds(p_g)}")
+                            st.metric(f"{typ_rogi} {linia_rogi} rożnych", f"{p_r:.1%}", f"fair {fair_odds(p_r)}")
+                        
+                        with col_right:
+                            st.metric(f"{typ_kartki} {linia_kartki} kartek", f"{p_k:.1%}", f"fair {fair_odds(p_k)}")
+                            if p_combo >= min_prob:
+                                st.metric("COMBO", f"{p_combo:.1%}", f"fair AKO {fair_odds(p_combo)}")
+                            else:
+                                st.caption(f"p_combo = {p_combo:.1%} (poniżej progu)")
 
     # =========================================================================
-    # TAB 2 – PRZEWIDYWANE WYNIKI
+    # TAB 2 – ANALIZA MECZU
     # =========================================================================
     with tab2:
-        st.subheader("⚽ Przewidywane wyniki – najbliższa kolejka")
-        st.caption("**Fair Odds** = kurs bez marży bukmachera. Kliknij mecz aby rozwinąć szczegóły.")
+        st.subheader("⚽ Analiza meczu – najbliższa kolejka")
+        st.caption("Szczegółowa analiza każdego meczu z macierzą wyników i alternatywnymi rynkami.")
 
-        tgl1, tgl2, tgl3 = st.columns(3)
-        with tgl1: pokaz_komentarz = st.toggle("💬 Komentarz analityczny", value=True)
-        with tgl2: pokaz_macierz  = st.toggle("🔢 Macierz wyników",        value=False)
-        with tgl3:
-            zapisuj_flag = st.toggle("💾 Zapisz do weryfikacji", value=False,
-                                     help="Zapisuje predykcje do SQLite.")
+        tgl1, tgl2 = st.columns(2)
+        with tgl1: pokaz_komentarz = st.toggle("💬 Komentarz", value=True)
+        with tgl2: pokaz_macierz  = st.toggle("🔢 Macierz wyników", value=False)
 
         if not schedule.empty and not srednie_df.empty:
             dzisiaj  = datetime.now().date()
@@ -1182,10 +900,8 @@ if not historical.empty:
                 mecze = schedule[schedule["round"] == nb]
                 st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
 
-                nowe_predykcje = []
-                dopasowane     = 0
-                kol_a, kol_b   = st.columns(2)
-                mecze_list     = list(mecze.iterrows())
+                kol_a, kol_b = st.columns(2)
+                mecze_list = list(mecze.iterrows())
 
                 for idx, (_, mecz) in enumerate(mecze_list):
                     h = map_nazwa(mecz["home_team"])
@@ -1194,129 +910,73 @@ if not historical.empty:
                         continue
 
                     lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred       = predykcja_meczu(lam_h, lam_a, rho=rho)
-                    dopasowane += 1
+                    pred = predykcja_meczu(lam_h, lam_a, rho=rho)
                     data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
-
-                    nowe_predykcje.append({
-                        "liga": wybrana_liga, "home": h, "away": a,
-                        "round": int(nb), "typ": pred["typ"], "fo_typ": pred["fo_typ"],
-                        "p_home": round(pred["p_home"], 4),
-                        "p_draw": round(pred["p_draw"], 4),
-                        "p_away": round(pred["p_away"], 4),
-                        "data": datetime.now().strftime("%Y-%m-%d"),
-                    })
-
-                    ikony_typ  = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
-                    conf_ikona = "🟢" if pred["conf_level"]=="High" else ("🟡" if pred["conf_level"]=="Medium" else "🔴")
-                    label_exp  = (f"{conf_ikona} {h} vs {a}"
-                                  f"  ·  {ikony_typ.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
-                                  f"  ·  {data_meczu}")
 
                     kolumna = kol_a if idx % 2 == 0 else kol_b
                     with kolumna:
-                        with st.expander(label_exp, expanded=False):
+                        with st.expander(f"{h} vs {a} – {data_meczu}", expanded=False):
+                            # Nagłówek
                             ch, cmid, ca = st.columns([5,2,5])
-                            with ch:
-                                st.markdown(f"<div style='font-size:1.05em;font-weight:bold'>{h}</div>",
-                                            unsafe_allow_html=True)
-                            with cmid:
-                                st.markdown(f"<div style='text-align:center;color:#888;font-size:0.78em'>{data_meczu}</div>",
-                                            unsafe_allow_html=True)
-                            with ca:
-                                st.markdown(f"<div style='font-size:1.05em;font-weight:bold;text-align:right'>{a}</div>",
-                                            unsafe_allow_html=True)
+                            with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
+                            with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
+                            with ca: st.markdown(f"<div style='font-weight:bold;text-align:right'>{a}</div>", unsafe_allow_html=True)
 
+                            # Przewidywany wynik
                             st.markdown(
                                 f"<div style='text-align:center;font-size:1.7em;font-weight:bold;margin:4px 0'>"
                                 f"⚽ {pred['wynik_h']}:{pred['wynik_a']}"
-                                f"<span style='font-size:0.5em;color:#888;font-weight:normal;margin-left:8px'>"
-                                f"({pred['p_exact']:.1%})</span></div>",
+                                f"<span style='font-size:0.5em;color:#888;margin-left:8px'>({pred['p_exact']:.1%})</span></div>",
                                 unsafe_allow_html=True,
                             )
 
-                            conf_colors  = {"High":"#4CAF50","Medium":"#FF9800","Coinflip":"#F44336"}
-                            chaos_colors = {"Pewny":"#4CAF50","Klarowny":"#8BC34A","Otwarty":"#FF9800","Chaos":"#F44336"}
-                            conf_c = conf_colors.get(pred["conf_level"], "#888")
-                            ch_c   = chaos_colors.get(pred["chaos_label"], "#888")
-                            bar_w  = int(pred["chaos_pct"] * 100)
+                            # Typ + confidence
                             st.markdown(
-                                f"<div style='text-align:center;margin-bottom:4px'>"
-                                f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
-                                f"<span style='font-size:0.88em;color:#888'>"
-                                f"Fair Odds: <b>{pred['fo_typ']:.2f}</b> ({pred['p_typ']:.1%})"
-                                f"</span></div>"
-                                f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:6px'>"
-                                f"{pred['conf_emoji']} <b>{pred['conf_level']}</b> · {pred['conf_opis']}"
-                                f"</div>"
-                                f"<div style='margin:0 8px 8px 8px'>"
-                                f"<div style='font-size:0.78em;color:#888'>"
-                                f"{pred['chaos_emoji']} Chaos Index: "
-                                f"<b style='color:{ch_c}'>{pred['chaos_label']}</b>"
-                                f" ({pred['entropy']:.2f} bits)</div>"
-                                f"<div style='background:#333;border-radius:4px;height:4px;margin-top:4px'>"
-                                f"<div style='background:{ch_c};width:{bar_w}%;height:4px;border-radius:4px'></div>"
-                                f"</div></div>",
+                                f"<div style='text-align:center;margin-bottom:8px'>"
+                                f"Typ: {badge_typ(pred['typ'])} @ {pred['fo_typ']} · {pred['conf_emoji']} {pred['conf_level']}</div>",
                                 unsafe_allow_html=True,
                             )
 
+                            # Metryki 1X2
                             mc1, mc2, mc3 = st.columns(3)
-                            with mc1:
-                                st.metric(f"1 – {h[:12]}", f"{pred['p_home']:.1%}", f"@ {pred['fo_home']:.2f}",
-                                          delta_color="normal" if pred["typ"] in ("1","1X") else "off")
-                            with mc2:
-                                st.metric("X – Remis", f"{pred['p_draw']:.1%}", f"@ {pred['fo_draw']:.2f}",
-                                          delta_color="normal" if pred["typ"] in ("X","1X","X2") else "off")
-                            with mc3:
-                                st.metric(f"2 – {a[:12]}", f"{pred['p_away']:.1%}", f"@ {pred['fo_away']:.2f}",
-                                          delta_color="normal" if pred["typ"] in ("2","X2") else "off")
+                            mc1.metric("1", f"{pred['p_home']:.0%}", f"fair {pred['fo_home']}")
+                            mc2.metric("X", f"{pred['p_draw']:.0%}", f"fair {pred['fo_draw']}")
+                            mc3.metric("2", f"{pred['p_away']:.0%}", f"fair {pred['fo_away']}")
 
-                            st.markdown(
-                                f"<div style='text-align:center;font-size:0.82em;color:#888;margin-top:2px'>"
-                                f"λ {h[:8]}: <b>{pred['lam_h']:.2f}</b> &nbsp;|&nbsp; "
-                                f"λ {a[:8]}: <b>{pred['lam_a']:.2f}</b> &nbsp;|&nbsp; "
-                                f"Łącznie: <b>{pred['lam_h']+pred['lam_a']:.2f}</b></div>",
-                                unsafe_allow_html=True,
-                            )
-
+                            # Alternatywne rynki
                             with st.expander("📊 Alternatywne rynki", expanded=False):
                                 alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho)
-                                st.markdown(render_alt_zdarzenia_html(alt), unsafe_allow_html=True)
+                                for emoji, nazwa, p, fo, kat, linia in alt[:6]:
+                                    st.markdown(f"{emoji} **{nazwa}** – {p:.0%} (fair {fo})")
+                                    
+                                    # Automatyczny zapis do bazy (tracking)
+                                    zapisz_zdarzenia(
+                                        liga=wybrana_liga,
+                                        kolejnosc=int(nb),
+                                        mecz=f"{h} – {a}",
+                                        home=h,
+                                        away=a,
+                                        rynek=kat,
+                                        typ=nazwa,
+                                        linia=linia,
+                                        p_model=p,
+                                        fair_odds=fo
+                                    )
 
                             if pokaz_komentarz:
-                                st.info(f"💬 {generuj_komentarz(h, a, pred, forma_dict)}")
+                                st.info(generuj_komentarz(h, a, pred, forma_dict))
 
                             if pokaz_macierz:
-                                st.markdown("**Macierz dokładnych wyników**")
-                                st.markdown(render_macierz_html(pred["macierz"], h, a),
-                                            unsafe_allow_html=True)
-
-                if zapisuj_flag and nowe_predykcje:
-                    dodane = zapisz_predykcje_db(nowe_predykcje)
-                    st.success(f"✅ Zapisano {dodane} nowych predykcji." if dodane
-                               else "Predykcje tej kolejki już są w bazie.")
-
-                if dopasowane > 0:
-                    df_exp = pd.DataFrame(nowe_predykcje)[
-                        ["liga","home","away","round","typ","fo_typ","p_home","p_draw","p_away","data"]
-                    ]
-                    st.download_button(
-                        "⬇️ Pobierz predykcje kolejki (CSV)",
-                        data=df_exp.to_csv(index=False, decimal=","),
-                        file_name=f"predykcje_{wybrana_liga.replace(' ','_')}_kolejka{int(nb)}.csv",
-                        mime="text/csv",
-                    )
-                if dopasowane == 0:
-                    st.warning("Żaden mecz nie mógł być dopasowany – sprawdź Debug w sidebarze.")
-            else:
-                st.info("Brak nadchodzących meczów w terminarzu.")
+                                st.markdown("**Macierz wyników**")
+                                st.markdown(render_macierz_html(pred["macierz"], h, a), unsafe_allow_html=True)
 
     # =========================================================================
-    # TAB 3 – KUPONY MODELOWE
+    # TAB 3 – RANKING ZDARZEŃ
     # =========================================================================
     with tab3:
-        st.subheader("🎲 Rekomendacje modelowe")
-        
+        st.subheader("📊 Ranking zdarzeń kolejki")
+        st.caption("Wszystkie zdarzenia z p ≥ 60%, sortowane według pewności modelu.")
+
         if not schedule.empty and not srednie_df.empty:
             dzisiaj = datetime.now().date()
             przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
@@ -1324,8 +984,7 @@ if not historical.empty:
                 nb = przyszle["round"].min()
                 mecze = schedule[schedule["round"] == nb]
 
-                with st.spinner("⚙️ Analiza kolejki..."):
-                    # Zbierz wszystkie zdarzenia
+                with st.spinner("Generowanie rankingu..."):
                     wszystkie_zd = []
                     for _, mecz in mecze.iterrows():
                         h = map_nazwa(mecz["home_team"])
@@ -1338,601 +997,201 @@ if not historical.empty:
                         mecz_str = f"{h} – {a}"
 
                         # Typ główny meczu
-                        if pred["p_typ"] >= 0.55:
+                        if pred["p_typ"] >= 0.60:
                             wszystkie_zd.append({
-                                "mecz": mecz_str,
-                                "typ": pred["typ"],
-                                "p": pred["p_typ"],
-                                "fair": pred["fo_typ"],
-                                "kategoria": "1X2",
-                                "emoji": "🏟️"
+                                "Mecz": mecz_str,
+                                "Rynek": "1X2",
+                                "Typ": pred["typ"],
+                                "P": f"{pred['p_typ']:.0%}",
+                                "Fair": pred["fo_typ"],
+                                "Kolor": "🟢" if pred["p_typ"] >= 0.65 else "🟡"
                             })
 
                         # Alternatywne zdarzenia
-                        alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.55)
-                        for emoji, nazwa, p, fo, kat in alt[:4]:
+                        alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.60)
+                        for emoji, nazwa, p, fo, kat, linia in alt:
                             wszystkie_zd.append({
-                                "mecz": mecz_str,
-                                "typ": nazwa,
-                                "p": p,
-                                "fair": fo,
-                                "kategoria": kat,
-                                "emoji": emoji
+                                "Mecz": mecz_str,
+                                "Rynek": kat,
+                                "Typ": nazwa,
+                                "P": f"{p:.0%}",
+                                "Fair": fo,
+                                "Kolor": "🟢" if p >= 0.65 else "🟡"
                             })
 
-                # =================================================================
-                # 1. KUPON MODELOWY (główna rekomendacja)
-                # =================================================================
-                st.markdown("### 🧠 Kupon modelowy – najwyższa pewność")
-                st.caption("Wybrane zdarzenia z najwyższym prawdopodobieństwem, max 1 z meczu")
-                
-                kupon_model = generuj_kupon_modelowy(wszystkie_zd)
-                
-                if kupon_model:
-                    col1, col2, col3 = st.columns([3, 1, 1])
-                    
-                    with col1:
-                        st.markdown(f"**{kupon_model['typ']}**")
-                        for z in kupon_model["zdarzenia"]:
-                            st.markdown(f"• {z['emoji']} **{z['mecz']}** – {z['typ']} ({z['p']:.0%})")
-                        st.caption(kupon_model['opis'])
-                    
-                    with col2:
-                        st.metric("AKO", f"{kupon_model['ako']:.2f}")
-                        st.caption(f"p = {kupon_model['p_combo']:.1%}")
-                    
-                    with col3:
-                        if st.button("💾 Zapisz", key="save_model_coupon"):
-                            zapisz_kupon_db(kupon_model, wybrana_liga, int(nb), 
-                                          typ_kuponu="Modelowy")
-                            st.success("✅ Zapisano")
-                else:
-                    st.warning("Brak wystarczającej liczby pewnych zdarzeń (p ≥ 60%)")
-
-                st.divider()
-
-                # =================================================================
-                # 2. EKSPERYMENTALNY – OPTYMALIZACJA POD AKO
-                # =================================================================
-                with st.expander("🎲 Optymalizacja pod docelowe AKO (eksperymentalne)", expanded=False):
-                    st.caption(
-                        "Eksperymentalny generator – szuka kombinacji najbliższej zadanemu AKO. "
-                        "Nie jest to rekomendacja modelowa, tylko ćwiczenie optymalizacyjne."
-                    )
-                    
-                    target_slider = st.slider("Docelowe AKO", 3.0, 10.0, 5.0, 0.5,
-                                             help="Im wyższe AKO, tym więcej ryzyka")
-                    
-                    kupon_ako = generuj_kupon_ako(wszystkie_zd, target_ako=target_slider)
-                    
-                    if kupon_ako:
-                        ako_color = "#4CAF50" if abs(kupon_ako["ako"] - target_slider) < 0.5 else "#FF9800"
-                        if abs(kupon_ako["ako"] - target_slider) >= 1.0:
-                            ako_color = "#F44336"
-                        
-                        st.markdown(
-                            f"<div style='background:#1a1a2e;border:1px solid #333;border-radius:10px;"
-                            f"padding:16px;margin-bottom:12px'>"
-                            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
-                            f"<div style='font-size:1.1em;font-weight:bold'>🎲 Kupon eksperymentalny</div>"
-                            f"<div style='font-size:2em;font-weight:bold;color:{ako_color}'>"
-                            f"AKO {kupon_ako['ako']:.2f}</div></div>"
-                            f"<div style='color:#888;font-size:0.85em;margin-top:4px'>"
-                            f"p_combo: <b style='color:#aaa'>{kupon_ako['p_combo']:.1%}</b> &nbsp;|&nbsp; "
-                            f"{len(kupon_ako['zdarzenia'])} nogi &nbsp;|&nbsp; "
-                            f"różnica od celu: <b>{kupon_ako.get('roznica_do_celu', 0):.2f}</b></div>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-                        
-                        cat_colors = {"1X2":"#2196F3","Gole":"#4CAF50","BTTS":"#9C27B0",
-                                      "Rożne":"#FF9800","Kartki":"#F44336"}
-                        
-                        nogi_html = []
-                        for i, z in enumerate(kupon_ako["zdarzenia"], 1):
-                            cc = cat_colors.get(z.get("kategoria",""), "#888")
-                            nogi_html.append(
-                                f"<tr>"
-                                f"<td style='padding:8px 12px;color:#888;width:40px'>{i}</td>"
-                                f"<td style='padding:8px 12px'>{z.get('emoji','⚽')} <b>{z['mecz']}</b></td>"
-                                f"<td style='padding:8px 12px'>"
-                                f"  <span style='background:{cc}22;color:{cc};padding:4px 10px;"
-                                f"border-radius:12px;font-size:0.9em'>{z['typ']}</span>"
-                                f"</td>"
-                                f"<td style='padding:8px 12px;text-align:right;color:#aaa'>{z['p']:.0%}</td>"
-                                f"<td style='padding:8px 12px;text-align:right;font-weight:bold;color:#4CAF50'>"
-                                f"{z['fair']:.2f}</td>"
-                                f"</tr>"
-                            )
-                        
-                        st.markdown(
-                            f"<div style='border:1px solid #333;border-radius:8px;overflow:hidden;margin-bottom:16px'>"
-                            f"<table style='width:100%;border-collapse:collapse;font-size:0.95em'>"
-                            f"<thead><tr style='background:#1e1e2e;color:#888;font-size:0.85em;text-transform:uppercase'>"
-                            f"<th style='padding:10px 12px'>#</th>"
-                            f"<th style='padding:10px 12px;text-align:left'>Mecz</th>"
-                            f"<th style='padding:10px 12px;text-align:left'>Zdarzenie</th>"
-                            f"<th style='padding:10px 12px;text-align:right'>P</th>"
-                            f"<th style='padding:10px 12px;text-align:right'>Fair Odds</th>"
-                            f"</tr></thead>"
-                            f"<tbody>{''.join(nogi_html)}</tbody>"
-                            f"</table></div>",
-                            unsafe_allow_html=True,
-                        )
-                        
-                        col_save, col_csv = st.columns(2)
-                        with col_save:
-                            if st.button("💾 Zapisz eksperymentalny", key="save_ako_coupon", use_container_width=True):
-                                zapisz_kupon_db(kupon_ako, wybrana_liga, int(nb),
-                                              typ_kuponu=f"AKO ~{target_slider:.1f}")
-                                st.success("✅ Zapisano")
-                        with col_csv:
-                            kupon_csv = pd.DataFrame(kupon_ako["zdarzenia"]).to_csv(index=False, decimal=",")
-                            st.download_button("⬇️ Pobierz CSV", data=kupon_csv,
-                                             file_name=f"kupon_ako_{int(nb)}.csv", mime="text/csv",
-                                             use_container_width=True)
-                    else:
-                        st.info("Brak kombinacji spełniających kryteria")
-
-                st.divider()
-
-                # =================================================================
-                # 3. RANKING ZDARZEŃ KOLEJKI
-                # =================================================================
-                st.markdown("### 📊 Ranking zdarzeń kolejki")
-                st.caption("Wszystkie zdarzenia z p ≥ 55%, sortowane według pewności")
-                
-                ranking_df = ranking_zdarzen(wszystkie_zd)
-                if not ranking_df.empty:
-                    ranking_df_display = ranking_df.copy()
-                    ranking_df_display["fair"] = ranking_df_display["fair"].apply(lambda x: f"{x:.2f}")
-                    
+                if wszystkie_zd:
+                    df_rank = pd.DataFrame(wszystkie_zd)
                     st.dataframe(
-                        ranking_df_display,
+                        df_rank,
                         use_container_width=True,
                         hide_index=True,
                         column_config={
-                            "kolor": st.column_config.TextColumn("", width="small"),
-                            "mecz": st.column_config.TextColumn("Mecz", width="medium"),
-                            "typ": st.column_config.TextColumn("Typ", width="medium"),
-                            "bezpieczenstwo": st.column_config.TextColumn("P", width="small"),
-                            "fair": st.column_config.TextColumn("Fair", width="small"),
-                            "kategoria": st.column_config.TextColumn("Kategoria", width="small"),
+                            "Kolor": st.column_config.TextColumn("", width="small"),
+                            "Mecz": st.column_config.TextColumn("Mecz", width="medium"),
+                            "Rynek": st.column_config.TextColumn("Rynek", width="small"),
+                            "Typ": st.column_config.TextColumn("Typ", width="medium"),
+                            "P": st.column_config.TextColumn("P", width="small"),
+                            "Fair": st.column_config.TextColumn("Fair", width="small"),
                         }
                     )
+                    
+                    # Filtry
+                    st.caption("Filtruj według rynku:")
+                    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+                    with col_f1:
+                        if st.button("🎯 Wszystkie"):
+                            pass
+                    with col_f2:
+                        if st.button("⚽ Tylko gole"):
+                            filtered = df_rank[df_rank['Rynek'].isin(['Gole', '1X2', 'BTTS'])]
+                            st.dataframe(filtered, use_container_width=True, hide_index=True)
+                    with col_f3:
+                        if st.button("🚩 Tylko rożne"):
+                            filtered = df_rank[df_rank['Rynek'] == 'Rożne']
+                            st.dataframe(filtered, use_container_width=True, hide_index=True)
+                    with col_f4:
+                        if st.button("🟨 Tylko kartki"):
+                            filtered = df_rank[df_rank['Rynek'] == 'Kartki']
+                            st.dataframe(filtered, use_container_width=True, hide_index=True)
                 else:
-                    st.info("Brak zdarzeń spełniających kryteria")
-
-                st.divider()
-
-                # =================================================================
-                # 4. STATYSTYKI KUPONÓW
-                # =================================================================
-                st.markdown("### 📈 Skuteczność kuponów")
-                
-                kupony_hist = wczytaj_kupony(wybrana_liga)
-                
-                if kupony_hist:
-                    stats = []
-                    for k in kupony_hist:
-                        status = weryfikuj_kupon(k, historical) if k.get("zdarzenia") else "⏳ Oczekuje"
-                        stats.append({
-                            "kolejka": k["kolejnosc"],
-                            "typ": k.get("typ_kuponu", "Kupon"),
-                            "ako": k["ako"],
-                            "status": status,
-                            "trafiony": 1 if status == "✅ Trafiony" else 0 if status == "❌ Chybiony" else None,
-                            "data": k["data"]
-                        })
-                    
-                    df_stats = pd.DataFrame(stats)
-                    df_zakonczone = df_stats[df_stats["trafiony"].notna()]
-                    
-                    if not df_zakonczone.empty:
-                        col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-                        
-                        with col_s1:
-                            skutecznosc = df_zakonczone["trafiony"].mean()
-                            st.metric("🎯 Skuteczność", f"{skutecznosc:.0%}")
-                        
-                        with col_s2:
-                            st.metric("📊 Liczba", f"{len(df_zakonczone)}")
-                        
-                        with col_s3:
-                            sr_ako = df_zakonczone["ako"].mean()
-                            st.metric("📈 Śr. AKO", f"{sr_ako:.2f}")
-                        
-                        with col_s4:
-                            if skutecznosc > 0:
-                                roi = (sr_ako * skutecznosc - 1) * 100
-                                st.metric("💰 ROI", f"{roi:.0f}%", 
-                                         delta_color="normal" if roi > 0 else "inverse")
-                        
-                        if len(df_zakonczone) >= 3:
-                            st.line_chart(
-                                df_zakonczone.set_index("kolejka")[["trafiony"]].rolling(3).mean(),
-                                height=200
-                            )
-                    
-                    with st.expander("📋 Historia wszystkich kuponów", expanded=False):
-                        cat_colors = {"1X2":"#2196F3","Gole":"#4CAF50","BTTS":"#9C27B0",
-                                      "Rożne":"#FF9800","Kartki":"#F44336"}
-                        
-                        for k in kupony_hist[:10]:
-                            status_k = weryfikuj_kupon(k, historical) if k.get("zdarzenia") else "⏳ Oczekuje"
-                            bg_k = {"✅ Trafiony":"#1a2e1a", "❌ Chybiony":"#2e1a1a"}.get(status_k, "transparent")
-                            
-                            with st.expander(
-                                f"{status_k}  ·  Kolejka {k['kolejnosc']}  "
-                                f"·  AKO {k['ako']:.2f}  ·  {k.get('typ_kuponu', 'Kupon')}  ·  {k['data']}",
-                                expanded=False
-                            ):
-                                for z in k.get("zdarzenia", [])[:5]:
-                                    cc = cat_colors.get(z.get("kategoria",""), "#888")
-                                    st.markdown(
-                                        f"<div style='background:{bg_k};padding:4px 8px;border-radius:4px;margin-bottom:3px'>"
-                                        f"{z.get('emoji','⚽')} **{z['mecz']}** – "
-                                        f"<span style='color:{cc}'>{z['typ']}</span> "
-                                        f"({z.get('p', 0):.0%} · fair {z.get('fair', 0):.2f})"
-                                        f"</div>",
-                                        unsafe_allow_html=True,
-                                    )
-                                if len(k.get("zdarzenia", [])) > 5:
-                                    st.caption(f"... i {len(k['zdarzenia'])-5} więcej")
-                                st.caption(f"p_combo: {k.get('p_combo', 0):.1%}")
-                else:
-                    st.info("Brak zapisanych kuponów. Zapisz pierwszy kupon aby zobaczyć statystyki.")
+                    st.info("Brak zdarzeń spełniających kryterium p ≥ 60%")
             else:
-                st.info("Brak nadchodzących meczów w terminarzu.")
+                st.info("Brak nadchodzących meczów")
         else:
-            st.warning("Brak danych terminarza lub statystyk drużyn.")
+            st.warning("Brak danych")
 
     # =========================================================================
-    # TAB 4 – WERYFIKACJA PREDYKCJI
+    # TAB 4 – SKUTECZNOŚĆ + ROI
     # =========================================================================
     with tab4:
-        st.subheader("✅ Weryfikacja skuteczności modelu")
-        st.caption("Predykcje zapisujesz w zakładce **⚽ Przewidywane Wyniki** (toggle 💾). Dane w SQLite.")
+        st.subheader("📈 Skuteczność modelu per rynek")
+        st.caption("Analiza skuteczności i ROI dla każdego typu rynku. ROI liczone na fair odds (bez marży).")
 
-        predykcje = wczytaj_predykcje()
-
-        if not predykcje:
-            st.info("Brak zapisanych predykcji. Zapisz je przed kolejką, wróć tu po meczach.")
-        else:
-            df_wer     = weryfikuj_predykcje(predykcje, historical)
-            zakonczone = df_wer[df_wer["Trafiony"].notna()]
-
-            if not zakonczone.empty:
-                trafione   = int(zakonczone["Trafiony"].sum())
-                wszystkie  = len(zakonczone)
-                skuteczn   = trafione / wszystkie
-                sr_odds_tr = zakonczone[zakonczone["Trafiony"] == True]["Fair Odds"].mean()
-                brier_vals = zakonczone["Brier"].dropna()
-                sr_brier   = brier_vals.mean() if len(brier_vals) > 0 else float("nan")
-                brier_delta = f"{0.667 - sr_brier:+.3f} vs random" if not np.isnan(sr_brier) else None
-
-                with st.container(border=True):
-                    m1, m2, m3, m4, m5 = st.columns(5)
-                    m1.metric("⚽ Rozegrane",     wszystkie)
-                    m2.metric("✅ Trafione",        trafione)
-                    m3.metric("🎯 Skuteczność",    f"{skuteczn:.1%}")
-                    m4.metric("💰 Śr. odds (hit)", f"{sr_odds_tr:.2f}" if not np.isnan(sr_odds_tr) else "–")
-                    m5.metric("📐 Brier Score ↓",  f"{sr_brier:.3f}" if not np.isnan(sr_brier) else "–",
-                              delta=brier_delta, delta_color="normal",
-                              help="Niżej = lepiej. Losowy model ~0.667, dobry <0.50")
-
-                wyk1, wyk2 = st.columns(2)
-                with wyk1:
-                    if len(brier_vals) >= 3:
-                        st.markdown("**📈 Brier Score w czasie**")
-                        bs_time = (zakonczone[zakonczone["Brier"].notna()]
-                                   .groupby("Kolejka")["Brier"].mean()
-                                   .reset_index().rename(columns={"Brier": "Brier Score"}))
-                        bs_time["Kolejka"] = bs_time["Kolejka"].astype(str)
-                        st.line_chart(bs_time.set_index("Kolejka"), height=220)
-                    else:
-                        st.markdown("**📈 Brier Score w czasie**")
-                        st.caption("Dostępne po min. 3 kolejkach.")
-                with wyk2:
-                    st.markdown("**🎯 Skuteczność per typ**")
-                    per_typ = (zakonczone.groupby("Typ")["Trafiony"]
-                               .agg(["sum","count"])
-                               .rename(columns={"sum":"Trafione","count":"Mecze"}))
-                    per_typ["Hit %"] = (per_typ["Trafione"]/per_typ["Mecze"]*100).round(1)
-                    st.dataframe(per_typ[["Mecze","Trafione","Hit %"]].sort_values("Hit %",ascending=False),
-                                 use_container_width=True, height=220)
-
-                pred_z_prob = zakonczone[zakonczone["Brier"].notna()].copy()
-                if len(pred_z_prob) >= 15:
-                    st.markdown("**📐 Reliability Curve** *(kalibracja modelu)*")
-                    bins     = [0, 0.40, 0.50, 0.60, 0.70, 0.80, 1.01]
-                    labels_b = ["<40%","40-50%","50-60%","60-70%","70-80%",">80%"]
-                    pred_z_prob["p_typ_est"] = pred_z_prob["Fair Odds"].apply(
-                        lambda o: 1/o if o > 0 else 0.5)
-                    pred_z_prob["koszyk"] = pd.cut(
-                        pred_z_prob["p_typ_est"], bins=bins, labels=labels_b, right=False)
-                    rel = (pred_z_prob.groupby("koszyk", observed=True)["Trafiony"]
-                           .agg(["mean","count"])
-                           .rename(columns={"mean":"Hit Rate","count":"N"})
-                           .reset_index())
-                    rel = rel[rel["N"] >= 3]
-                    if len(rel) >= 2:
-                        w_rc, h_rc, pad_rc = 500, 300, 50
-                        def rc_px(xv, yv):
-                            px = pad_rc + (xv - 0.3) / 0.6 * (w_rc - 2*pad_rc)
-                            py = h_rc - pad_rc - yv * (h_rc - 2*pad_rc)
-                            return px, py
-                        diag      = [rc_px(t, t) for t in [0.3, 0.5, 0.7, 0.9]]
-                        diag_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag)
-                        circles_rc = []
-                        bin_mid_map = {"<40%":0.35,"40-50%":0.45,"50-60%":0.55,
-                                       "60-70%":0.65,"70-80%":0.75,">80%":0.85}
-                        for _, rrow in rel.iterrows():
-                            xv = bin_mid_map.get(str(rrow["koszyk"]), 0.5)
-                            yv = rrow["Hit Rate"]; n = rrow["N"]
-                            px, py = rc_px(xv, yv)
-                            r_size = min(max(int(n * 1.5), 5), 20)
-                            diff   = yv - xv
-                            col_rc = "#4CAF50" if abs(diff)<0.05 else ("#FF9800" if abs(diff)<0.12 else "#F44336")
-                            circles_rc.append(
-                                f"<circle cx='{px:.0f}' cy='{py:.0f}' r='{r_size}' "
-                                f"fill='{col_rc}' fill-opacity='0.8' stroke='white' stroke-width='1.5'>"
-                                f"<title>Model: {xv:.0%} | Hit: {yv:.0%} | N={n}</title></circle>"
-                                f"<text x='{px+r_size+3:.0f}' y='{py+4:.0f}' "
-                                f"font-size='9' fill='#aaa' font-family='sans-serif'>"
-                                f"{yv:.0%} (n={n})</text>"
-                            )
-                        svg_rc = (
-                            f'<svg width="{w_rc}" height="{h_rc}" '
-                            f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
-                            f'<polyline points="{diag_line}" fill="none" stroke="#444" '
-                            f'stroke-width="1.5" stroke-dasharray="6,4"/>'
-                            f'<text x="{w_rc-pad_rc+4}" y="{pad_rc-4}" font-size="9" '
-                            f'fill="#555" font-family="sans-serif">idealny model</text>'
-                            f'{"".join(circles_rc)}'
-                            f'<text x="{w_rc//2}" y="{h_rc-6}" text-anchor="middle" '
-                            f'font-size="10" fill="#888" font-family="sans-serif">'
-                            f'Pewność modelu (p_typ) →</text>'
-                            f'<text x="12" y="{h_rc//2}" text-anchor="middle" '
-                            f'font-size="10" fill="#888" font-family="sans-serif" '
-                            f'transform="rotate(-90,12,{h_rc//2})">Rzeczywisty Hit Rate →</text>'
-                            f'</svg>'
-                        )
-                        st.markdown(svg_rc, unsafe_allow_html=True)
-                        st.caption("Punkty na przekątnej = model idealnie skalibrowany.")
-                    else:
-                        st.caption("Za mało danych w koszykach.")
-                elif 5 <= len(pred_z_prob) < 15:
-                    st.info(f"📐 Reliability curve po min. 15 predykcjach. Masz {len(pred_z_prob)}.")
-
-                per_liga = (zakonczone.groupby("Liga")["Trafiony"]
-                            .agg(["sum","count"])
-                            .rename(columns={"sum":"Trafione","count":"Mecze"}))
-                per_liga["Hit %"] = (per_liga["Trafione"]/per_liga["Mecze"]*100).round(1)
-                if len(per_liga) > 1:
-                    st.markdown("**🌍 Skuteczność per liga**")
-                    st.bar_chart(per_liga["Hit %"], height=180)
-
+        stats_df = statystyki_skutecznosci(wybrana_liga if wybrana_liga != "Wszystkie" else None)
+        
+        if not stats_df.empty:
+            # Kolorowanie wierszy
+            def koloruj_wiersz(row):
+                if row['ROI'].strip('%+') > '3':
+                    return ['background-color: #1a3a1a'] * len(row)
+                elif row['ROI'].strip('%+') < '-3':
+                    return ['background-color: #3a1a1a'] * len(row)
+                return [''] * len(row)
+            
+            styled_df = stats_df.style.apply(koloruj_wiersz, axis=1)
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+            
+            # Wykres ROI
             st.divider()
-            st.markdown("### 📋 Historia predykcji")
-            fc1, fc2, _ = st.columns([2, 2, 6])
-            with fc1:
-                filtr_s = st.selectbox("Status", ["Wszystkie","✅ Trafione","❌ Chybione","⏳ Oczekujące"],
-                                       label_visibility="collapsed")
-            with fc2:
-                ligi_d = ["Wszystkie ligi"] + sorted(df_wer["Liga"].unique().tolist())
-                filtr_l = st.selectbox("Liga", ligi_d, label_visibility="collapsed")
-
-            df_show = df_wer.copy()
-            if filtr_s == "✅ Trafione":    df_show = df_show[df_show["Status"]=="✅ trafiony"]
-            elif filtr_s == "❌ Chybione":  df_show = df_show[df_show["Status"]=="❌ chybiony"]
-            elif filtr_s == "⏳ Oczekujące": df_show = df_show[df_show["Status"]=="⏳ oczekuje"]
-            if filtr_l != "Wszystkie ligi": df_show = df_show[df_show["Liga"]==filtr_l]
-
-            ikony_t2 = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
-            html_rows = []
-            for _, row in df_show[["Liga","Mecz","Kolejka","Typ","Fair Odds","Wynik","Status","Brier","Data"]].iterrows():
-                bg = "#1a2e1a" if row["Status"]=="✅ trafiony" else ("#2e1a1a" if row["Status"]=="❌ chybiony" else "transparent")
-                st_html = (f"<span style='color:#4CAF50;font-weight:bold'>✅ trafiony</span>"
-                           if row["Status"]=="✅ trafiony" else
-                           f"<span style='color:#F44336;font-weight:bold'>❌ chybiony</span>"
-                           if row["Status"]=="❌ chybiony" else
-                           "<span style='color:#888'>⏳ oczekuje</span>")
-                br_str = f"{row['Brier']:.3f}" if pd.notna(row["Brier"]) else "–"
-                html_rows.append(
-                    f"<tr style='background:{bg}'>"
-                    f"<td style='padding:5px 8px;color:#aaa;font-size:0.82em'>{row['Liga']}</td>"
-                    f"<td style='padding:5px 8px;font-weight:bold'>{row['Mecz']}</td>"
-                    f"<td style='padding:5px 8px;text-align:center;color:#888'>{row['Kolejka']}</td>"
-                    f"<td style='padding:5px 8px;text-align:center'>"
-                    f"{ikony_t2.get(row['Typ'],'⚪')} <b>{row['Typ']}</b></td>"
-                    f"<td style='padding:5px 8px;text-align:center;color:#888'>{row['Fair Odds']:.2f}</td>"
-                    f"<td style='padding:5px 8px;text-align:center;font-weight:bold'>{row['Wynik']}</td>"
-                    f"<td style='padding:5px 8px'>{st_html}</td>"
-                    f"<td style='padding:5px 8px;text-align:center;color:#888;font-size:0.85em'>{br_str}</td>"
-                    f"<td style='padding:5px 8px;color:#666;font-size:0.80em'>{row['Data']}</td>"
-                    f"</tr>"
-                )
-            st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333;margin-top:8px'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.82em;"
-                f"text-transform:uppercase;letter-spacing:0.05em'>"
-                f"<th style='padding:8px;text-align:left'>Liga</th>"
-                f"<th style='padding:8px;text-align:left'>Mecz</th>"
-                f"<th style='padding:8px;text-align:center'>Kol.</th>"
-                f"<th style='padding:8px;text-align:center'>Typ</th>"
-                f"<th style='padding:8px;text-align:center'>Odds</th>"
-                f"<th style='padding:8px;text-align:center'>Wynik</th>"
-                f"<th style='padding:8px;text-align:left'>Status</th>"
-                f"<th style='padding:8px;text-align:center'>Brier</th>"
-                f"<th style='padding:8px;text-align:left'>Data</th>"
-                f"</tr></thead><tbody>{''.join(html_rows)}</tbody></table></div>",
-                unsafe_allow_html=True,
-            )
-
-            ec1, ec2 = st.columns([3,1])
-            with ec1:
-                st.download_button("⬇️ Pobierz historię (CSV)",
-                                   data=df_wer.drop(columns=["Trafiony"]).to_csv(index=False, decimal=","),
-                                   file_name="historia_predykcji.csv", mime="text/csv")
-            with ec2:
-                if st.button("🗑️ Wyczyść bazę", type="secondary"):
-                    usun_wszystkie_predykcje()
-                    st.success("Baza wyczyszczona.")
-                    st.rerun()
+            st.markdown("**📊 ROI per rynek**")
+            
+            chart_data = stats_df.copy()
+            chart_data['ROI_value'] = chart_data['ROI'].str.replace('%', '').str.replace('+', '').astype(float)
+            chart_data = chart_data.sort_values('ROI_value', ascending=True)
+            
+            st.bar_chart(chart_data.set_index('Rynek')['ROI_value'])
+            
+            # Podsumowanie
+            st.divider()
+            st.markdown("**📋 Podsumowanie**")
+            
+            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+            with col_s1:
+                total_typów = stats_df['Typów'].sum()
+                st.metric("Łącznie typów", f"{total_typów}")
+            with col_s2:
+                total_trafione = stats_df['Trafione'].sum()
+                st.metric("Łącznie trafione", f"{total_trafione}")
+            with col_s3:
+                avg_skutecznosc = total_trafione / total_typów if total_typów > 0 else 0
+                st.metric("Śr. skuteczność", f"{avg_skutecznosc:.1%}")
+            with col_s4:
+                # Ważone ROI
+                weighted_roi = (stats_df['ROI_value'] * stats_df['Typów']).sum() / stats_df['Typów'].sum()
+                st.metric("Ważony ROI", f"{weighted_roi:+.1%}")
+        else:
+            st.info("Brak danych do analizy. Zapisz predykcje w zakładce 'Analiza Meczu' i poczekaj na wyniki.")
 
     # =========================================================================
-    # TAB 5 – TABELA I FORMA
+    # TAB 5 – KALIBRACJA MODELU
     # =========================================================================
     with tab5:
-        st.subheader("📊 Aktualna Sytuacja")
-        c_l, c_f = st.columns([2, 1])
-        with c_l:
-            st.write("**Tabela Ligowa** *(tylko bieżący sezon)*")
-            st.dataframe(tabela, use_container_width=True)
-        with c_f:
-            st.write("**Forma (5 ostatnich)**")
-            st.dataframe(pd.DataFrame.from_dict(forma_dict, orient="index", columns=["Forma"]),
-                         use_container_width=True)
+        st.subheader("📉 Kalibracja modelu")
+        st.caption("Sprawdza, czy model jest dobrze skalibrowany – czy prawdopodobieństwa pokrywają się z rzeczywistością.")
 
-    # =========================================================================
-    # TAB 6 – POWER RATING
-    # =========================================================================
-    with tab6:
-        st.subheader("🏆 Power Rating drużyn")
-        st.caption("Siła ataku i obrony normalizowana do średniej ligowej (=1.0). "
-                   "Kolor punktu = forma ostatnich 5 meczów.")
-
-        if not srednie_df.empty:
-            avg_h_pr = srednie_lig["avg_home"]
-            avg_a_pr = srednie_lig["avg_away"]
-            power_rows = []
-            for team in srednie_df.index:
-                row = srednie_df.loc[team]
-                atak   = ((row["Gole strzelone (dom)"] / avg_h_pr) +
-                           (row["Gole strzelone (wyjazd)"] / avg_a_pr)) / 2
-                obrona = 2 - ((row["Gole stracone (dom)"] / avg_h_pr) +
-                               (row["Gole stracone (wyjazd)"] / avg_a_pr)) / 2
-                forma  = forma_dict.get(team, "")
-                fs     = forma.count("W") - forma.count("L")
-                power_rows.append({"Drużyna": team, "Atak": round(atak,3),
-                                   "Obrona": round(obrona,3), "Forma score": fs,
-                                   "Forma": forma or "?",
-                                   "Power": round((atak+obrona)/2, 3)})
-            df_power = pd.DataFrame(power_rows).sort_values("Power",ascending=False).reset_index(drop=True)
-
-            # SVG scatter
-            x_vals = df_power["Atak"].tolist(); y_vals = df_power["Obrona"].tolist()
-            names  = df_power["Drużyna"].tolist(); fs_vals = df_power["Forma score"].tolist()
-            x_min, x_max = min(x_vals)-0.1, max(x_vals)+0.1
-            y_min, y_max = min(y_vals)-0.1, max(y_vals)+0.1
-            W, H, pad = 700, 480, 60
-            def to_px(xv, yv):
-                return (pad + (xv-x_min)/(x_max-x_min)*(W-2*pad),
-                        H - pad - (yv-y_min)/(y_max-y_min)*(H-2*pad))
-            def fc(fs): return "#4CAF50" if fs>=2 else ("#F44336" if fs<=-2 else "#FF9800")
-            circles_pr = []; labels_pr = []
-            for i, (nm, xv, yv, fs) in enumerate(zip(names, x_vals, y_vals, fs_vals)):
-                px, py = to_px(xv, yv)
-                col    = fc(fs)
-                circles_pr.append(
-                    f"<circle cx='{px:.1f}' cy='{py:.1f}' r='7' fill='{col}' "
-                    f"fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
-                    f"<title>{nm}\nAtak: {xv:.2f} | Obrona: {yv:.2f} | Forma: {df_power.loc[i,'Forma']}</title>"
-                    f"</circle>"
-                )
-                labels_pr.append(f"<text x='{px+9:.1f}' y='{py+4:.1f}' "
-                                  f"font-size='9' fill='#ccc' font-family='sans-serif'>{nm[:8]}</text>")
-            cx_pr, _  = to_px(1.0, y_min); _, cy_pr = to_px(x_min, 1.0)
-            svg_pr = (
-                f'<svg width="{W}" height="{H}" style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
-                f'<line x1="{pad}" y1="{H-pad}" x2="{W-pad}" y2="{H-pad}" stroke="#444" stroke-width="1"/>'
-                f'<line x1="{pad}" y1="{pad}" x2="{pad}" y2="{H-pad}" stroke="#444" stroke-width="1"/>'
-                f'<line x1="{cx_pr:.1f}" y1="{pad}" x2="{cx_pr:.1f}" y2="{H-pad}" '
-                f'stroke="#555" stroke-width="1" stroke-dasharray="4,4"/>'
-                f'<line x1="{pad}" y1="{cy_pr:.1f}" x2="{W-pad}" y2="{cy_pr:.1f}" '
-                f'stroke="#555" stroke-width="1" stroke-dasharray="4,4"/>'
-                f'<text x="{cx_pr+6:.1f}" y="{cy_pr-8:.1f}" font-size="9" fill="#555" font-family="sans-serif">'
-                f'silny atak + silna obrona</text>'
-                f'<text x="{W//2}" y="{H-8}" text-anchor="middle" font-size="11" fill="#888" font-family="sans-serif">Siła ataku →</text>'
-                f'<text x="12" y="{H//2}" text-anchor="middle" font-size="11" fill="#888" '
-                f'font-family="sans-serif" transform="rotate(-90,12,{H//2})">Siła obrony →</text>'
-                f'{"".join(circles_pr)}{"".join(labels_pr)}'
-                f'<circle cx="{W-120}" cy="20" r="6" fill="#4CAF50" stroke="white" stroke-width="1"/>'
-                f'<text x="{W-110}" y="25" font-size="9" fill="#aaa" font-family="sans-serif">Dobra forma</text>'
-                f'<circle cx="{W-120}" cy="38" r="6" fill="#FF9800" stroke="white" stroke-width="1"/>'
-                f'<text x="{W-110}" y="43" font-size="9" fill="#aaa" font-family="sans-serif">Neutralna</text>'
-                f'<circle cx="{W-120}" cy="56" r="6" fill="#F44336" stroke="white" stroke-width="1"/>'
-                f'<text x="{W-110}" y="61" font-size="9" fill="#aaa" font-family="sans-serif">Słaba forma</text>'
-                f'</svg>'
+        kal_df = kalibracja_modelu(wybrana_liga if wybrana_liga != "Wszystkie" else None)
+        
+        if not kal_df.empty:
+            # Tabela kalibracji
+            kal_display = kal_df.copy()
+            kal_display['p_srednia'] = kal_display['p_srednia'].apply(lambda x: f"{x:.1%}")
+            kal_display['skutecznosc'] = kal_display['skutecznosc'].apply(lambda x: f"{x:.1%}")
+            kal_display['rozbieznosc'] = kal_display['rozbieznosc'].apply(lambda x: f"{x:+.1%}")
+            
+            st.dataframe(
+                kal_display[['przedzial', 'liczba', 'p_srednia', 'skutecznosc', 'rozbieznosc']],
+                use_container_width=True,
+                hide_index=True
             )
-            st.markdown(svg_pr, unsafe_allow_html=True)
-            st.caption("Hover nad punktem = pełna nazwa i statystyki.")
-
+            
+            # Wykres kalibracji
             st.divider()
-            st.markdown("**Ranking Power Rating**")
-            max_pw = df_power["Power"].max()
-            pr_rows = []
-            for rank, row in df_power[["Drużyna","Power","Atak","Obrona","Forma"]].iterrows():
-                bw = int(row["Power"] / max_pw * 100)
-                pc = "#4CAF50" if row["Power"] >= 1.0 else "#F44336"
-                pr_rows.append(
-                    f"<tr><td style='padding:5px 8px;color:#888;width:30px'>{rank+1}</td>"
-                    f"<td style='padding:5px 8px;font-weight:bold'>{row['Drużyna']}</td>"
-                    f"<td style='padding:5px 8px;width:160px'>"
-                    f"  <div style='display:flex;align-items:center;gap:6px'>"
-                    f"    <div style='flex:1;background:#333;border-radius:3px;height:6px'>"
-                    f"      <div style='background:{pc};width:{bw}%;height:6px;border-radius:3px'></div>"
-                    f"    </div>"
-                    f"    <span style='color:{pc};font-weight:bold;font-size:0.85em;min-width:36px'>{row['Power']:.3f}</span>"
-                    f"  </div></td>"
-                    f"<td style='padding:5px 8px;text-align:center;color:#4CAF50'>{row['Atak']:.3f}</td>"
-                    f"<td style='padding:5px 8px;text-align:center;color:#2196F3'>{row['Obrona']:.3f}</td>"
-                    f"<td style='padding:5px 8px;font-family:monospace;letter-spacing:2px'>{row['Forma']}</td>"
-                    f"</tr>"
-                )
-            st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.80em;text-transform:uppercase'>"
-                f"<th style='padding:8px'>#</th><th style='padding:8px;text-align:left'>Drużyna</th>"
-                f"<th style='padding:8px;text-align:left'>Power Rating</th>"
-                f"<th style='padding:8px;text-align:center'>Atak</th>"
-                f"<th style='padding:8px;text-align:center'>Obrona</th>"
-                f"<th style='padding:8px;text-align:left'>Forma</th></tr></thead>"
-                f"<tbody>{''.join(pr_rows)}</tbody></table></div>",
-                unsafe_allow_html=True,
+            st.markdown("**📊 Wykres kalibracji**")
+            
+            # Przygotuj dane do wykresu
+            chart_cal = kal_df.copy()
+            chart_cal['p_ideal'] = chart_cal['p_srednia']
+            
+            # Prosty wykres słupkowy
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+            
+            fig = make_subplots(rows=1, cols=2, 
+                                subplot_titles=("Skuteczność vs P modelu", "Rozbieżność"),
+                                specs=[[{"type": "bar"}, {"type": "bar"}]])
+            
+            fig.add_trace(
+                go.Bar(name='P modelu', x=chart_cal['przedzial'], y=chart_cal['p_srednia'],
+                       marker_color='#2196F3', text=chart_cal['p_srednia'].apply(lambda x: f"{x:.1%}"),
+                       textposition='outside'),
+                row=1, col=1
             )
+            fig.add_trace(
+                go.Bar(name='Rzeczywista', x=chart_cal['przedzial'], y=chart_cal['skutecznosc'],
+                       marker_color='#4CAF50', text=chart_cal['skutecznosc'].apply(lambda x: f"{x:.1%}"),
+                       textposition='outside'),
+                row=1, col=1
+            )
+            
+            fig.add_trace(
+                go.Bar(name='Rozbieżność', x=chart_cal['przedzial'], y=chart_cal['rozbieznosc'],
+                       marker_color=['#4CAF50' if x > 0 else '#F44336' for x in chart_cal['rozbieznosc']],
+                       text=chart_cal['rozbieznosc'].apply(lambda x: f"{x:+.1%}"),
+                       textposition='outside'),
+                row=1, col=2
+            )
+            
+            fig.update_layout(height=400, showlegend=True, margin=dict(l=50, r=50, t=50, b=50))
+            fig.update_xaxes(title_text="Przedział prawdopodobieństwa", row=1, col=1)
+            fig.update_xaxes(title_text="Przedział prawdopodobieństwa", row=1, col=2)
+            fig.update_yaxes(title_text="Prawdopodobieństwo", row=1, col=1, tickformat='.0%')
+            fig.update_yaxes(title_text="Rozbieżność", row=1, col=2, tickformat='.0%')
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Interpretacja
+            st.divider()
+            st.markdown("**🔍 Interpretacja**")
+            
+            avg_bias = kal_df['rozbieznosc'].mean()
+            if abs(avg_bias) < 0.02:
+                st.success(f"✅ Model jest dobrze skalibrowany (średni bias {avg_bias:+.1%})")
+            elif avg_bias > 0:
+                st.warning(f"⚠️ Model jest zbyt ostrożny – niedoszacowuje szans (bias {avg_bias:+.1%})")
+            else:
+                st.warning(f"⚠️ Model jest zbyt pewny siebie – przeszacowuje szanse (bias {avg_bias:+.1%})")
         else:
-            st.info("Brak danych do Power Rating.")
-
-    # =========================================================================
-    # TAB 7 – MODEL & DANE
-    # =========================================================================
-    with tab7:
-        st.subheader("📈 Parametry modelu i dane")
-        with st.container(border=True):
-            st.markdown("**🔀 Blend sezonów**")
-            bc1, bc2, bc3 = st.columns(3)
-            bc1.metric("Mecze bieżącego sezonu", n_biezacy)
-            bc2.metric("Waga poprzedniego sezonu", f"{w_prev:.0%}",
-                       help="Maleje automatycznie w miarę gromadzenia danych")
-            bc3.metric("Łącznie rekordów w modelu", len(historical))
-        with st.container(border=True):
-            st.markdown("**⚙️ Parametry Dixon-Coles**")
-            dc1, dc2, dc3 = st.columns(3)
-            dc1.metric("ρ (rho) kalibrowane", f"{rho:.4f}",
-                       help="Kalibrowane empirycznie z historii tej ligi.")
-            dc2.metric("Śr. gole (dom)",    f"{srednie_lig['avg_home']:.2f}")
-            dc3.metric("Śr. gole (wyjazd)", f"{srednie_lig['avg_away']:.2f}")
-        st.divider()
-        st.write("**Średnie ważone drużyn** *(ostatnie 10 meczów, wagi rosnące)*")
-        st.dataframe(srednie_df.sort_index(), use_container_width=True)
-        st.caption(f"📅 Ostatnia aktualizacja: {historical['Date'].max().strftime('%d.%m.%Y')}")
-        if st.button("🔄 Odśwież dane"):
-            st.cache_data.clear()
-            st.rerun()
+            st.info("Brak danych do kalibracji. Potrzebne są zapisane predykcje z wynikami.")
 
     # Debug
     if debug_mode:
