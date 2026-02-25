@@ -226,12 +226,15 @@ def _pobierz_csv(league_code: str, sezon: str) -> pd.DataFrame:
         df = pd.read_csv(StringIO(r.text))
         df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
         df = df.dropna(subset=["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"])
-        for col in ["HC", "AC", "HY", "AY", "HR", "AR"]:
+        for col in ["HC", "AC", "HY", "AY", "HR", "AR", "HST", "AST"]:
             if col not in df.columns:
-                df[col] = 0
+                df[col] = np.nan
         df["total_gole"]   = df["FTHG"] + df["FTAG"]
         df["total_kartki"] = df["HY"] + df["AY"] + (df["HR"] + df["AR"]) * 2
         df["total_rozne"]  = df["HC"] + df["AC"]
+        # SOT dostępne tylko gdy obie kolumny mają dane
+        df["HST"] = pd.to_numeric(df["HST"], errors="coerce")
+        df["AST"] = pd.to_numeric(df["AST"], errors="coerce")
         return df.sort_values("Date")
     except Exception:
         return pd.DataFrame()
@@ -292,6 +295,9 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
         away = df[df["AwayTeam"] == d].tail(10)
         if len(home) < 2 or len(away) < 2:
             continue
+        # SOT – celne strzały (jeśli dostępne w danych)
+        home_sot = home["HST"].dropna() if "HST" in home.columns else pd.Series([], dtype=float)
+        away_sot = away["AST"].dropna() if "AST" in away.columns else pd.Series([], dtype=float)
         dane[d] = {
             "Gole strzelone (dom)":    weighted_mean(home["FTHG"]),
             "Gole stracone (dom)":     weighted_mean(home["FTAG"]),
@@ -301,6 +307,9 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
             "Różne (wyjazd)":          weighted_mean(away["total_rozne"]),
             "Kartki (dom)":            weighted_mean(home["total_kartki"]),
             "Kartki (wyjazd)":         weighted_mean(away["total_kartki"]),
+            # SOT – None gdy brak danych (np. brak kolumn w starszych CSV)
+            "SOT (dom)":     weighted_mean(home_sot) if len(home_sot) >= 2 else None,
+            "SOT (wyjazd)":  weighted_mean(away_sot) if len(away_sot) >= 2 else None,
         }
     return pd.DataFrame(dane).T.round(2)
 
@@ -321,25 +330,67 @@ def oblicz_srednie_ligowe(df_json: str) -> dict:
     rho_00 = (obs_00 / exp_00 - 1) / (avg_h * avg_a) if exp_00 > 0 else -0.13
     rho_11 = -(obs_11 / exp_11 - 1) if exp_11 > 0 else -0.13
     rho = float(np.clip(np.mean([rho_00, rho_11]), -0.25, 0.0))
-    return {"avg_home": avg_h, "avg_away": avg_a, "rho": rho, "n_biezacy": n_biezacy}
+    # Średnie SOT ligowe (do konwersji SOT→gole w blendzie)
+    avg_sot_h = float(df["HST"].dropna().mean()) if "HST" in df.columns and df["HST"].notna().sum() > 10 else None
+    avg_sot_a = float(df["AST"].dropna().mean()) if "AST" in df.columns and df["AST"].notna().sum() > 10 else None
+    return {"avg_home": avg_h, "avg_away": avg_a, "rho": rho,
+            "n_biezacy": n_biezacy,
+            "avg_sot_home": avg_sot_h, "avg_sot_away": avg_sot_a}
+
+# Waga SOT w blendzie z golami – parametr globalny
+SOT_BLEND_W = 0.30   # 0.0 = tylko gole, 0.30 = 70% gole + 30% SOT
 
 def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
-                  srednie_lig: dict, forma_dict: dict) -> tuple:
+                  srednie_lig: dict, forma_dict: dict,
+                  sot_w: float = SOT_BLEND_W) -> tuple:
+    """
+    Zwraca (lam_h, lam_a, lam_r, lam_k, sot_aktywny).
+    lam_h/lam_a to blend: (1-sot_w)*lam_goals + sot_w*lam_sot gdy SOT dostępne.
+    sot_aktywny=True gdy blend był użyty.
+    """
     avg_h = max(srednie_lig["avg_home"], 0.5)
     avg_a = max(srednie_lig["avg_away"], 0.5)
     atak_h   = srednie_df.loc[h, "Gole strzelone (dom)"]    / avg_h
     obrona_a = srednie_df.loc[a, "Gole stracone (wyjazd)"]  / avg_a
     atak_a   = srednie_df.loc[a, "Gole strzelone (wyjazd)"] / avg_a
     obrona_h = srednie_df.loc[h, "Gole stracone (dom)"]     / avg_h
+
     def form_weight(team: str) -> float:
         f = forma_dict.get(team, "")
         w = f.count("W"); l = f.count("L")
         return float(np.clip(1.0 + (w - l) * 0.03, 0.85, 1.15))
-    lam_h = avg_h * atak_h * obrona_a * form_weight(h)
-    lam_a = avg_a * atak_a * obrona_h * form_weight(a)
+
+    lam_h_goals = avg_h * atak_h * obrona_a * form_weight(h)
+    lam_a_goals = avg_a * atak_a * obrona_h * form_weight(a)
+
+    # SOT blend – tylko gdy oba mają dane i sot_w > 0
+    sot_aktywny = False
+    lam_h = lam_h_goals
+    lam_a = lam_a_goals
+
+    if sot_w > 0:
+        sot_h = srednie_df.loc[h, "SOT (dom)"]   if "SOT (dom)"    in srednie_df.columns else None
+        sot_a = srednie_df.loc[a, "SOT (wyjazd)"] if "SOT (wyjazd)" in srednie_df.columns else None
+        avg_sot_h = srednie_lig.get("avg_sot_home", None)
+        avg_sot_a = srednie_lig.get("avg_sot_away", None)
+        if (sot_h is not None and sot_a is not None and
+                avg_sot_h and avg_sot_a and
+                not np.isnan(sot_h) and not np.isnan(sot_a)):
+            # λ_sot = oczekiwane gole wyliczone ze strzałów (konwersja SOT→gole)
+            # Średnia konwersja SOT→gol w lidze to avg_goals/avg_sot
+            conv_h = avg_h / avg_sot_h  # np. 1.5 gola / 5.0 SOT = 0.30
+            conv_a = avg_a / avg_sot_a
+            lam_sot_h = sot_h * conv_h * obrona_a * form_weight(h)
+            lam_sot_a = sot_a * conv_a * obrona_h * form_weight(a)
+            lam_h = (1 - sot_w) * lam_h_goals + sot_w * lam_sot_h
+            lam_a = (1 - sot_w) * lam_a_goals + sot_w * lam_sot_a
+            sot_aktywny = True
+
     lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
     lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
-    return float(np.clip(lam_h, 0.3, 4.5)), float(np.clip(lam_a, 0.3, 4.5)), lam_r, lam_k
+    return (float(np.clip(lam_h, 0.3, 4.5)),
+            float(np.clip(lam_a, 0.3, 4.5)),
+            lam_r, lam_k, sot_aktywny)
 
 def oblicz_forme(df: pd.DataFrame) -> dict:
     if df.empty:
@@ -614,17 +665,28 @@ def statystyki_skutecznosci(liga: str = None) -> pd.DataFrame:
         sr_p_model = group['p_model'].mean()
         sr_fair = group['fair_odds'].mean()
         
-        # ROI = (trafione * (śr_fair - 1) - (wszystkie - trafione)) / wszystkie
         roi = (trafione * (sr_fair - 1) - (wszystkie - trafione)) / wszystkie if wszystkie > 0 else 0
-        
+        # Brier Score dla zdarzeń binarnych: mean((p - y)^2)
+        brier = float(((group["p_model"] - group["trafione"].astype(float)) ** 2).mean())
+        # Brier Score losowego modelu dla tego rynku to sr_p_model*(1-sr_p_model)*2 ≈ 0.25 przy p=0.5
+        # Referencja: model mówi zawsze sr_p_model → BS_ref = sr_p_model*(1-skutecznosc)^2 + (1-sr_p_model)*skutecznosc^2
+        brier_ref = sr_p_model*(1-skutecznosc)**2 + (1-sr_p_model)*skutecznosc**2
+        brier_skill = 1 - brier/brier_ref if brier_ref > 0 else 0  # >0 = lepszy od baseline
+
         stats.append({
             "Rynek": nazwa,
             "Typów": wszystkie,
-            "Trafione": trafione,
+            "Trafione": int(trafione),
             "Skuteczność": f"{skutecznosc:.1%}",
             "Śr. P model": f"{sr_p_model:.1%}",
             "Śr. Fair": f"{sr_fair:.2f}",
+            "Brier ↓": round(brier, 3),
+            "Skill": round(brier_skill, 2),
             "ROI": f"{roi:+.1%}",
+            # wartości numeryczne do sortowania/wykresu
+            "_roi_v": roi,
+            "_brier_v": brier,
+            "_skut_v": skutecznosc,
             "Kolor": "🟢" if roi > 0.03 else ("🟡" if roi > -0.03 else "🔴")
         })
     
@@ -663,6 +725,84 @@ def kalibracja_modelu(liga: str = None) -> pd.DataFrame:
     kalibracja['rozbieznosc'] = kalibracja['skutecznosc'] - kalibracja['p_srednia']
     
     return kalibracja
+
+# ===========================================================================
+# METRYKI ANALITYCZNE – Brier, ECE, Rolling
+# ===========================================================================
+def metryki_globalne(liga: str = None) -> dict:
+    """Zwraca globalne metryki modelu: Brier Score, ECE, sharpness."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    q = "SELECT p_model, trafione FROM zdarzenia WHERE trafione IS NOT NULL"
+    params = []
+    if liga:
+        q += " AND liga=?"; params.append(liga)
+    df = pd.read_sql_query(q, con, params=params)
+    con.close()
+    if df.empty or len(df) < 5:
+        return {}
+    y   = df["trafione"].astype(float).values
+    p   = df["p_model"].values
+    n   = len(df)
+    # Brier Score
+    brier = float(np.mean((p - y) ** 2))
+    # Brier Skill Score vs naive (baseline: zawsze przewiduj średnią)
+    p_mean = y.mean()
+    brier_naive = float(np.mean((p_mean - y) ** 2))
+    bss = 1 - brier / brier_naive if brier_naive > 0 else 0.0
+    # ECE – Expected Calibration Error (ważona średnia |p_bucket - hit_rate|)
+    bins   = np.arange(0.5, 1.05, 0.05)
+    labels = [f"{b:.0%}" for b in bins[:-1]]
+    df2 = df.copy()
+    df2["bucket"] = pd.cut(df2["p_model"], bins=bins, labels=labels, right=False)
+    ece = 0.0
+    for _, g in df2.groupby("bucket", observed=True):
+        if len(g) == 0: continue
+        ece += (len(g) / n) * abs(g["p_model"].mean() - g["trafione"].mean())
+    # Sharpness – odchylenie standardowe prognoz (im wyższe, tym bardziej zdecydowany model)
+    sharpness = float(np.std(p))
+    return {
+        "n": n, "brier": round(brier, 4), "bss": round(bss, 4),
+        "ece": round(ece, 4), "sharpness": round(sharpness, 4),
+        "avg_p": round(float(p.mean()), 3), "hit_rate": round(float(y.mean()), 3),
+    }
+
+def rolling_stats(liga: str = None, okno: int = 50) -> pd.DataFrame:
+    """Zwraca rolling Brier Score i skuteczność per zdarzenie (posortowane chronologicznie)."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    q = "SELECT data, kolejnosc, p_model, trafione FROM zdarzenia WHERE trafione IS NOT NULL"
+    params = []
+    if liga:
+        q += " AND liga=?"; params.append(liga)
+    q += " ORDER BY data ASC, kolejnosc ASC"
+    df = pd.read_sql_query(q, con, params=params)
+    con.close()
+    if df.empty or len(df) < okno:
+        return pd.DataFrame()
+    df["y"]         = df["trafione"].astype(float)
+    df["brier_pkt"] = (df["p_model"] - df["y"]) ** 2
+    df["idx"]       = range(len(df))
+    # Rolling średnia
+    df["brier_roll"] = df["brier_pkt"].rolling(okno, min_periods=okno//2).mean()
+    df["hit_roll"]   = df["y"].rolling(okno, min_periods=okno//2).mean()
+    df["p_roll"]     = df["p_model"].rolling(okno, min_periods=okno//2).mean()
+    return df[["idx", "data", "kolejnosc", "brier_roll", "hit_roll", "p_roll"]].dropna()
+
+def brier_per_kolejka(liga: str = None) -> pd.DataFrame:
+    """Średni Brier Score per kolejka – do wykresu trendów."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    q = ("SELECT kolejnosc, AVG((p_model - CAST(trafione AS REAL)) * (p_model - CAST(trafione AS REAL))) as brier, "
+         "AVG(CAST(trafione AS REAL)) as hit_rate, COUNT(*) as n "
+         "FROM zdarzenia WHERE trafione IS NOT NULL")
+    params = []
+    if liga:
+        q += " AND liga=?"; params.append(liga)
+    q += " GROUP BY kolejnosc ORDER BY kolejnosc"
+    df = pd.read_sql_query(q, con, params=params)
+    con.close()
+    return df
 
 # ===========================================================================
 # KOMENTARZ
@@ -808,7 +948,7 @@ if not historical.empty:
                 a_s = map_nazwa(m["away_team"])
                 if h_s not in srednie_df.index or a_s not in srednie_df.index:
                     continue
-                lh_s, la_s, _, _ = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
+                lh_s, la_s, _r_s, _k_s, _sot_s = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
                 pr_s = predykcja_meczu(lh_s, la_s, rho=rho)
                 ikona = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}.get(pr_s["typ"], "⚪")
                 st.sidebar.markdown(
@@ -817,6 +957,19 @@ if not historical.empty:
                     f"· {pr_s['conf_emoji']} {pr_s['conf_level']}",
                     unsafe_allow_html=True,
                 )
+
+    # ── Mini metryki w sidebarze ────────────────────────────────────────────
+    mg_side = metryki_globalne(wybrana_liga)
+    if mg_side:
+        st.sidebar.divider()
+        st.sidebar.markdown("**📐 Model Health**")
+        brier_s = mg_side["brier"]
+        ece_s   = mg_side["ece"]
+        b_icon  = "🟢" if brier_s < 0.20 else ("🟡" if brier_s < 0.25 else "🔴")
+        e_icon  = "🟢" if ece_s < 0.05  else ("🟡" if ece_s < 0.10  else "🔴")
+        brier_line = f"{b_icon} Brier: `{brier_s:.4f}`  {e_icon} ECE: `{ece_s:.4f}`"
+        hit_line   = f"N: `{mg_side['n']}` | Hit: `{mg_side['hit_rate']:.1%}`"
+        st.sidebar.markdown(brier_line + "  \n" + hit_line, unsafe_allow_html=True)
 
     # TABS – NOWA STRUKTURA
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -860,7 +1013,7 @@ if not historical.empty:
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
                     
-                    lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    lam_h, lam_a, lam_r, lam_k, sot_ok = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                     
                     p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
                     p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
@@ -914,14 +1067,15 @@ if not historical.empty:
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
 
-                    lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    lam_h, lam_a, lam_r, lam_k, sot_ok = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                     pred = predykcja_meczu(lam_h, lam_a, rho=rho)
                     data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
                     kolumna = kol_a if idx % 2 == 0 else kol_b
                     ikony_t = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
                     conf_i  = "🟢" if pred["conf_level"]=="High" else ("🟡" if pred["conf_level"]=="Medium" else "🔴")
-                    label_t2 = (f"{conf_i} {h} vs {a}"
+                    sot_badge = " 🎯SOT" if sot_ok else ""
+                    label_t2 = (f"{conf_i} {h} vs {a}{sot_badge}"
                                 f"  ·  {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
                                 f"  ·  {data_meczu}")
                     with kolumna:
@@ -969,6 +1123,16 @@ if not historical.empty:
                             mc1.metric("1", f"{pred['p_home']:.0%}", f"fair {pred['fo_home']}")
                             mc2.metric("X", f"{pred['p_draw']:.0%}", f"fair {pred['fo_draw']}")
                             mc3.metric("2", f"{pred['p_away']:.0%}", f"fair {pred['fo_away']}")
+                            # Lambda info + SOT status
+                            sot_info = " · 🎯 SOT blend aktywny" if sot_ok else " · gole only"
+                            st.markdown(
+                                f"<div style='text-align:center;font-size:0.78em;color:#555;margin-top:2px'>"
+                                f"λ {h[:8]}: <b style='color:#aaa'>{lam_h:.2f}</b> &nbsp;|&nbsp; "
+                                f"λ {a[:8]}: <b style='color:#aaa'>{lam_a:.2f}</b> &nbsp;|&nbsp; "
+                                f"Σ: <b style='color:#aaa'>{lam_h+lam_a:.2f}</b>"
+                                f"<span style='color:#4CAF50'>{sot_info}</span></div>",
+                                unsafe_allow_html=True,
+                            )
 
                             # Alternatywne rynki
                             with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
@@ -1021,7 +1185,7 @@ if not historical.empty:
                             a_s = map_nazwa(mecz_s["away_team"])
                             if h_s not in srednie_df.index or a_s not in srednie_df.index:
                                 continue
-                            lhs, las, lrs, lks = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
+                            lhs, las, lrs, lks, _sot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
                             pred_s = predykcja_meczu(lhs, las, rho=rho)
                             mecz_str_s = f"{h_s} – {a_s}"
                             # Główny typ 1X2
@@ -1070,7 +1234,7 @@ if not historical.empty:
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
                         
-                        lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                        lam_h, lam_a, lam_r, lam_k, sot_ok = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                         pred = predykcja_meczu(lam_h, lam_a, rho=rho)
                         mecz_str = f"{h} – {a}"
 
@@ -1186,51 +1350,83 @@ if not historical.empty:
 
         stats_df = statystyki_skutecznosci(wybrana_liga)
 
+        # Dodaj kolumnę ROI_value do statystyk (numeryczna, do sortowania)
+        stats_df = statystyki_skutecznosci(wybrana_liga)
+
         if not stats_df.empty:
-            # Wyodrębnij ROI numerycznie (dla sortowania i wykresu)
             stats_df["ROI_value"] = stats_df["ROI"].str.replace("+","").str.replace("%","").astype(float)
 
-            # ── Metryki ogólne ────────────────────────────────────────────
+            # ── Metryki globalne (Brier, ECE, BSS) ────────────────────────
+            mg = metryki_globalne(wybrana_liga)
             total_typow   = int(stats_df["Typów"].sum())
             total_trafion = int(stats_df["Trafione"].sum())
             avg_skut      = total_trafion / total_typow if total_typow > 0 else 0
-            w_roi         = (stats_df["ROI_value"] * stats_df["Typów"]).sum() / total_typow if total_typow > 0 else 0
+            w_roi_raw     = (stats_df["ROI_value"] * stats_df["Typów"]).sum() / total_typow if total_typow > 0 else 0
 
             with st.container(border=True):
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("📋 Typów łącznie",   total_typow)
-                m2.metric("✅ Trafione",          total_trafion)
-                m3.metric("🎯 Skuteczność",      f"{avg_skut:.1%}")
-                m4.metric("💹 Ważony ROI",       f"{w_roi:+.1f}%",
-                          delta_color="normal" if w_roi > 0 else "inverse")
+                st.caption("📊 Metryki globalne modelu")
+                m1, m2, m3, m4, m5, m6 = st.columns(6)
+                m1.metric("📋 Typów",       total_typow)
+                m2.metric("✅ Trafione",     total_trafion)
+                m3.metric("🎯 Hit Rate",    f"{avg_skut:.1%}")
+                m4.metric("💹 Ważony ROI",  f"{w_roi_raw:+.1f}%",
+                          delta_color="normal" if w_roi_raw > 0 else "inverse")
+                if mg:
+                    bss_delta = f"vs naive {mg['bss']:+.3f}"
+                    m5.metric("📐 Brier Score ↓", f"{mg['brier']:.4f}",
+                              delta=bss_delta,
+                              delta_color="normal" if mg['bss'] > 0 else "inverse",
+                              help="0=idealny, 0.25=losowy. BSS>0 = model bije naive predictor.")
+                    ece_col  = "normal" if mg['ece'] < 0.05 else "inverse"
+                    m6.metric("🎯 ECE ↓",    f"{mg['ece']:.4f}",
+                              delta=f"sharpness {mg['sharpness']:.3f}",
+                              delta_color=ece_col,
+                              help="Expected Calibration Error. <0.05 = dobrze skalibrowany.")
+                else:
+                    m5.metric("📐 Brier", "–")
+                    m6.metric("🎯 ECE",   "–")
 
             # ── HTML tabela per rynek ─────────────────────────────────────
-            st.markdown("**Szczegóły per rynek** *(sortowane po ROI malejąco)*")
-            stats_sorted = stats_df.sort_values("ROI_value", ascending=False)
+            # Sortuj: wybór kryterium
+            sort_by = st.radio("Sortuj po", ["ROI ↓", "Brier ↑", "Typów ↓"],
+                               horizontal=True, key="sort_tab4")
+            if sort_by == "ROI ↓":
+                stats_sorted = stats_df.sort_values("_roi_v", ascending=False)
+            elif sort_by == "Brier ↑":
+                stats_sorted = stats_df.sort_values("_brier_v", ascending=True)
+            else:
+                stats_sorted = stats_df.sort_values("Typów", ascending=False)
+
             cat_col4 = {"1X2":"#4CAF50","Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336"}
 
             rows_s4 = []
             for _, row in stats_sorted.iterrows():
-                roi_v = row["ROI_value"]
-                roi_col = "#4CAF50" if roi_v > 3 else ("#F44336" if roi_v < -3 else "#FF9800")
-                roi_bg  = "#1a2e1a" if roi_v > 3 else ("#2e1a1a" if roi_v < -3 else "transparent")
-                # Pasek skuteczności
-                skut_v  = float(row["Skuteczność"].replace("%","")) / 100
+                roi_v   = row["_roi_v"]
+                brier_v = row["_brier_v"]
+                skill_v = row["Skill"]
+                roi_col = "#4CAF50" if roi_v > 0.03 else ("#F44336" if roi_v < -0.03 else "#FF9800")
+                roi_bg  = "#1a2e1a" if roi_v > 0.03 else ("#2e1a1a" if roi_v < -0.03 else "transparent")
+                skut_v  = row["_skut_v"]
                 bw_s    = int(skut_v * 100)
-                # Kategoria (z nazwy rynku)
                 rynek_n = row["Rynek"]
                 kat4    = next((k for k in cat_col4 if k in rynek_n), "Gole")
                 kc4     = cat_col4.get(kat4, "#888")
+                # Brier color: niższy = lepszy (<0.20 dobry, >0.25 zły)
+                bc4 = "#4CAF50" if brier_v < 0.20 else ("#FF9800" if brier_v < 0.25 else "#F44336")
+                # Skill score: >0 = lepszy od baseline
+                sk_c = "#4CAF50" if skill_v > 0.05 else ("#888" if skill_v > -0.05 else "#F44336")
                 rows_s4.append(
                     f"<tr style='background:{roi_bg}'>"
                     f"<td style='padding:6px 10px;font-weight:bold;font-size:0.88em'>{rynek_n}</td>"
                     f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Typów']}</td>"
                     f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Trafione']}</td>"
-                    f"<td style='padding:6px 10px;width:120px'>"
+                    f"<td style='padding:6px 10px;width:110px'>"
                     f"<div style='display:flex;align-items:center;gap:5px'>"
                     f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
                     f"<div style='background:{kc4};width:{bw_s}%;height:5px;border-radius:3px'></div></div>"
                     f"<span style='color:{kc4};font-size:0.82em;min-width:34px'>{row['Skuteczność']}</span></div></td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:{bc4};font-weight:bold'>{brier_v:.3f}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:{sk_c};font-size:0.85em'>{skill_v:+.2f}</td>"
                     f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Śr. P model']}</td>"
                     f"<td style='padding:6px 10px;text-align:center;color:#aaa'>{row['Śr. Fair']}</td>"
                     f"<td style='padding:6px 10px;text-align:right;font-weight:bold;color:{roi_col}'>{row['ROI']}</td>"
@@ -1239,17 +1435,22 @@ if not historical.empty:
                 )
             st.markdown(
                 f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.78em;text-transform:uppercase'>"
+                f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
+                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.75em;text-transform:uppercase'>"
                 f"<th style='padding:8px 10px;text-align:left'>Rynek</th>"
                 f"<th style='padding:8px 10px;text-align:center'>Typów</th>"
                 f"<th style='padding:8px 10px;text-align:center'>Trafione</th>"
                 f"<th style='padding:8px 10px;text-align:left'>Skuteczność</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Brier ↓</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Skill</th>"
                 f"<th style='padding:8px 10px;text-align:center'>Śr. P</th>"
                 f"<th style='padding:8px 10px;text-align:center'>Śr. Fair</th>"
                 f"<th style='padding:8px 10px;text-align:right'>ROI</th>"
                 f"<th style='padding:8px 10px;text-align:center'>Status</th>"
-                f"</tr></thead><tbody>{''.join(rows_s4)}</tbody></table></div>",
+                f"</tr></thead><tbody>{''.join(rows_s4)}</tbody></table></div>"
+                f"<p style='color:#444;font-size:0.73em;margin-top:4px'>"
+                f"Brier ↓: niższy = lepszy (0=idealny, 0.25=losowy). "
+                f"Skill: >0 = model bije baseline (naive predictor).</p>",
                 unsafe_allow_html=True,
             )
 
@@ -1289,19 +1490,72 @@ if not historical.empty:
             st.caption("ROI = (trafione × (fair−1) − chybione) / wszystkie. Symulacja na fair odds (bez marży bukmachera).")
 
             # Export
+            internal_cols = [c for c in stats_df.columns if c.startswith("_") or c in ["ROI_value","Kolor"]]
             st.download_button("⬇️ Pobierz statystyki (CSV)",
-                               data=stats_df.drop(columns=["ROI_value","Kolor"]).to_csv(index=False, decimal=","),
+                               data=stats_df.drop(columns=internal_cols, errors="ignore")
+                                   .to_csv(index=False, decimal=","),
                                file_name="skutecznosc_modelu.csv", mime="text/csv")
         else:
             st.info("Brak danych do analizy. Zapisz predykcje w zakładce 'Analiza Meczu' i poczekaj na wyniki.")
 
     # =========================================================================
-    # TAB 5 – KALIBRACJA MODELU
+    # TAB 5 – KALIBRACJA + ROLLING PERFORMANCE
     # =========================================================================
     with tab5:
-        st.subheader("📉 Kalibracja modelu")
-        st.caption("Sprawdza, czy model jest dobrze skalibrowany – czy prawdopodobieństwa pokrywają się z rzeczywistością.")
+        st.subheader("📉 Kalibracja modelu & Rolling Performance")
+        st.caption(
+            "Kalibracja: czy model mówi 65% → trafia ~65%? "
+            "Rolling: jak ewoluuje jakość modelu w czasie."
+        )
 
+        # ── ROLLING WINDOW ─────────────────────────────────────────────────
+        st.markdown("### 📈 Rolling Performance (okno 50 zdarzeń)")
+        okno_r = st.slider("Rozmiar okna rolling", 20, 100, 50, 10, key="roll_win")
+        roll_df = rolling_stats(wybrana_liga, okno=okno_r)
+
+        if not roll_df.empty:
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                st.markdown("**Brier Score rolling ↓** *(niższy = lepszy)*")
+                chart_brier = roll_df[["idx","brier_roll"]].rename(
+                    columns={"idx":"Zdarzenie","brier_roll":"Brier Score"}
+                ).set_index("Zdarzenie")
+                st.line_chart(chart_brier, height=200, color="#F44336")
+                last_b = roll_df["brier_roll"].iloc[-1]
+                trend_b = roll_df["brier_roll"].iloc[-1] - roll_df["brier_roll"].iloc[max(0,len(roll_df)-10)]
+                st.caption(f"Ostatni rolling Brier: **{last_b:.4f}** "
+                           f"({'↓ poprawa' if trend_b < 0 else '↑ pogorszenie'} o {abs(trend_b):.4f})")
+            with rc2:
+                st.markdown("**Hit Rate rolling** *(model vs rzeczywistość)*")
+                chart_hit = roll_df[["idx","hit_roll","p_roll"]].rename(
+                    columns={"idx":"Zdarzenie","hit_roll":"Hit Rate rzeczywisty","p_roll":"P model (avg)"}
+                ).set_index("Zdarzenie")
+                st.line_chart(chart_hit, height=200)
+                last_hit = roll_df["hit_roll"].iloc[-1]
+                last_p   = roll_df["p_roll"].iloc[-1]
+                gap = last_hit - last_p
+                gap_col = "✅" if abs(gap) < 0.03 else ("⚠️" if abs(gap) < 0.08 else "❌")
+                st.caption(f"{gap_col} Hit Rate: **{last_hit:.1%}** | P model: **{last_p:.1%}** | "
+                           f"Gap: **{gap:+.1%}**")
+        else:
+            st.info(f"Rolling dostępny po min. {okno_r//2} zdarzeniach z wynikami.")
+
+        # ── BRIER PER KOLEJKA ─────────────────────────────────────────────
+        bpk_df = brier_per_kolejka(wybrana_liga)
+        if not bpk_df.empty and len(bpk_df) >= 2:
+            st.divider()
+            st.markdown("### 📊 Brier Score per kolejka")
+            bpk_chart = bpk_df[["kolejnosc","brier","hit_rate"]].rename(
+                columns={"kolejnosc":"Kolejka","brier":"Brier Score","hit_rate":"Hit Rate"}
+            ).set_index("Kolejka")
+            st.line_chart(bpk_chart, height=180)
+            worst_k  = bpk_df.loc[bpk_df["brier"].idxmax(), "kolejnosc"]
+            best_k   = bpk_df.loc[bpk_df["brier"].idxmin(), "kolejnosc"]
+            st.caption(f"Najlepsza kolejka: **{int(best_k)}** ({bpk_df['brier'].min():.4f}) · "
+                       f"Najgorsza: **{int(worst_k)}** ({bpk_df['brier'].max():.4f})")
+
+        st.divider()
+        st.markdown("### 🎯 Reliability Curve")
         kal_df = kalibracja_modelu(wybrana_liga if wybrana_liga != "Wszystkie" else None)
         
         if not kal_df.empty:
