@@ -882,7 +882,7 @@ if not historical.empty:
                     )
 
                     with kolumna:
-                        with st.expander(label_exp, expanded=True):
+                        with st.expander(label_exp, expanded=False):
                             # Nagłówek drużyny
                             ch, cmid, ca = st.columns([5, 2, 5])
                             with ch:
@@ -976,85 +976,178 @@ if not historical.empty:
     # =========================================================================
     with tab3:
         st.subheader("✅ Weryfikacja skuteczności modelu")
-        st.caption(
-            "Predykcje zapisujesz w zakładce **⚽ Przewidywane Wyniki** (toggle 💾). "
-            "Dane trzymane są w SQLite – przeżywają restart serwera."
-        )
+        st.caption("Predykcje zapisujesz w zakładce **⚽ Przewidywane Wyniki** (toggle 💾). Dane trzymane w SQLite.")
 
         predykcje = wczytaj_predykcje()
 
         if not predykcje:
             st.info("Brak zapisanych predykcji. Zapisz je przed kolejką, wróć tu po meczach.")
         else:
-            df_wer = weryfikuj_predykcje(predykcje, historical)
+            df_wer     = weryfikuj_predykcje(predykcje, historical)
+            zakonczone = df_wer[df_wer["Trafiony"].notna()]
+            oczekujace = df_wer[df_wer["Trafiony"].isna()]
 
-            if not df_wer.empty:
-                zakonczone = df_wer[df_wer["Trafiony"].notna()]
+            # ── BLOK GÓRNY: metryki + wykresy ────────────────────────────────
+            if not zakonczone.empty:
+                trafione   = int(zakonczone["Trafiony"].sum())
+                wszystkie  = len(zakonczone)
+                skuteczn   = trafione / wszystkie
+                sr_odds_tr = zakonczone[zakonczone["Trafiony"] == True]["Fair Odds"].mean()
+                brier_vals = zakonczone["Brier"].dropna()
+                sr_brier   = brier_vals.mean() if len(brier_vals) > 0 else float("nan")
+                brier_delta = f"{0.667 - sr_brier:+.3f} vs random" if not np.isnan(sr_brier) else None
 
-                if not zakonczone.empty:
-                    trafione    = int(zakonczone["Trafiony"].sum())
-                    wszystkie   = len(zakonczone)
-                    skutecznosc = trafione / wszystkie
-                    sr_odds_tr  = zakonczone[zakonczone["Trafiony"] == True]["Fair Odds"].mean()
-                    brier_vals  = zakonczone["Brier"].dropna()
-                    sr_brier    = brier_vals.mean() if len(brier_vals) > 0 else float("nan")
-                    brier_delta = f"{0.667 - sr_brier:+.3f} vs random" if not np.isnan(sr_brier) else None
-
-                    st.markdown("### 📊 Podsumowanie")
+                # ── 5 metryk ─────────────────────────────────────────────────
+                with st.container(border=True):
                     m1, m2, m3, m4, m5 = st.columns(5)
-                    m1.metric("Rozegrane",        wszystkie)
-                    m2.metric("Trafione",          trafione)
-                    m3.metric("Skuteczność",       f"{skutecznosc:.1%}")
-                    m4.metric("Śr. odds (hit)",   f"{sr_odds_tr:.2f}" if not np.isnan(sr_odds_tr) else "–")
-                    m5.metric("Brier Score ↓",    f"{sr_brier:.3f}" if not np.isnan(sr_brier) else "–",
+                    m1.metric("⚽ Rozegrane",      wszystkie)
+                    m2.metric("✅ Trafione",         trafione)
+                    m3.metric("🎯 Skuteczność",     f"{skuteczn:.1%}")
+                    m4.metric("💰 Śr. odds (hit)",  f"{sr_odds_tr:.2f}" if not np.isnan(sr_odds_tr) else "–")
+                    m5.metric("📐 Brier Score ↓",   f"{sr_brier:.3f}" if not np.isnan(sr_brier) else "–",
                               delta=brier_delta, delta_color="normal",
-                              help="Niżej = lepiej. Losowy model ~0.667, dobry model <0.50")
+                              help="Niżej = lepiej. Losowy model ~0.667, dobry <0.50")
 
-                    # Wykres Brier Score w czasie (kalibracja w czasie)
+                # ── 2 kolumny: wykres BS + skuteczność per typ ────────────────
+                wyk1, wyk2 = st.columns(2)
+
+                with wyk1:
                     if len(brier_vals) >= 3:
-                        st.markdown("**📈 Brier Score kolejka po kolejce** *(niżej = model lepiej skalibrowany)*")
+                        st.markdown("**📈 Brier Score w czasie**")
                         bs_time = (
                             zakonczone[zakonczone["Brier"].notna()]
-                            .groupby("Kolejka")["Brier"]
-                            .mean()
-                            .reset_index()
-                            .rename(columns={"Brier": "Śr. Brier Score"})
+                            .groupby("Kolejka")["Brier"].mean()
+                            .reset_index().rename(columns={"Brier": "Brier Score"})
                         )
                         bs_time["Kolejka"] = bs_time["Kolejka"].astype(str)
-                        st.line_chart(bs_time.set_index("Kolejka"))
+                        st.line_chart(bs_time.set_index("Kolejka"), height=220)
+                    else:
+                        st.markdown("**📈 Brier Score w czasie**")
+                        st.caption("Dostępne po min. 3 kolejkach z predykcjami.")
 
-                    # Skuteczność per liga
-                    per_liga = (
-                        zakonczone.groupby("Liga")["Trafiony"]
+                with wyk2:
+                    st.markdown("**🎯 Skuteczność per typ**")
+                    per_typ = (
+                        zakonczone.groupby("Typ")["Trafiony"]
                         .agg(["sum","count"])
                         .rename(columns={"sum":"Trafione","count":"Mecze"})
                     )
-                    per_liga["Skuteczność %"] = (per_liga["Trafione"]/per_liga["Mecze"]*100).round(1)
-                    if len(per_liga) > 1:
-                        st.bar_chart(per_liga["Skuteczność %"])
+                    per_typ["Hit %"] = (per_typ["Trafione"] / per_typ["Mecze"] * 100).round(1)
+                    per_typ["Label"] = per_typ.apply(
+                        lambda r: f"{int(r['Trafione'])}/{int(r['Mecze'])}", axis=1
+                    )
+                    st.dataframe(
+                        per_typ[["Mecze","Trafione","Hit %"]].sort_values("Hit %", ascending=False),
+                        use_container_width=True, height=220,
+                    )
 
-                    st.divider()
+                # Skuteczność per liga – tylko jeśli więcej niż jedna
+                per_liga = (
+                    zakonczone.groupby("Liga")["Trafiony"]
+                    .agg(["sum","count"])
+                    .rename(columns={"sum":"Trafione","count":"Mecze"})
+                )
+                per_liga["Hit %"] = (per_liga["Trafione"]/per_liga["Mecze"]*100).round(1)
+                if len(per_liga) > 1:
+                    st.markdown("**🌍 Skuteczność per liga**")
+                    st.bar_chart(per_liga["Hit %"], height=180)
 
-                # Tabela szczegółowa
-                st.markdown("### 📋 Szczegółowe predykcje")
-                filtr = st.selectbox("Filtruj", ["Wszystkie","✅ Trafione","❌ Chybione","⏳ Oczekujące"])
-                df_show = df_wer.copy()
-                if filtr == "✅ Trafione":   df_show = df_show[df_show["Status"] == "✅ trafiony"]
-                elif filtr == "❌ Chybione": df_show = df_show[df_show["Status"] == "❌ chybiony"]
-                elif filtr == "⏳ Oczekujące": df_show = df_show[df_show["Status"] == "⏳ oczekuje"]
+            # ── BLOK DOLNY: tabela predykcji ─────────────────────────────────
+            st.divider()
+            st.markdown("### 📋 Historia predykcji")
 
-                st.dataframe(df_show.drop(columns=["Trafiony"]), use_container_width=True, hide_index=True)
+            # Filtry w jednym wierszu
+            fc1, fc2, fc3 = st.columns([2, 2, 6])
+            with fc1:
+                filtr_status = st.selectbox(
+                    "Status", ["Wszystkie","✅ Trafione","❌ Chybione","⏳ Oczekujące"],
+                    label_visibility="collapsed"
+                )
+            with fc2:
+                ligi_dostepne = ["Wszystkie ligi"] + sorted(df_wer["Liga"].unique().tolist())
+                filtr_liga = st.selectbox("Liga", ligi_dostepne, label_visibility="collapsed")
 
-                # Export historii
+            df_show = df_wer.copy()
+            if filtr_status == "✅ Trafione":    df_show = df_show[df_show["Status"] == "✅ trafiony"]
+            elif filtr_status == "❌ Chybione":  df_show = df_show[df_show["Status"] == "❌ chybiony"]
+            elif filtr_status == "⏳ Oczekujące": df_show = df_show[df_show["Status"] == "⏳ oczekuje"]
+            if filtr_liga != "Wszystkie ligi":   df_show = df_show[df_show["Liga"] == filtr_liga]
+
+            # Kolumna Status jako ikona + tekst, kolorowanie przez HTML
+            def row_html(row):
+                ikona_typ_map = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
+                s_ikona = ikona_typ_map.get(row["Typ"], "⚪")
+                brier_str = f"{row['Brier']:.3f}" if pd.notna(row["Brier"]) else "–"
+                # Kolor wiersza wg statusu
+                if row["Status"] == "✅ trafiony":
+                    bg = "#1a2e1a"
+                elif row["Status"] == "❌ chybiony":
+                    bg = "#2e1a1a"
+                else:
+                    bg = "transparent"
+                return (bg, s_ikona, brier_str)
+
+            # Renderuj jako HTML tabela (czytelniejsza niż st.dataframe dla tego przypadku)
+            cols_show = ["Liga","Mecz","Kolejka","Typ","Fair Odds","Wynik","Status","Brier","Data"]
+            df_render = df_show[cols_show].copy()
+
+            html_rows = []
+            for _, row in df_render.iterrows():
+                bg, s_ikona, brier_str = row_html(row)
+                if row["Status"] == "✅ trafiony":
+                    status_html = "<span style='color:#4CAF50;font-weight:bold'>✅ trafiony</span>"
+                elif row["Status"] == "❌ chybiony":
+                    status_html = "<span style='color:#F44336;font-weight:bold'>❌ chybiony</span>"
+                else:
+                    status_html = "<span style='color:#888'>⏳ oczekuje</span>"
+                ikony_typ2 = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
+                typ_html = f"{ikony_typ2.get(row['Typ'],'⚪')} <b>{row['Typ']}</b>"
+                html_rows.append(
+                    f"<tr style='background:{bg}'>"
+                    f"<td style='padding:5px 8px;color:#aaa;font-size:0.82em'>{row['Liga']}</td>"
+                    f"<td style='padding:5px 8px;font-weight:bold'>{row['Mecz']}</td>"
+                    f"<td style='padding:5px 8px;text-align:center;color:#888'>{row['Kolejka']}</td>"
+                    f"<td style='padding:5px 8px;text-align:center'>{typ_html}</td>"
+                    f"<td style='padding:5px 8px;text-align:center;color:#888'>{row['Fair Odds']:.2f}</td>"
+                    f"<td style='padding:5px 8px;text-align:center;font-weight:bold'>{row['Wynik']}</td>"
+                    f"<td style='padding:5px 8px'>{status_html}</td>"
+                    f"<td style='padding:5px 8px;text-align:center;color:#888;font-size:0.85em'>{brier_str}</td>"
+                    f"<td style='padding:5px 8px;color:#666;font-size:0.80em'>{row['Data']}</td>"
+                    f"</tr>"
+                )
+
+            html_table = f"""
+            <div style='overflow-x:auto;border-radius:8px;border:1px solid #333;margin-top:8px'>
+            <table style='width:100%;border-collapse:collapse;font-size:0.88em'>
+            <thead>
+                <tr style='background:#1e1e2e;color:#aaa;font-size:0.82em;text-transform:uppercase;letter-spacing:0.05em'>
+                    <th style='padding:8px;text-align:left'>Liga</th>
+                    <th style='padding:8px;text-align:left'>Mecz</th>
+                    <th style='padding:8px;text-align:center'>Kol.</th>
+                    <th style='padding:8px;text-align:center'>Typ</th>
+                    <th style='padding:8px;text-align:center'>Odds</th>
+                    <th style='padding:8px;text-align:center'>Wynik</th>
+                    <th style='padding:8px;text-align:left'>Status</th>
+                    <th style='padding:8px;text-align:center'>Brier</th>
+                    <th style='padding:8px;text-align:left'>Data</th>
+                </tr>
+            </thead>
+            <tbody>{"".join(html_rows)}</tbody>
+            </table></div>
+            """
+            st.markdown(html_table, unsafe_allow_html=True)
+
+            # Export + kasowanie
+            ec1, ec2 = st.columns([3, 1])
+            with ec1:
                 st.download_button(
-                    "⬇️ Pobierz historię predykcji (CSV)",
+                    "⬇️ Pobierz historię (CSV)",
                     data=df_wer.drop(columns=["Trafiony"]).to_csv(index=False, decimal=","),
                     file_name="historia_predykcji.csv",
                     mime="text/csv",
                 )
-
-                st.divider()
-                if st.button("🗑️ Wyczyść wszystkie predykcje", type="secondary"):
+            with ec2:
+                if st.button("🗑️ Wyczyść bazę", type="secondary"):
                     usun_wszystkie_predykcje()
                     st.success("Baza wyczyszczona.")
                     st.rerun()
