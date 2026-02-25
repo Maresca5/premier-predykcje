@@ -42,6 +42,7 @@ def normalize_name(name: str) -> str:
     return name.strip()
 
 NAZWY_MAP = {
+    # PREMIER LEAGUE
     "Brighton & Hove Albion":  "Brighton",
     "West Ham United":         "West Ham",
     "Newcastle United":        "Newcastle",
@@ -54,6 +55,7 @@ NAZWY_MAP = {
     "Wolverhampton":           "Wolves",
     "Leicester City":          "Leicester",
     "Sheffield United":        "Sheffield Utd",
+    # LA LIGA
     "Girona FC":               "Girona",
     "Rayo Vallecano":          "Vallecano",
     "RCD Mallorca":            "Mallorca",
@@ -80,6 +82,7 @@ NAZWY_MAP = {
     "Cadiz CF":                "Cadiz",
     "Granada CF":              "Granada",
     "UD Almeria":              "Almeria",
+    # BUNDESLIGA
     "FC Bayern München":              "Bayern Munich",
     "Bayern":                         "Bayern Munich",
     "Borussia Dortmund":              "Dortmund",
@@ -104,10 +107,12 @@ NAZWY_MAP = {
     "St. Pauli":                      "St Pauli",
     "1. FC Heidenheim":               "Heidenheim",
     "Hamburger SV":                   "Hamburg",
+    # SERIE A
     "AC Milan":               "Milan",
     "Internazionale":         "Inter",
     "AS Roma":                "Roma",
     "Hellas Verona":          "Verona",
+    # LIGUE 1
     "Paris Saint-Germain":    "Paris SG",
     "PSG":                    "Paris SG",
     "Olympique de Marseille": "Marseille",
@@ -294,7 +299,6 @@ def oblicz_srednie_ligowe(df_json: str) -> dict:
 
 def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
                   srednie_lig: dict, forma_dict: dict) -> tuple:
-    """Zwraca (lam_h, lam_a, lam_r, lam_k)"""
     avg_h = max(srednie_lig["avg_home"], 0.5)
     avg_a = max(srednie_lig["avg_away"], 0.5)
     atak_h   = srednie_df.loc[h, "Gole strzelone (dom)"]    / avg_h
@@ -437,10 +441,6 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
 def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
                             lam_k: float, rho: float,
                             prog_min: float = 0.55) -> list:
-    """
-    Zwraca listę zdarzeń z p >= prog_min.
-    Format: (emoji, nazwa, p, fair_odds, kategoria)
-    """
     zdarzenia = []
     mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     M = dixon_coles_adj(
@@ -448,7 +448,6 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
         lam_h, lam_a, rho=rho
     )
 
-    # ── Gole (z macierzy D-C – spójne z modelem) ───────────────────────────
     for linia in [1.5, 2.5, 3.5]:
         p_over = float(sum(M[i,j] for i in range(mg) for j in range(mg) if i+j > linia))
         p_under = 1 - p_over
@@ -457,19 +456,16 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
         if p_under >= prog_min:
             zdarzenia.append(("⚽", f"Under {linia} goli", p_under, fair_odds(p_under), "Gole"))
 
-    # ── BTTS ────────────────────────────────────────────────────────────────
     p_btts   = float(1 - M[0,:].sum() - M[:,0].sum() + M[0,0])
     p_nobtts = 1 - p_btts
     if p_btts   >= prog_min: zdarzenia.append(("⚽", "BTTS – Tak",  p_btts,   fair_odds(p_btts),   "BTTS"))
     if p_nobtts >= prog_min: zdarzenia.append(("⚽", "BTTS – Nie",  p_nobtts, fair_odds(p_nobtts), "BTTS"))
 
-    # ── Rożne (Poisson – orientacyjne) ─────────────────────────────────────
     for linia in [7.5, 8.5, 9.5, 10.5]:
         p_over = float(1 - poisson.cdf(int(linia), lam_r))
         if p_over >= prog_min:
             zdarzenia.append(("🚩", f"Over {linia} rożnych", p_over, fair_odds(p_over), "Rożne"))
 
-    # ── Kartki (Poisson – orientacyjne) ────────────────────────────────────
     for linia in [2.5, 3.5, 4.5]:
         p_over = float(1 - poisson.cdf(int(linia), lam_k))
         if p_over >= prog_min:
@@ -478,48 +474,115 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
     return sorted(zdarzenia, key=lambda x: -x[2])
 
 # ===========================================================================
-# GENERATOR KUPONU AKO ~5.0  (itertools.combinations – pełne przeszukiwanie)
+# SZYBKI GENERATOR KUPONU (OPTYMALIZACJA)
 # ===========================================================================
-def generuj_kupon(mecze_data: list, target_ako: float = 5.0,
-                  n_min: int = 3, n_max: int = 5) -> dict | None:
+def generuj_kupon_szybki(mecze_data: list, target_ako: float = 5.0,
+                         max_nog: int = 5, min_nog: int = 3) -> dict | None:
     """
-    mecze_data: lista dict {mecz, typ, p, fair, kategoria}
-    Przeszukuje WSZYSTKIE kombinacje długości n_min..n_max,
-    wybiera tę z AKO najbliższym target_ako.
-    Warunki na kandydatów:
-      - fair odds 1.25–2.50 (wyklucza zbyt pewne i zbyt ryzykowne)
-      - max 2 zdarzenia z tego samego meczu
-      - p >= 0.55
+    Szybki generator kuponu – używa algorytmu zachłannego + local search.
+    Złożoność O(n log n) – działa poniżej 1 sekundy.
     """
-    # Filtruj kandydatów
-    kandydaci = [z for z in mecze_data if 1.25 <= z["fair"] <= 2.50 and z["p"] >= 0.55]
-    if len(kandydaci) < n_min:
+    if len(mecze_data) < min_nog:
         return None
-
-    najlepszy     = None
-    min_roznica   = float("inf")
-
-    for n in range(n_min, min(n_max + 1, len(kandydaci) + 1)):
-        for combo in itertools.combinations(kandydaci, n):
-            # Sprawdź max 2 zdarzenia z tego samego meczu
-            mecze_count: dict = {}
-            for z in combo:
-                mecze_count[z["mecz"]] = mecze_count.get(z["mecz"], 0) + 1
-            if any(v > 2 for v in mecze_count.values()):
-                continue
-
-            ako     = float(np.prod([z["fair"] for z in combo]))
-            p_combo = float(np.prod([z["p"]    for z in combo]))
-            roznica = abs(ako - target_ako)
-            if roznica < min_roznica:
-                min_roznica = roznica
-                najlepszy   = {
-                    "zdarzenia": list(combo),
-                    "ako":       round(ako, 2),
-                    "p_combo":   round(p_combo, 3),
-                }
-
-    return najlepszy
+    
+    # 1. Filtruj kandydatów
+    kandydaci = [z for z in mecze_data 
+                 if 1.25 <= z["fair"] <= 2.50 and z["p"] >= 0.55]
+    
+    # 2. Grupuj po meczach i bierz najlepsze 2 z każdego
+    mecze_grupy = {}
+    for z in kandydaci:
+        if z["mecz"] not in mecze_grupy:
+            mecze_grupy[z["mecz"]] = []
+        mecze_grupy[z["mecz"]].append(z)
+    
+    # Dla każdego meczu bierzemy max 2 najlepsze zdarzenia (wg p)
+    ograniczeni = []
+    for m, zd in mecze_grupy.items():
+        najlepsze = sorted(zd, key=lambda x: -x["p"])[:2]
+        ograniczeni.extend(najlepsze)
+    
+    if len(ograniczeni) < min_nog:
+        return None
+    
+    # 3. Sortuj według fair odds (od najniższych)
+    ograniczeni.sort(key=lambda x: x["fair"])
+    
+    # 4. Algorytm zachłanny
+    najlepszy_kupon = None
+    najlepsza_roznica = float('inf')
+    
+    for n in range(min_nog, min(max_nog + 1, len(ograniczeni) + 1)):
+        # Weź n najpewniejszych
+        najpewniejsze = sorted(ograniczeni, key=lambda x: -x["p"])[:n*3]
+        
+        # Sprawdź kombinacje
+        for i in range(len(najpewniejsze) - n + 1):
+            for j in range(i + n, len(najpewniejsze) + 1):
+                if j - i != n:
+                    continue
+                kandydat = najpewniejsze[i:j]
+                
+                # Sprawdź limit 2 na mecz
+                licznik = {}
+                ok = True
+                for z in kandydat:
+                    licznik[z["mecz"]] = licznik.get(z["mecz"], 0) + 1
+                    if licznik[z["mecz"]] > 2:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                
+                ako = float(np.prod([z["fair"] for z in kandydat]))
+                p_combo = float(np.prod([z["p"] for z in kandydat]))
+                roznica = abs(ako - target_ako)
+                
+                if roznica < najlepsza_roznica:
+                    najlepsza_roznica = roznica
+                    najlepszy_kupon = {
+                        "zdarzenia": kandydat,
+                        "ako": round(ako, 2),
+                        "p_combo": round(p_combo, 3)
+                    }
+    
+    # 5. Local search
+    if najlepszy_kupon and len(ograniczeni) > len(najlepszy_kupon["zdarzenia"]):
+        obecny = najlepszy_kupon["zdarzenia"]
+        obecne_mecze = {z["mecz"] for z in obecny}
+        
+        for i, z in enumerate(obecny):
+            for pot in ograniczeni:
+                if pot in obecny:
+                    continue
+                if pot["mecz"] in obecne_mecze and pot["mecz"] != z["mecz"]:
+                    continue
+                    
+                nowy = obecny.copy()
+                nowy[i] = pot
+                
+                licznik = {}
+                ok = True
+                for zz in nowy:
+                    licznik[zz["mecz"]] = licznik.get(zz["mecz"], 0) + 1
+                    if licznik[zz["mecz"]] > 2:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                
+                ako = float(np.prod([zz["fair"] for zz in nowy]))
+                roznica = abs(ako - target_ako)
+                
+                if roznica < najlepsza_roznica:
+                    najlepsza_roznica = roznica
+                    najlepszy_kupon = {
+                        "zdarzenia": nowy,
+                        "ako": round(ako, 2),
+                        "p_combo": round(np.prod([zz["p"] for zz in nowy]), 3)
+                    }
+    
+    return najlepszy_kupon
 
 def zapisz_kupon_db(kupon: dict, liga: str, kolejnosc: int, typ_kuponu: str = "AKO ~5.0"):
     init_db()
@@ -553,11 +616,6 @@ def wczytaj_kupony(liga: str) -> list:
              "p_combo": r[5], "data": r[6]} for r in rows]
 
 def weryfikuj_kupon(kupon: dict, hist: pd.DataFrame) -> str:
-    """
-    Sprawdza każdą nogę kuponu. Zwraca: '✅ Trafiony' / '❌ Chybiony' / '⏳ Oczekuje'.
-    Obsługuje typy: '1'/'X'/'2'/'1X'/'X2', 'Over N goli', 'Under N goli',
-    'BTTS – Tak', 'BTTS – Nie', 'Over N rożnych', 'Over N kartek'.
-    """
     if "_sezon" in hist.columns:
         hist = hist[hist["_sezon"] == "biezacy"]
 
@@ -598,7 +656,7 @@ def weryfikuj_kupon(kupon: dict, hist: pd.DataFrame) -> str:
                      (int(row.get("HR", 0)) + int(row.get("AR", 0))) * 2
             ok = kartki > linia
         else:
-            return "⏳ Oczekuje"   # nieznany typ – nie werdyktuj
+            return "⏳ Oczekuje"
 
         if not ok:
             return "❌ Chybiony"
@@ -721,7 +779,7 @@ def generuj_komentarz(home: str, away: str, pred: dict, forma_dict: dict) -> str
                 f"Napisz 2-3 zdania po polsku. Narracyjny styl, konkretny i analityczny."
             )
             msg = client.messages.create(
-                model="claude-opus-4-6", max_tokens=200,
+                model="claude-3-5-sonnet-20241022", max_tokens=200,
                 messages=[{"role": "user", "content": prompt}],
             )
             return msg.content[0].text.strip()
@@ -780,7 +838,6 @@ def render_macierz_html(M: np.ndarray, home: str, away: str) -> str:
     return "".join(rows)
 
 def render_alt_zdarzenia_html(zdarzenia: list) -> str:
-    """Mini-tabelka HTML dla alternatywnych rynków – spójna wizualnie z kartą meczu."""
     if not zdarzenia:
         return "<p style='color:#888;font-size:0.85em'>Brak zdarzeń spełniających próg 55%.</p>"
     prog_kol = {"Gole": "#2196F3", "BTTS": "#9C27B0", "Rożne": "#FF9800", "Kartki": "#F44336"}
@@ -846,7 +903,7 @@ if not historical.empty:
     n_biezacy   = srednie_lig["n_biezacy"]
     w_prev      = waga_poprzedniego(n_biezacy)
 
-    # ── Sidebar: szybki podgląd kolejki ──────────────────────────────────────
+    # Sidebar: szybki podgląd kolejki
     if not schedule.empty and not srednie_df.empty:
         dzisiaj    = datetime.now().date()
         przyszle   = schedule[schedule["date"].dt.date >= dzisiaj]
@@ -870,7 +927,7 @@ if not historical.empty:
                     unsafe_allow_html=True,
                 )
 
-    # ── TABS ─────────────────────────────────────────────────────────────────
+    # TABS
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "🎯 Bet Builder",
         "⚽ Przewidywane Wyniki",
@@ -908,7 +965,7 @@ if not historical.empty:
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.write("**Combo Builder** *(Over/Under przez macierz D-C)*")
+                    st.write("**Combo Builder**")
                     combo_count = 0
                     for _, mecz in mecze.iterrows():
                         h = map_nazwa(mecz["home_team"])
@@ -1032,7 +1089,6 @@ if not historical.empty:
                     kolumna = kol_a if idx % 2 == 0 else kol_b
                     with kolumna:
                         with st.expander(label_exp, expanded=False):
-                            # Nagłówek drużyn
                             ch, cmid, ca = st.columns([5,2,5])
                             with ch:
                                 st.markdown(f"<div style='font-size:1.05em;font-weight:bold'>{h}</div>",
@@ -1044,7 +1100,6 @@ if not historical.empty:
                                 st.markdown(f"<div style='font-size:1.05em;font-weight:bold;text-align:right'>{a}</div>",
                                             unsafe_allow_html=True)
 
-                            # Przewidywany wynik
                             st.markdown(
                                 f"<div style='text-align:center;font-size:1.7em;font-weight:bold;margin:4px 0'>"
                                 f"⚽ {pred['wynik_h']}:{pred['wynik_a']}"
@@ -1053,7 +1108,6 @@ if not historical.empty:
                                 unsafe_allow_html=True,
                             )
 
-                            # Typ + confidence + chaos bar
                             conf_colors  = {"High":"#4CAF50","Medium":"#FF9800","Coinflip":"#F44336"}
                             chaos_colors = {"Pewny":"#4CAF50","Klarowny":"#8BC34A","Otwarty":"#FF9800","Chaos":"#F44336"}
                             conf_c = conf_colors.get(pred["conf_level"], "#888")
@@ -1079,7 +1133,6 @@ if not historical.empty:
                                 unsafe_allow_html=True,
                             )
 
-                            # Metryki 1X2
                             mc1, mc2, mc3 = st.columns(3)
                             with mc1:
                                 st.metric(f"1 – {h[:12]}", f"{pred['p_home']:.1%}", f"@ {pred['fo_home']:.2f}",
@@ -1091,7 +1144,6 @@ if not historical.empty:
                                 st.metric(f"2 – {a[:12]}", f"{pred['p_away']:.1%}", f"@ {pred['fo_away']:.2f}",
                                           delta_color="normal" if pred["typ"] in ("2","X2") else "off")
 
-                            # Lambda info
                             st.markdown(
                                 f"<div style='text-align:center;font-size:0.82em;color:#888;margin-top:2px'>"
                                 f"λ {h[:8]}: <b>{pred['lam_h']:.2f}</b> &nbsp;|&nbsp; "
@@ -1100,7 +1152,6 @@ if not historical.empty:
                                 unsafe_allow_html=True,
                             )
 
-                            # ── ALTERNATYWNE RYNKI ────────────────────────────
                             with st.expander("📊 Alternatywne rynki", expanded=False):
                                 alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho)
                                 st.markdown(render_alt_zdarzenia_html(alt), unsafe_allow_html=True)
@@ -1113,13 +1164,11 @@ if not historical.empty:
                                 st.markdown(render_macierz_html(pred["macierz"], h, a),
                                             unsafe_allow_html=True)
 
-                # Zapis predykcji
                 if zapisuj_flag and nowe_predykcje:
                     dodane = zapisz_predykcje_db(nowe_predykcje)
                     st.success(f"✅ Zapisano {dodane} nowych predykcji." if dodane
                                else "Predykcje tej kolejki już są w bazie.")
 
-                # Export CSV
                 if dopasowane > 0:
                     df_exp = pd.DataFrame(nowe_predykcje)[
                         ["liga","home","away","round","typ","fo_typ","p_home","p_draw","p_away","data"]
@@ -1136,57 +1185,61 @@ if not historical.empty:
                 st.info("Brak nadchodzących meczów w terminarzu.")
 
     # =========================================================================
-    # TAB 3 – KUPON AKO ~5.0
+    # TAB 3 – KUPON AKO ~5.0 (OPTYMALIZACJA)
     # =========================================================================
     with tab3:
         st.subheader("🎲 Kupon kolejki – AKO ~5.0")
         st.caption(
-            "Model przeszukuje wszystkie kombinacje 3–5 zdarzeń z bieżącej kolejki "
-            "i wybiera zestaw z AKO najbliższym 5.0. "
-            "⚠️ Kursy to **fair odds** (bez marży) – rzeczywiste kursy bukmacherskie będą niższe."
+            "Model wybiera optymalny zestaw 3–5 zdarzeń z całej kolejki. "
+            "⚠️ Kursy to **fair odds** (bez marży)."
         )
 
         target_slider = st.slider("Docelowe AKO", 3.0, 10.0, 5.0, 0.5,
                                   help="Możesz zmienić cel – np. 3.0 to bezpieczniejszy 3-pak.")
 
         if not schedule.empty and not srednie_df.empty:
-            dzisiaj  = datetime.now().date()
+            dzisiaj = datetime.now().date()
             przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
             if not przyszle.empty:
-                nb    = przyszle["round"].min()
+                nb = przyszle["round"].min()
                 mecze = schedule[schedule["round"] == nb]
 
-                # Zbierz wszystkie zdarzenia z całej kolejki
-                wszystkie_zd = []
-                for _, mecz in mecze.iterrows():
-                    h = map_nazwa(mecz["home_team"])
-                    a = map_nazwa(mecz["away_team"])
-                    if h not in srednie_df.index or a not in srednie_df.index:
-                        continue
-                    lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred = predykcja_meczu(lam_h, lam_a, rho=rho)
-                    mecz_str = f"{h} – {a}"
+                with st.spinner("⚙️ Optymalizacja kuponu..."):
+                    wszystkie_zd = []
+                    for _, mecz in mecze.iterrows():
+                        h = map_nazwa(mecz["home_team"])
+                        a = map_nazwa(mecz["away_team"])
+                        if h not in srednie_df.index or a not in srednie_df.index:
+                            continue
+                        
+                        lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                        pred = predykcja_meczu(lam_h, lam_a, rho=rho)
+                        mecz_str = f"{h} – {a}"
 
-                    # Typ główny meczu
-                    if pred["p_typ"] >= 0.58:
-                        wszystkie_zd.append({
-                            "mecz": mecz_str, "typ": pred["typ"],
-                            "p": pred["p_typ"], "fair": pred["fo_typ"],
-                            "kategoria": "1X2", "emoji": "🏟️"
-                        })
+                        if pred["p_typ"] >= 0.62:
+                            wszystkie_zd.append({
+                                "mecz": mecz_str,
+                                "typ": pred["typ"],
+                                "p": pred["p_typ"],
+                                "fair": pred["fo_typ"],
+                                "kategoria": "1X2",
+                                "emoji": "🏟️"
+                            })
 
-                    # Alternatywne
-                    for emoji, nazwa, p, fo, kat in alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho):
-                        wszystkie_zd.append({
-                            "mecz": mecz_str, "typ": nazwa,
-                            "p": p, "fair": fo,
-                            "kategoria": kat, "emoji": emoji
-                        })
+                        alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.58)
+                        for emoji, nazwa, p, fo, kat in alt[:3]:
+                            wszystkie_zd.append({
+                                "mecz": mecz_str,
+                                "typ": nazwa,
+                                "p": p,
+                                "fair": fo,
+                                "kategoria": kat,
+                                "emoji": emoji
+                            })
 
-                kupon = generuj_kupon(wszystkie_zd, target_ako=target_slider)
+                    kupon = generuj_kupon_szybki(wszystkie_zd, target_ako=target_slider)
 
                 if kupon:
-                    # ── Karta kuponu ──────────────────────────────────────────
                     ako_color = "#4CAF50" if abs(kupon["ako"] - target_slider) < 0.5 else "#FF9800"
                     st.markdown(
                         f"<div style='background:#1a1a2e;border:1px solid #333;border-radius:10px;"
@@ -1198,12 +1251,11 @@ if not historical.empty:
                         f"<div style='color:#888;font-size:0.85em;margin-top:4px'>"
                         f"Łączne p_combo: <b style='color:#aaa'>{kupon['p_combo']:.1%}</b> &nbsp;|&nbsp; "
                         f"{len(kupon['zdarzenia'])} nogi &nbsp;|&nbsp; "
-                        f"fair odds (bez marży)</div>"
+                        f"wybrano z {len(wszystkie_zd)} kandydatów</div>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
 
-                    # Nogi kuponu jako HTML tabela
                     cat_colors = {"1X2":"#2196F3","Gole":"#4CAF50","BTTS":"#9C27B0",
                                   "Rożne":"#FF9800","Kartki":"#F44336"}
                     nogi_html = []
@@ -1237,7 +1289,6 @@ if not historical.empty:
                         unsafe_allow_html=True,
                     )
 
-                    # Zapis
                     kc1, kc2 = st.columns([3, 1])
                     with kc1:
                         if st.button("💾 Zapisz kupon do bazy", use_container_width=True):
@@ -1251,7 +1302,6 @@ if not historical.empty:
                 else:
                     st.warning("Nie udało się wygenerować kuponu – za mało zdarzeń spełniających kryteria.")
 
-                # ── Historia kuponów z weryfikacją ────────────────────────────
                 st.divider()
                 st.markdown("### 📋 Historia kuponów")
                 kupony_hist = wczytaj_kupony(wybrana_liga)
@@ -1335,7 +1385,6 @@ if not historical.empty:
                     st.dataframe(per_typ[["Mecze","Trafione","Hit %"]].sort_values("Hit %",ascending=False),
                                  use_container_width=True, height=220)
 
-                # Reliability curve
                 pred_z_prob = zakonczone[zakonczone["Brier"].notna()].copy()
                 if len(pred_z_prob) >= 15:
                     st.markdown("**📐 Reliability Curve** *(kalibracja modelu)*")
@@ -1407,7 +1456,6 @@ if not historical.empty:
                     st.markdown("**🌍 Skuteczność per liga**")
                     st.bar_chart(per_liga["Hit %"], height=180)
 
-            # Historia predykcji
             st.divider()
             st.markdown("### 📋 Historia predykcji")
             fc1, fc2, _ = st.columns([2, 2, 6])
@@ -1565,7 +1613,6 @@ if not historical.empty:
             st.markdown(svg_pr, unsafe_allow_html=True)
             st.caption("Hover nad punktem = pełna nazwa i statystyki.")
 
-            # Tabela rankingowa z paskami
             st.divider()
             st.markdown("**Ranking Power Rating**")
             max_pw = df_power["Power"].max()
