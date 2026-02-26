@@ -1358,11 +1358,11 @@ if not historical.empty:
                         st.success(f"✅ Zaktualizowano wyniki dla {n_updated} meczów.")
 
     # =========================================================================
-    # TAB 3 – RANKING ZDARZEŃ (POPRAWIONY)
+    # TAB 3 – RANKING ZDARZEŃ (POPRAWIONY – TYLKO FAIR ODDS ≥ 1.30)
     # =========================================================================
     with tab3:
         st.subheader("📊 Ranking zdarzeń kolejki")
-        st.caption("Wszystkie zdarzenia z p ≥ 60%, sortowane według pewności modelu.")
+        st.caption("Wszystkie zdarzenia z p ≥ 60% i fair odds ≥ 1.30, sortowane według pewności modelu.")
 
         if not schedule.empty and not srednie_df.empty:
             dzisiaj = datetime.now().date()
@@ -1387,8 +1387,8 @@ if not historical.empty:
                             """Expected Value: p*fo - 1. >0 = value bet."""
                             return round(p_val * fo_val - 1.0, 3)
 
-                        # Typ główny meczu (prog min 0.58)
-                        if pred["p_typ"] >= 0.58:
+                        # Typ główny meczu – tylko jeśli fair odds ≥ 1.30
+                        if pred["p_typ"] >= 0.58 and pred["fo_typ"] >= 1.30:
                             ev = _ev(pred["p_typ"], pred["fo_typ"])
                             wszystkie_zd.append({
                                 "Mecz": mecz_str,
@@ -1402,21 +1402,22 @@ if not historical.empty:
                                 "Kolor": "🟢" if pred["p_typ"] >= 0.65 else "🟡"
                             })
 
-                        # Alternatywne zdarzenia (prog min 0.55)
+                        # Alternatywne zdarzenia – tylko jeśli fair odds ≥ 1.30
                         alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.55, lam_sot=lam_sot)
                         for emoji, nazwa, p, fo, kat, linia in alt:
-                            ev = _ev(p, fo)
-                            wszystkie_zd.append({
-                                "Mecz": mecz_str,
-                                "Rynek": kat,
-                                "Typ": nazwa,
-                                "P": f"{p:.0%}",
-                                "P_val": p,
-                                "Fair": fo,
-                                "EV": ev,
-                                "Kategoria": kat,
-                                "Kolor": "🟢" if p >= 0.65 else "🟡"
-                            })
+                            if fo >= 1.30:
+                                ev = _ev(p, fo)
+                                wszystkie_zd.append({
+                                    "Mecz": mecz_str,
+                                    "Rynek": kat,
+                                    "Typ": nazwa,
+                                    "P": f"{p:.0%}",
+                                    "P_val": p,
+                                    "Fair": fo,
+                                    "EV": ev,
+                                    "Kategoria": kat,
+                                    "Kolor": "🟢" if p >= 0.65 else "🟡"
+                                })
 
                 if wszystkie_zd:
                     df_rank = pd.DataFrame(wszystkie_zd)
@@ -1570,7 +1571,7 @@ if not historical.empty:
                             mime="text/csv"
                         )
                 else:
-                    st.info("Brak zdarzeń spełniających kryterium p ≥ 60%")
+                    st.info("Brak zdarzeń spełniających kryterium p ≥ 60% i fair odds ≥ 1.30")
             else:
                 st.info("Brak nadchodzących meczów")
         else:
