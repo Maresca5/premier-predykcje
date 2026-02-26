@@ -1282,57 +1282,59 @@ if not historical.empty:
                         st.info("Brak zdarzeń Shot Kings z fair odds ≥ 1.30")
 
                     # =================================================================
-                    # SEKCJA 4: PEŁNY RANKING (w expanderze)
-                    # =================================================================
-                    with st.expander("📋 Pełny ranking wszystkich zdarzeń", expanded=False):
-                        # Filtry
-                        col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
-                        with col_f1:
-                            filtr_rynek = st.selectbox(
-                                "Rynek", 
-                                ["Wszystkie", "1X2", "Gole", "BTTS", "Rożne", "Kartki", "SOT"],
-                                key="full_rank_filter"
-                            )
-                        with col_f2:
-                            prog_filtr = st.slider(
-                                "Min. prawdopodobieństwo", 
-                                0.55, 0.90, 0.60, 0.01,
-                                format="%.0f%%",
-                                key="full_rank_slider"
-                            )
-                        with col_f3:
-                            only_value_full = st.checkbox("Tylko EV>0", key="full_rank_value")
-                        
-                        df_full = df_rank.copy()
-                        if filtr_rynek != "Wszystkie":
-                            df_full = df_full[df_full["Rynek"] == filtr_rynek]
-                        df_full = df_full[df_full["P"] >= prog_filtr]
-                        
-                        if only_value_full:
-                            df_full = df_full[df_full["EV"] > 0]
-                        
-                        df_full = df_full.sort_values("P", ascending=False)
-                        
-                        # Wyświetl jako tabelę
-                        if not df_full.empty:
-                            df_display = df_full.copy()
-                            df_display["P"] = df_display["P"].apply(lambda x: f"{x:.0%}")
-                            df_display["Fair"] = df_display["Fair"].apply(lambda x: f"{x:.2f}")
-                            df_display["EV"] = df_display["EV"].apply(lambda x: f"{x:+.3f}")
-                            
-                            st.dataframe(
-                                df_display[["Mecz", "Rynek", "Typ", "P", "Fair", "EV"]],
-                                use_container_width=True,
-                                hide_index=True
-                            )
-                            
-                            st.download_button(
-                                "⬇️ Pobierz pełny ranking (CSV)",
-                                data=df_full[["Mecz", "Rynek", "Typ", "P", "Fair", "EV"]].to_csv(index=False, decimal=","),
-                                file_name=f"ranking_full_kolejka{int(nb)}.csv"
-                            )
-                        else:
-                            st.info("Brak zdarzeń po zastosowaniu filtrów")
+# SEKCJA 4: PEŁNY RANKING (w expanderze)
+# =================================================================
+with st.expander("📋 Pełny ranking wszystkich zdarzeń", expanded=False):
+    # Filtry
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+    with col_f1:
+        filtr_rynek = st.selectbox(
+            "Rynek", 
+            ["Wszystkie", "1X2", "Gole", "BTTS", "Rożne", "Kartki", "SOT"],
+            key="full_rank_filter"
+        )
+    with col_f2:
+        prog_filtr = st.slider(
+            "Min. prawdopodobieństwo", 
+            0.55, 0.90, 0.60, 0.01,
+            format="%.2f",  # Wyświetlanie jako liczba dziesiętna
+            key="full_rank_slider"
+        )
+        # Dodatkowe wyświetlanie w procentach
+        st.caption(f"Wybrano: {prog_filtr:.0%}")
+    with col_f3:
+        only_value_full = st.checkbox("Tylko EV>0", key="full_rank_value")
+    
+    df_full = df_rank.copy()
+    if filtr_rynek != "Wszystkie":
+        df_full = df_full[df_full["Rynek"] == filtr_rynek]
+    df_full = df_full[df_full["P"] >= prog_filtr]
+    
+    if only_value_full:
+        df_full = df_full[df_full["EV"] > 0]
+    
+    df_full = df_full.sort_values("P", ascending=False)
+    
+    # Wyświetl jako tabelę
+    if not df_full.empty:
+        df_display = df_full.copy()
+        df_display["P"] = df_display["P"].apply(lambda x: f"{x:.0%}")
+        df_display["Fair"] = df_display["Fair"].apply(lambda x: f"{x:.2f}")
+        df_display["EV"] = df_display["EV"].apply(lambda x: f"{x:+.3f}")
+        
+        st.dataframe(
+            df_display[["Mecz", "Rynek", "Typ", "P", "Fair", "EV"]],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        st.download_button(
+            "⬇️ Pobierz pełny ranking (CSV)",
+            data=df_full[["Mecz", "Rynek", "Typ", "P", "Fair", "EV"]].to_csv(index=False, decimal=","),
+            file_name=f"ranking_full_kolejka{int(nb)}.csv"
+        )
+    else:
+        st.info("Brak zdarzeń po zastosowaniu filtrów")
                 else:
                     st.info("Brak zdarzeń spełniających kryteria")
             else:
