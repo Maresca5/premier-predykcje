@@ -1351,137 +1351,152 @@ if not historical.empty:
                         st.success(f"✅ Zaktualizowano wyniki dla {n_updated} meczów.")
 
     # =========================================================================
-# TAB 3 – RANKING ZDARZEŃ (POPRAWIONY)
-# =========================================================================
-with tab3:
-    st.subheader("📊 Ranking zdarzeń kolejki")
-    st.caption("Zdarzenia z p ≥ 60% i fair odds ≥ 1.30, sortowane według pewności modelu.")
+    # TAB 3 – RANKING ZDARZEŃ
+    # =========================================================================
+    with tab3:
+        st.subheader("📊 Ranking zdarzeń kolejki")
+        st.caption("Wszystkie zdarzenia z p ≥ 60%, sortowane według pewności modelu.")
 
-    if not schedule.empty and not srednie_df.empty:
-        dzisiaj = datetime.now().date()
-        przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
-        if not przyszle.empty:
-            nb = przyszle["round"].min()
-            mecze = schedule[schedule["round"] == nb]
+        if not schedule.empty and not srednie_df.empty:
+            dzisiaj = datetime.now().date()
+            przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
+            if not przyszle.empty:
+                nb = przyszle["round"].min()
+                mecze = schedule[schedule["round"] == nb]
 
-            with st.spinner("Generowanie rankingu..."):
-                wszystkie_zd = []
-                for _, mecz in mecze.iterrows():
-                    h = map_nazwa(mecz["home_team"])
-                    a = map_nazwa(mecz["away_team"])
-                    if h not in srednie_df.index or a not in srednie_df.index:
-                        continue
-                    
-                    lam_h, lam_a, lam_r, lam_k = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred = predykcja_meczu(lam_h, lam_a, rho=rho)
-                    mecz_str = f"{h} – {a}"
+                with st.spinner("Generowanie rankingu..."):
+                    wszystkie_zd = []
+                    for _, mecz in mecze.iterrows():
+                        h = map_nazwa(mecz["home_team"])
+                        a = map_nazwa(mecz["away_team"])
+                        if h not in srednie_df.index or a not in srednie_df.index:
+                            continue
+                        
+                        lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                        pred = predykcja_meczu(lam_h, lam_a, rho=rho)
+                        mecz_str = f"{h} – {a}"
 
-                    # Typ główny meczu
-                    if pred["p_typ"] >= 0.60 and pred["fo_typ"] >= 1.30:
-                        wszystkie_zd.append({
-                            "Mecz": mecz_str,
-                            "Rynek": "1X2",
-                            "Typ": pred["typ"],
-                            "P": pred["p_typ"],
-                            "Fair": pred["fo_typ"],
-                            "Kategoria": "1X2"
-                        })
+                        def _ev(p_val, fo_val):
+                            """Expected Value: p*fo - 1. >0 = value bet."""
+                            return round(p_val * fo_val - 1.0, 3)
 
-                    # Alternatywne zdarzenia
-                    alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.60)
-                    for emoji, nazwa, p, fo, kat, linia in alt:
-                        if fo >= 1.30:
+                        # Typ główny meczu (prog min 0.58 – slider decyduje o wyświetleniu)
+                        if pred["p_typ"] >= 0.58:
+                            ev = _ev(pred["p_typ"], pred["fo_typ"])
+                            wszystkie_zd.append({
+                                "Mecz": mecz_str,
+                                "Rynek": "1X2",
+                                "Typ": pred["typ"],
+                                "P": f"{pred['p_typ']:.0%}",
+                                "P_val": pred["p_typ"],
+                                "Fair": pred["fo_typ"],
+                                "EV": ev,
+                                "Kolor": "🟢" if pred["p_typ"] >= 0.65 else "🟡"
+                            })
+
+                        # Alternatywne zdarzenia (prog min 0.55 – slider decyduje o wyświetleniu)
+                        alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.55, lam_sot=lam_sot)
+                        for emoji, nazwa, p, fo, kat, linia in alt:
+                            ev = _ev(p, fo)
                             wszystkie_zd.append({
                                 "Mecz": mecz_str,
                                 "Rynek": kat,
                                 "Typ": nazwa,
-                                "P": p,
+                                "P": f"{p:.0%}",
+                                "P_val": p,
                                 "Fair": fo,
-                                "Kategoria": kat
+                                "EV": ev,
+                                "Kolor": "🟢" if p >= 0.65 else "🟡"
                             })
 
-            if wszystkie_zd:
-                # Sortuj po prawdopodobieństwie malejąco
-                wszystkie_zd.sort(key=lambda x: -x["P"])
-                
-                # Przygotuj DataFrame do wyświetlenia
-                df_rank = pd.DataFrame(wszystkie_zd)
-                
-                # Dodaj kolumny pomocnicze
-                df_rank["P%"] = (df_rank["P"] * 100).round(0).astype(int).astype(str) + "%"
-                df_rank["Kolor"] = df_rank["P"].apply(lambda x: 
-                    "🟢" if x >= 0.70 else ("🟡" if x >= 0.65 else "🔵" if x >= 0.60 else "⚪"))
-                df_rank["Fair_display"] = df_rank["Fair"].apply(lambda x: f"{x:.2f}")
-                
-                # Filtry w sidebarze (małe, nie przeszkadzają)
-                with st.sidebar.expander("🔍 Filtry rankingu", expanded=False):
-                    min_p = st.slider("Min. prawdopodobieństwo", 0.60, 0.90, 0.60, 0.05)
-                    min_fair = st.slider("Min. fair odds", 1.30, 3.00, 1.30, 0.10)
-                    rynki = ["Wszystkie"] + sorted(df_rank["Rynek"].unique().tolist())
-                    wybrany_rynek = st.selectbox("Rynek", rynki)
-                
-                # Zastosuj filtry
-                df_filtered = df_rank[df_rank["P"] >= min_p]
-                df_filtered = df_filtered[df_filtered["Fair"] >= min_fair]
-                if wybrany_rynek != "Wszystkie":
-                    df_filtered = df_filtered[df_filtered["Rynek"] == wybrany_rynek]
-                
-                # Wyświetl statystyki
-                col_s1, col_s2, col_s3 = st.columns(3)
-                with col_s1:
-                    st.metric("Liczba zdarzeń", len(df_filtered))
-                with col_s2:
-                    st.metric("Śr. prawdopodobieństwo", f"{df_filtered['P'].mean():.1%}")
-                with col_s3:
-                    st.metric("Śr. fair odds", f"{df_filtered['Fair'].mean():.2f}")
-                
-                # Wyświetl tabelę z kolorowaniem
-                st.dataframe(
-                    df_filtered[["Kolor", "Mecz", "Rynek", "Typ", "P%", "Fair_display"]],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Kolor": st.column_config.TextColumn("", width="small"),
-                        "Mecz": st.column_config.TextColumn("Mecz", width="medium"),
-                        "Rynek": st.column_config.TextColumn("Rynek", width="small"),
-                        "Typ": st.column_config.TextColumn("Typ", width="medium"),
-                        "P%": st.column_config.TextColumn("P", width="small"),
-                        "Fair_display": st.column_config.TextColumn("Fair", width="small"),
-                    }
-                )
-                
-                # Wykres słupkowy dla top 10
-                st.divider()
-                st.markdown("**📊 Top 10 najpewniejszych zdarzeń**")
-                
-                top10 = df_filtered.head(10).copy()
-                top10["label"] = top10["Mecz"].str[:20] + " - " + top10["Typ"].str[:15]
-                
-                # Prosty wykres w st.bar_chart (nie wymaga plotly)
-                chart_data = pd.DataFrame({
-                    "Zdarzenie": top10["label"],
-                    "Prawdopodobieństwo": top10["P"] * 100
-                }).set_index("Zdarzenie")
-                
-                st.bar_chart(chart_data, height=300)
-                
-                # Eksport do CSV
-                csv_data = df_filtered[["Mecz", "Rynek", "Typ", "P", "Fair"]].copy()
-                csv_data["P"] = csv_data["P"].apply(lambda x: f"{x:.1%}")
-                csv_data["Fair"] = csv_data["Fair"].apply(lambda x: f"{x:.2f}")
-                
-                st.download_button(
-                    "⬇️ Pobierz ranking (CSV)",
-                    data=csv_data.to_csv(index=False, decimal=","),
-                    file_name=f"ranking_{wybrana_liga.replace(' ','_')}_kolejka{int(nb)}.csv",
-                    mime="text/csv"
-                )
+                if wszystkie_zd:
+                    df_rank = pd.DataFrame(wszystkie_zd)
+
+                    # Filtry – trwałe (st.radio zachowuje stan)
+                    rf1, rf2 = st.columns([2, 6])
+                    with rf1:
+                        filtr_rynek = st.radio(
+                            "Filtruj rynek", ["Wszystkie", "1X2", "Gole", "BTTS", "Rożne", "Kartki"],
+                            horizontal=False, label_visibility="collapsed"
+                        )
+                    with rf2:
+                        prog_filtr = st.slider("Min. p modelu", 0.55, 0.90, 0.60, 0.05,
+                                               format="%.0f%%",
+                                               help="Pokaż tylko zdarzenia z p ≥ wartość")
+
+                    df_show_r = df_rank.copy()
+                    if filtr_rynek != "Wszystkie":
+                        df_show_r = df_show_r[df_show_r["Rynek"] == filtr_rynek]
+                    df_show_r = df_show_r[df_show_r["P_val"] >= prog_filtr].sort_values("P_val", ascending=False)
+
+                    if df_show_r.empty:
+                        st.info(f"Brak zdarzeń {filtr_rynek} z p ≥ {prog_filtr:.0%}.")
+                    else:
+                        cat_cols3 = {"1X2":"#4CAF50","Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336"}
+                        html_r3 = []
+                        for _, row in df_show_r.iterrows():
+                            kc3 = cat_cols3.get(row["Rynek"], "#888")
+                            bw3 = int(row["P_val"] * 100)
+                            fo3 = row["Fair"]
+                            fc3 = "#4CAF50" if fo3 <= 1.60 else ("#FF9800" if fo3 <= 2.00 else "#aaa")
+                            sila_opis = "🔥 Silny" if row["P_val"] >= 0.70 else ("🎯 Dobry" if row["P_val"] >= 0.62 else "💡 Uwaga")
+                            ev3 = row.get("EV", 0)
+                            ev_col3 = "#4CAF50" if ev3 > 0.02 else ("#888" if ev3 > -0.02 else "#F44336")
+                            ev_icon3 = "+" if ev3 > 0 else ""
+                            html_r3.append(
+                                f"<tr>"
+                                f"<td style='padding:6px 10px;font-weight:bold;font-size:0.85em'>{row['Mecz']}</td>"
+                                f"<td style='padding:6px 10px;text-align:center'>"
+                                f"<span style='background:{kc3}22;color:{kc3};padding:2px 7px;"
+                                f"border-radius:8px;font-size:0.80em;font-weight:bold'>{row['Rynek']}</span></td>"
+                                f"<td style='padding:6px 10px;font-size:0.85em'>{row['Typ']}</td>"
+                                f"<td style='padding:6px 10px;width:110px'>"
+                                f"<div style='display:flex;align-items:center;gap:6px'>"
+                                f"<div style='flex:1;background:#333;border-radius:3px;height:6px'>"
+                                f"<div style='background:{kc3};width:{bw3}%;height:6px;border-radius:3px'></div></div>"
+                                f"<span style='color:{kc3};font-weight:bold;font-size:0.83em;min-width:32px'>{row['P']}</span>"
+                                f"</div></td>"
+                                f"<td style='padding:6px 10px;text-align:right;color:{fc3};font-weight:bold'>{fo3:.2f}</td>"
+                                f"<td style='padding:6px 10px;text-align:center;color:{ev_col3};"
+                                f"font-weight:bold;font-size:0.85em'>{ev_icon3}{ev3:.3f}</td>"
+                                f"<td style='padding:6px 10px;text-align:center;font-size:0.80em'>{sila_opis}</td>"
+                                f"</tr>"
+                            )
+                        # Filtr EV
+                        only_value = st.checkbox("🔍 Tylko Value Bets (EV > 0)", key="ev_filter")
+                        if only_value:
+                            df_show_r = df_show_r[df_show_r["EV"] > 0]
+                            if df_show_r.empty:
+                                st.info("Brak Value Betów przy tym progu p.")
+                                html_r3 = []
+                        if html_r3:
+                            st.markdown(
+                                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333;margin-top:8px'>"
+                                f"<table style='width:100%;border-collapse:collapse;font-size:0.86em'>"
+                                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.76em;text-transform:uppercase'>"
+                                f"<th style='padding:8px 10px;text-align:left'>Mecz</th>"
+                                f"<th style='padding:8px 10px;text-align:center'>Rynek</th>"
+                                f"<th style='padding:8px 10px;text-align:left'>Zdarzenie</th>"
+                                f"<th style='padding:8px 10px;text-align:left'>P modelu</th>"
+                                f"<th style='padding:8px 10px;text-align:right'>Fair Odds</th>"
+                                f"<th style='padding:8px 10px;text-align:center'>EV</th>"
+                                f"<th style='padding:8px 10px;text-align:center'>Siła</th>"
+                                f"</tr></thead><tbody>{''.join(html_r3)}</tbody></table></div>"
+                                f"<p style='color:#444;font-size:0.74em;margin-top:6px'>"
+                                f"EV = p×fair−1. EV&gt;0 → model widzi wartość. "
+                                f"Fair Odds bez marży bukmachera. Pokazano {len(df_show_r)} zdarzeń.</p>",
+                                unsafe_allow_html=True,
+                            )
+                        # Export rankingu
+                        st.download_button("⬇️ Pobierz ranking (CSV)",
+                                           data=df_show_r.drop(columns=["P_val","Kolor"]).to_csv(index=False, decimal=","),
+                                           file_name=f"ranking_kolejka{int(nb)}.csv", mime="text/csv")
+                else:
+                    st.info("Brak zdarzeń spełniających kryterium p ≥ 60%")
             else:
-                st.info("Brak zdarzeń spełniających kryteria (p ≥ 60%, fair odds ≥ 1.30)")
+                st.info("Brak nadchodzących meczów")
         else:
-            st.info("Brak nadchodzących meczów")
-    else:
-        st.warning("Brak danych")
+            st.warning("Brak danych")
 
     # =========================================================================
     # TAB 4 – SKUTECZNOŚĆ + ROI
