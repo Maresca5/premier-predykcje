@@ -277,10 +277,23 @@ def load_schedule(filename: str) -> pd.DataFrame:
 # ===========================================================================
 # STATYSTYKI
 # ===========================================================================
-def weighted_mean(values: pd.Series) -> float:
+def weighted_mean(values: pd.Series, dates: pd.Series = None,
+                  tau_days: float = 30.0) -> float:
+    """Ważona średnia z wykładniczym decay względem czasu (tau=30 dni).
+    Jeśli dates niedostępne – fallback do liniowego linspace."""
     if len(values) == 0:
         return 0.0
-    weights = np.linspace(1, 2, len(values))
+    if dates is not None and len(dates) == len(values):
+        try:
+            dates_dt = pd.to_datetime(dates)
+            ref = dates_dt.max()
+            days_ago = (ref - dates_dt).dt.total_seconds() / 86400
+            weights = np.exp(-days_ago.values / tau_days)
+            weights = np.clip(weights, 0.01, None)  # min waga 0.01
+        except Exception:
+            weights = np.linspace(1, 2, len(values))
+    else:
+        weights = np.linspace(1, 2, len(values))
     return float(np.average(values, weights=weights))
 
 @st.cache_data
@@ -295,21 +308,33 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
         away = df[df["AwayTeam"] == d].tail(10)
         if len(home) < 2 or len(away) < 2:
             continue
+        # Daty do exponential decay
+        h_dates = home["Date"] if "Date" in home.columns else None
+        a_dates = away["Date"] if "Date" in away.columns else None
         # SOT – celne strzały (jeśli dostępne w danych)
         home_sot = home["HST"].dropna() if "HST" in home.columns else pd.Series([], dtype=float)
         away_sot = away["AST"].dropna() if "AST" in away.columns else pd.Series([], dtype=float)
+        h_sot_dates = home.loc[home["HST"].notna(), "Date"] if "HST" in home.columns and "Date" in home.columns else None
+        a_sot_dates = away.loc[away["AST"].notna(), "Date"] if "AST" in away.columns and "Date" in away.columns else None
         dane[d] = {
-            "Gole strzelone (dom)":    weighted_mean(home["FTHG"]),
-            "Gole stracone (dom)":     weighted_mean(home["FTAG"]),
-            "Gole strzelone (wyjazd)": weighted_mean(away["FTAG"]),
-            "Gole stracone (wyjazd)":  weighted_mean(away["FTHG"]),
-            "Różne (dom)":             weighted_mean(home["total_rozne"]),
-            "Różne (wyjazd)":          weighted_mean(away["total_rozne"]),
-            "Kartki (dom)":            weighted_mean(home["total_kartki"]),
-            "Kartki (wyjazd)":         weighted_mean(away["total_kartki"]),
-            # SOT – None gdy brak danych (np. brak kolumn w starszych CSV)
-            "SOT (dom)":     weighted_mean(home_sot) if len(home_sot) >= 2 else None,
-            "SOT (wyjazd)":  weighted_mean(away_sot) if len(away_sot) >= 2 else None,
+            "Gole strzelone (dom)":    weighted_mean(home["FTHG"], h_dates),
+            "Gole stracone (dom)":     weighted_mean(home["FTAG"], h_dates),
+            "Gole strzelone (wyjazd)": weighted_mean(away["FTAG"], a_dates),
+            "Gole stracone (wyjazd)":  weighted_mean(away["FTHG"], a_dates),
+            "Różne (dom)":             weighted_mean(home["total_rozne"], h_dates),
+            "Różne (wyjazd)":          weighted_mean(away["total_rozne"], a_dates),
+            "Kartki (dom)":            weighted_mean(home["total_kartki"], h_dates),
+            "Kartki (wyjazd)":         weighted_mean(away["total_kartki"], a_dates),
+            # SOT (celne strzały)
+            "SOT (dom)":    (weighted_mean(home.loc[home["HST"].notna(),"HST"], h_sot_dates)
+                             if len(home_sot) >= 2 else None),
+            "SOT (wyjazd)": (weighted_mean(away.loc[away["AST"].notna(),"AST"], a_sot_dates)
+                             if len(away_sot) >= 2 else None),
+            # Konwersja SOT→Gol (gole / strzały celne)
+            "Konwersja (dom)":    (float(home["FTHG"].sum() / home_sot.sum())
+                                   if home_sot.sum() > 0 else None),
+            "Konwersja (wyjazd)": (float(away["FTAG"].sum() / away_sot.sum())
+                                   if away_sot.sum() > 0 else None),
         }
     return pd.DataFrame(dane).T.round(2)
 
@@ -388,9 +413,20 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
 
     lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
     lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
+    # lam_sot_total = oczekiwana suma celnych strzałów (do rynku SOT)
+    sot_h_raw = srednie_df.loc[h, "SOT (dom)"]   if "SOT (dom)"    in srednie_df.columns else None
+    sot_a_raw = srednie_df.loc[a, "SOT (wyjazd)"] if "SOT (wyjazd)" in srednie_df.columns else None
+    lam_sot_total = None
+    if sot_h_raw is not None and sot_a_raw is not None:
+        try:
+            sh = float(sot_h_raw); sa = float(sot_a_raw)
+            if not (np.isnan(sh) or np.isnan(sa)):
+                lam_sot_total = sh + sa
+        except (TypeError, ValueError):
+            pass
     return (float(np.clip(lam_h, 0.3, 4.5)),
             float(np.clip(lam_a, 0.3, 4.5)),
-            lam_r, lam_k, sot_aktywny)
+            lam_r, lam_k, sot_aktywny, lam_sot_total)
 
 def oblicz_forme(df: pd.DataFrame) -> dict:
     if df.empty:
@@ -517,7 +553,8 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
 # ===========================================================================
 def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
                             lam_k: float, rho: float,
-                            prog_min: float = 0.55) -> list:
+                            prog_min: float = 0.55,
+                            lam_sot: float = None) -> list:
     zdarzenia = []
     mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     M = dixon_coles_adj(
@@ -547,6 +584,14 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
         p_over = float(1 - poisson.cdf(int(linia), lam_k))
         if p_over >= prog_min:
             zdarzenia.append(("🟨", f"Over {linia} kartek", p_over, fair_odds(p_over), "Kartki", linia))
+
+    # Celne strzały (HST+AST) – Poisson, lam_sot przekazywane opcjonalnie
+    if lam_sot is not None and lam_sot > 0:
+        for linia in [3.5, 4.5, 5.5, 6.5]:
+            p_over = float(1 - poisson.cdf(int(linia), lam_sot))
+            if p_over >= prog_min:
+                zdarzenia.append(("🎯", f"Over {linia} celnych", p_over,
+                                  fair_odds(p_over), "SOT", linia))
 
     return sorted(zdarzenia, key=lambda x: -x[2])
 
@@ -913,6 +958,98 @@ def macierz_goli_p(lam_h, lam_a, rho, linia_int, typ_gole):
     return p_over if typ_gole == "Over" else 1 - p_over
 
 # ===========================================================================
+# DEEP DATA – Power Rankings + Sędziowie
+# ===========================================================================
+@st.cache_data
+def deep_data_stats(df_json: str) -> tuple:
+    """Zwraca (power_df, sedziowie_df) dla tab Deep Data."""
+    df = pd.read_json(df_json)
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # ── Power Rankings ────────────────────────────────────────────────────
+    druzyny = pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel())
+    power_rows = []
+    for d in druzyny:
+        h_df = df[df["HomeTeam"] == d]
+        a_df = df[df["AwayTeam"] == d]
+        all_m = pd.concat([
+            h_df.assign(_gole_str=h_df["FTHG"], _gole_strac=h_df["FTAG"],
+                        _sot=h_df.get("HST", np.nan), _kartki=h_df["total_kartki"],
+                        _rozne=h_df["total_rozne"]),
+            a_df.assign(_gole_str=a_df["FTAG"], _gole_strac=a_df["FTHG"],
+                        _sot=a_df.get("AST", np.nan), _kartki=a_df["total_kartki"],
+                        _rozne=a_df["total_rozne"])
+        ])
+        if len(all_m) < 3:
+            continue
+        gol_str  = all_m["_gole_str"].mean()
+        gol_strac = all_m["_gole_strac"].mean()
+        sot_sr   = all_m["_sot"].dropna().mean() if all_m["_sot"].notna().any() else None
+        kart_sr  = all_m["_kartki"].mean()
+        rozne_sr = all_m["_rozne"].mean()
+        konv     = (gol_str / sot_sr) if (sot_sr and sot_sr > 0) else None
+        # xG-proxy: SOT × liga_średnia_konwersji (szacunkowa)
+        xg_proxy = (sot_sr * 0.11) if sot_sr else None  # ~11% konwersja PL
+        # Forma ostatnie 5
+        mecze5 = df[(df["HomeTeam"]==d)|(df["AwayTeam"]==d)].tail(5)
+        form5_pts = 0
+        for _, m5 in mecze5.iterrows():
+            if m5["HomeTeam"] == d:
+                if m5["FTHG"] > m5["FTAG"]: form5_pts += 3
+                elif m5["FTHG"] == m5["FTAG"]: form5_pts += 1
+            else:
+                if m5["FTAG"] > m5["FTHG"]: form5_pts += 3
+                elif m5["FTAG"] == m5["FTHG"]: form5_pts += 1
+        power_rows.append({
+            "Drużyna":         d,
+            "M":               len(all_m),
+            "Gole/M ↑":        round(gol_str, 2),
+            "Strac./M ↓":      round(gol_strac, 2),
+            "SOT/M":           round(sot_sr, 1) if sot_sr else "–",
+            "Konwersja%":      f"{konv:.1%}" if konv else "–",
+            "xG-proxy":        round(xg_proxy, 2) if xg_proxy else "–",
+            "Kartki/M":        round(kart_sr, 1),
+            "Rożne/M":         round(rozne_sr, 1),
+            "Forma (pkt/5M)":  form5_pts,
+            "_gol_str":        gol_str,
+            "_gol_strac":      gol_strac,
+            "_forma":          form5_pts,
+        })
+    power_df = pd.DataFrame(power_rows)
+
+    # ── Sędziowie ────────────────────────────────────────────────────────
+    sedzio_df = pd.DataFrame()
+    if "Referee" in df.columns:
+        ref_grp = df.groupby("Referee").agg(
+            Meczów=("Referee", "count"),
+            Kartki_Y_avg=("HY", lambda x: (x + df.loc[x.index, "AY"]).mean()),
+            Kartki_R_avg=("HR", lambda x: (x + df.loc[x.index, "AR"]).mean()),
+            Gole_avg=("total_gole", "mean"),
+        ).reset_index()
+        # Łączna suma kartek (Yellow + 2*Red) per mecz
+        ref_grp2 = []
+        for ref, grp in df.groupby("Referee"):
+            n = len(grp)
+            if n < 3:
+                continue
+            y_avg  = (grp["HY"] + grp["AY"]).mean()
+            r_avg  = (grp["HR"] + grp["AR"]).mean()
+            tot_k  = y_avg + r_avg * 2
+            g_avg  = grp["total_gole"].mean()
+            ref_grp2.append({
+                "Sędzia": ref, "Meczów": n,
+                "Kartki Y/M": round(y_avg, 1),
+                "Kartki R/M": round(r_avg, 2),
+                "Total Kart/M ↓": round(tot_k, 1),
+                "Gole/M": round(g_avg, 1),
+                "_tot_k": tot_k,
+            })
+        sedzio_df = pd.DataFrame(ref_grp2).sort_values("_tot_k", ascending=False) if ref_grp2 else pd.DataFrame()
+
+    return power_df, sedzio_df
+
+# ===========================================================================
 # ŁADOWANIE DANYCH I SIDEBAR
 # ===========================================================================
 st.sidebar.header("🌍 Wybór Rozgrywek")
@@ -948,7 +1085,7 @@ if not historical.empty:
                 a_s = map_nazwa(m["away_team"])
                 if h_s not in srednie_df.index or a_s not in srednie_df.index:
                     continue
-                lh_s, la_s, _r_s, _k_s, _sot_s = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
+                lh_s, la_s, _r_s, _k_s, _sot_s, _lsot_s = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
                 pr_s = predykcja_meczu(lh_s, la_s, rho=rho)
                 ikona = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}.get(pr_s["typ"], "⚪")
                 st.sidebar.markdown(
@@ -972,12 +1109,13 @@ if not historical.empty:
         st.sidebar.markdown(brier_line + "  \n" + hit_line, unsafe_allow_html=True)
 
     # TABS – NOWA STRUKTURA
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "🎯 Bet Builder (Laboratorium)",
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "🎯 Bet Builder (Lab)",
         "⚽ Analiza Meczu",
         "📊 Ranking Zdarzeń",
         "📈 Skuteczność + ROI",
-        "📉 Kalibracja Modelu"
+        "📉 Kalibracja Modelu",
+        "🔬 Deep Data"
     ])
 
     # =========================================================================
@@ -1013,7 +1151,7 @@ if not historical.empty:
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
                     
-                    lam_h, lam_a, lam_r, lam_k, sot_ok = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                     
                     p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
                     p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
@@ -1067,7 +1205,7 @@ if not historical.empty:
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
 
-                    lam_h, lam_a, lam_r, lam_k, sot_ok = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                     pred = predykcja_meczu(lam_h, lam_a, rho=rho)
                     data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
@@ -1136,7 +1274,7 @@ if not historical.empty:
 
                             # Alternatywne rynki
                             with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
-                                alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho)
+                                alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
                                 if alt:
                                     cat_colors = {"Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336","1X2":"#4CAF50"}
                                     rows_alt = []
@@ -1185,7 +1323,7 @@ if not historical.empty:
                             a_s = map_nazwa(mecz_s["away_team"])
                             if h_s not in srednie_df.index or a_s not in srednie_df.index:
                                 continue
-                            lhs, las, lrs, lks, _sot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
+                            lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
                             pred_s = predykcja_meczu(lhs, las, rho=rho)
                             mecz_str_s = f"{h_s} – {a_s}"
                             # Główny typ 1X2
@@ -1234,12 +1372,17 @@ if not historical.empty:
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
                         
-                        lam_h, lam_a, lam_r, lam_k, sot_ok = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                        lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
                         pred = predykcja_meczu(lam_h, lam_a, rho=rho)
                         mecz_str = f"{h} – {a}"
 
+                        def _ev(p_val, fo_val):
+                            """Expected Value: p*fo - 1. >0 = value bet."""
+                            return round(p_val * fo_val - 1.0, 3)
+
                         # Typ główny meczu (prog min 0.58 – slider decyduje o wyświetleniu)
                         if pred["p_typ"] >= 0.58:
+                            ev = _ev(pred["p_typ"], pred["fo_typ"])
                             wszystkie_zd.append({
                                 "Mecz": mecz_str,
                                 "Rynek": "1X2",
@@ -1247,12 +1390,14 @@ if not historical.empty:
                                 "P": f"{pred['p_typ']:.0%}",
                                 "P_val": pred["p_typ"],
                                 "Fair": pred["fo_typ"],
+                                "EV": ev,
                                 "Kolor": "🟢" if pred["p_typ"] >= 0.65 else "🟡"
                             })
 
                         # Alternatywne zdarzenia (prog min 0.55 – slider decyduje o wyświetleniu)
-                        alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.55)
+                        alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.55, lam_sot=lam_sot)
                         for emoji, nazwa, p, fo, kat, linia in alt:
+                            ev = _ev(p, fo)
                             wszystkie_zd.append({
                                 "Mecz": mecz_str,
                                 "Rynek": kat,
@@ -1260,6 +1405,7 @@ if not historical.empty:
                                 "P": f"{p:.0%}",
                                 "P_val": p,
                                 "Fair": fo,
+                                "EV": ev,
                                 "Kolor": "🟢" if p >= 0.65 else "🟡"
                             })
 
@@ -1294,38 +1440,53 @@ if not historical.empty:
                             fo3 = row["Fair"]
                             fc3 = "#4CAF50" if fo3 <= 1.60 else ("#FF9800" if fo3 <= 2.00 else "#aaa")
                             sila_opis = "🔥 Silny" if row["P_val"] >= 0.70 else ("🎯 Dobry" if row["P_val"] >= 0.62 else "💡 Uwaga")
+                            ev3 = row.get("EV", 0)
+                            ev_col3 = "#4CAF50" if ev3 > 0.02 else ("#888" if ev3 > -0.02 else "#F44336")
+                            ev_icon3 = "+" if ev3 > 0 else ""
                             html_r3.append(
                                 f"<tr>"
-                                f"<td style='padding:6px 10px;font-weight:bold;font-size:0.88em'>{row['Mecz']}</td>"
+                                f"<td style='padding:6px 10px;font-weight:bold;font-size:0.85em'>{row['Mecz']}</td>"
                                 f"<td style='padding:6px 10px;text-align:center'>"
                                 f"<span style='background:{kc3}22;color:{kc3};padding:2px 7px;"
-                                f"border-radius:8px;font-size:0.82em;font-weight:bold'>{row['Rynek']}</span></td>"
-                                f"<td style='padding:6px 10px;font-size:0.88em'>{row['Typ']}</td>"
-                                f"<td style='padding:6px 10px;width:120px'>"
+                                f"border-radius:8px;font-size:0.80em;font-weight:bold'>{row['Rynek']}</span></td>"
+                                f"<td style='padding:6px 10px;font-size:0.85em'>{row['Typ']}</td>"
+                                f"<td style='padding:6px 10px;width:110px'>"
                                 f"<div style='display:flex;align-items:center;gap:6px'>"
                                 f"<div style='flex:1;background:#333;border-radius:3px;height:6px'>"
                                 f"<div style='background:{kc3};width:{bw3}%;height:6px;border-radius:3px'></div></div>"
-                                f"<span style='color:{kc3};font-weight:bold;font-size:0.85em;min-width:32px'>{row['P']}</span>"
+                                f"<span style='color:{kc3};font-weight:bold;font-size:0.83em;min-width:32px'>{row['P']}</span>"
                                 f"</div></td>"
                                 f"<td style='padding:6px 10px;text-align:right;color:{fc3};font-weight:bold'>{fo3:.2f}</td>"
-                                f"<td style='padding:6px 10px;text-align:center;font-size:0.82em'>{sila_opis}</td>"
+                                f"<td style='padding:6px 10px;text-align:center;color:{ev_col3};"
+                                f"font-weight:bold;font-size:0.85em'>{ev_icon3}{ev3:.3f}</td>"
+                                f"<td style='padding:6px 10px;text-align:center;font-size:0.80em'>{sila_opis}</td>"
                                 f"</tr>"
                             )
-                        st.markdown(
-                            f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333;margin-top:8px'>"
-                            f"<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
-                            f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.78em;text-transform:uppercase'>"
-                            f"<th style='padding:8px 10px;text-align:left'>Mecz</th>"
-                            f"<th style='padding:8px 10px;text-align:center'>Rynek</th>"
-                            f"<th style='padding:8px 10px;text-align:left'>Zdarzenie</th>"
-                            f"<th style='padding:8px 10px;text-align:left'>P modelu</th>"
-                            f"<th style='padding:8px 10px;text-align:right'>Fair Odds</th>"
-                            f"<th style='padding:8px 10px;text-align:center'>Siła</th>"
-                            f"</tr></thead><tbody>{''.join(html_r3)}</tbody></table></div>"
-                            f"<p style='color:#444;font-size:0.75em;margin-top:6px'>"
-                            f"Pokazano {len(df_show_r)} zdarzeń · Fair Odds = bez marży bukmachera</p>",
-                            unsafe_allow_html=True,
-                        )
+                        # Filtr EV
+                        only_value = st.checkbox("🔍 Tylko Value Bets (EV > 0)", key="ev_filter")
+                        if only_value:
+                            df_show_r = df_show_r[df_show_r["EV"] > 0]
+                            if df_show_r.empty:
+                                st.info("Brak Value Betów przy tym progu p.")
+                                html_r3 = []
+                        if html_r3:
+                            st.markdown(
+                                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333;margin-top:8px'>"
+                                f"<table style='width:100%;border-collapse:collapse;font-size:0.86em'>"
+                                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.76em;text-transform:uppercase'>"
+                                f"<th style='padding:8px 10px;text-align:left'>Mecz</th>"
+                                f"<th style='padding:8px 10px;text-align:center'>Rynek</th>"
+                                f"<th style='padding:8px 10px;text-align:left'>Zdarzenie</th>"
+                                f"<th style='padding:8px 10px;text-align:left'>P modelu</th>"
+                                f"<th style='padding:8px 10px;text-align:right'>Fair Odds</th>"
+                                f"<th style='padding:8px 10px;text-align:center'>EV</th>"
+                                f"<th style='padding:8px 10px;text-align:center'>Siła</th>"
+                                f"</tr></thead><tbody>{''.join(html_r3)}</tbody></table></div>"
+                                f"<p style='color:#444;font-size:0.74em;margin-top:6px'>"
+                                f"EV = p×fair−1. EV&gt;0 → model widzi wartość. "
+                                f"Fair Odds bez marży bukmachera. Pokazano {len(df_show_r)} zdarzeń.</p>",
+                                unsafe_allow_html=True,
+                            )
                         # Export rankingu
                         st.download_button("⬇️ Pobierz ranking (CSV)",
                                            data=df_show_r.drop(columns=["P_val","Kolor"]).to_csv(index=False, decimal=","),
@@ -1654,6 +1815,179 @@ if not historical.empty:
             st.caption("Punkty powyżej przekątnej = model był zbyt ostrożny. Poniżej = zbyt pewny siebie.")
         else:
             st.info("Brak danych do kalibracji. Potrzebne są zapisane predykcje z wynikami.")
+
+    # =========================================================================
+    # TAB 6 – DEEP DATA (Power Rankings + Sędziowie)
+    # =========================================================================
+    with tab6:
+        st.subheader("🔬 Deep Data – Power Rankings & Analiza")
+        st.caption(
+            "Poglądowe statystyki drużyn i sędziów. "
+            "Konwersja SOT → sygnał czy skuteczność to talent czy szczęście. "
+            "Dane historyczne (bieżący + poprzedni sezon)."
+        )
+
+        power_df, sedzio_df = deep_data_stats(historical.to_json())
+
+        if not power_df.empty:
+            # ── Filtry ───────────────────────────────────────────────────
+            d6c1, d6c2 = st.columns([2, 6])
+            with d6c1:
+                sort_dd = st.radio("Sortuj po", ["Gole/M ↑", "Strac./M ↓", "Forma", "Kartki/M", "SOT/M"],
+                                   key="sort_dd")
+            with d6c2:
+                search_dd = st.text_input("🔍 Filtruj drużynę", "", key="search_dd",
+                                          placeholder="Wpisz nazwę...")
+
+            sort_map = {
+                "Gole/M ↑":   ("_gol_str",   False),
+                "Strac./M ↓": ("_gol_strac", True),
+                "Forma":      ("_forma",     False),
+                "Kartki/M":   ("Kartki/M",   False),
+                "SOT/M":      ("SOT/M",      False),
+            }
+            col_s, asc_s = sort_map.get(sort_dd, ("_gol_str", False))
+            df_dd = power_df.copy()
+            if search_dd:
+                df_dd = df_dd[df_dd["Drużyna"].str.contains(search_dd, case=False, na=False)]
+            try:
+                df_dd = df_dd.sort_values(col_s, ascending=asc_s)
+            except Exception:
+                pass
+
+            # ── HTML tabela Power Rankings ───────────────────────────────
+            cat_dd = {"Gole/M ↑": "#4CAF50", "Strac./M ↓": "#F44336",
+                      "SOT/M": "#2196F3", "Konwersja%": "#9C27B0",
+                      "Kartki/M": "#FF9800", "Forma (pkt/5M)": "#4CAF50"}
+
+            rows_dd = []
+            max_gol = df_dd["_gol_str"].max() if not df_dd.empty else 1
+            max_strac = df_dd["_gol_strac"].max() if not df_dd.empty else 1
+            max_forma = 15  # max 5*3
+
+            for _, row in df_dd.iterrows():
+                gol_pct  = int(row["_gol_str"] / max_gol * 100) if max_gol > 0 else 0
+                strac_pct = int(row["_gol_strac"] / max_strac * 100) if max_strac > 0 else 0
+                form_pct  = int(row["_forma"] / max_forma * 100)
+                form_col  = "#4CAF50" if row["_forma"] >= 9 else ("#FF9800" if row["_forma"] >= 5 else "#F44336")
+                # xG-proxy vs gole_str – konwersja anomalia?
+                try:
+                    xg_v = float(row["xG-proxy"])
+                    gol_v = float(row["_gol_str"])
+                    xg_diff = gol_v - xg_v
+                    xg_icon = "🍀" if xg_diff > 0.25 else ("😤" if xg_diff < -0.20 else "⚖️")
+                    xg_str  = f"{xg_v:.2f} {xg_icon}"
+                except (TypeError, ValueError):
+                    xg_str = "–"
+                rows_dd.append(
+                    f"<tr>"
+                    f"<td style='padding:6px 10px;font-weight:bold;font-size:0.88em'>{row['Drużyna']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['M']}</td>"
+                    # Gole/M pasek
+                    f"<td style='padding:6px 10px'>"
+                    f"<div style='display:flex;align-items:center;gap:5px'>"
+                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                    f"<div style='background:#4CAF50;width:{gol_pct}%;height:5px;border-radius:3px'></div></div>"
+                    f"<span style='color:#4CAF50;font-size:0.85em;min-width:28px'>{row['Gole/M ↑']}</span>"
+                    f"</div></td>"
+                    # Stracone/M pasek
+                    f"<td style='padding:6px 10px'>"
+                    f"<div style='display:flex;align-items:center;gap:5px'>"
+                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                    f"<div style='background:#F44336;width:{strac_pct}%;height:5px;border-radius:3px'></div></div>"
+                    f"<span style='color:#F44336;font-size:0.85em;min-width:28px'>{row['Strac./M ↓']}</span>"
+                    f"</div></td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#2196F3'>{row['SOT/M']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#9C27B0'>{row['Konwersja%']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{xg_str}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#FF9800'>{row['Kartki/M']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#aaa'>{row['Rożne/M']}</td>"
+                    # Forma pasek
+                    f"<td style='padding:6px 10px'>"
+                    f"<div style='display:flex;align-items:center;gap:5px'>"
+                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                    f"<div style='background:{form_col};width:{form_pct}%;height:5px;border-radius:3px'></div></div>"
+                    f"<span style='color:{form_col};font-size:0.85em;min-width:18px'>{row['Forma (pkt/5M)']}</span>"
+                    f"</div></td>"
+                    f"</tr>"
+                )
+
+            st.markdown(
+                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
+                f"<table style='width:100%;border-collapse:collapse;font-size:0.86em'>"
+                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.75em;text-transform:uppercase'>"
+                f"<th style='padding:8px 10px;text-align:left'>Drużyna</th>"
+                f"<th style='padding:8px 10px;text-align:center'>M</th>"
+                f"<th style='padding:8px 10px;text-align:left'>Gole/M ↑</th>"
+                f"<th style='padding:8px 10px;text-align:left'>Strac./M ↓</th>"
+                f"<th style='padding:8px 10px;text-align:center'>SOT/M</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Konwersja</th>"
+                f"<th style='padding:8px 10px;text-align:center'>xG-proxy</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Kartki/M</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Rożne/M</th>"
+                f"<th style='padding:8px 10px;text-align:left'>Forma/5M</th>"
+                f"</tr></thead><tbody>{''.join(rows_dd)}</tbody></table></div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "🍀 Szczęściarz (gole > xG-proxy) · 😤 Pechowiec (gole < xG-proxy) · ⚖️ Normalny. "
+                "Konwersja = gole/celne strzały (liga avg ~10-12%). "
+                "xG-proxy = SOT × 0.11 (uproszczony szacunek)."
+            )
+
+            # Export Power Rankings
+            export_cols = ["Drużyna","M","Gole/M ↑","Strac./M ↓","SOT/M",
+                           "Konwersja%","xG-proxy","Kartki/M","Rożne/M","Forma (pkt/5M)"]
+            avail_cols = [c for c in export_cols if c in df_dd.columns]
+            st.download_button("⬇️ Pobierz Power Rankings (CSV)",
+                               data=df_dd[avail_cols].to_csv(index=False, decimal=","),
+                               file_name="power_rankings.csv", mime="text/csv")
+
+            # ── Sędziowie ─────────────────────────────────────────────────
+            st.divider()
+            st.markdown("### 🟨 Profile Sędziów")
+            if not sedzio_df.empty:
+                st.caption(
+                    "Historyczny profil sędziów – średnia kartek i goli per mecz. "
+                    "Nie jest połączony z predykcją (brak przypisania sędziego do przyszłych meczów), "
+                    "ale przydatny przy analizie rynku kartek."
+                )
+                # SVG mini-bar dla kartek sędziów
+                df_sed = sedzio_df.sort_values("_tot_k", ascending=False).head(20)
+                W_sed, H_sed, P_sed = 620, max(200, len(df_sed)*28+60), 160
+                max_k = df_sed["_tot_k"].max() if not df_sed.empty else 1
+                bars_sed = []
+                for i, (_, sr) in enumerate(df_sed.iterrows()):
+                    y_s = P_sed//3 + i*28
+                    blen_s = sr["_tot_k"] / max_k * (W_sed - P_sed - 20)
+                    k_col  = "#F44336" if sr["_tot_k"] > 5 else ("#FF9800" if sr["_tot_k"] > 3.5 else "#4CAF50")
+                    bars_sed.append(
+                        f"<rect x='{P_sed}' y='{y_s+6}' width='{blen_s:.0f}' height='14' "
+                        f"fill='{k_col}' fill-opacity='0.8' rx='3'/>"
+                        f"<text x='{P_sed-5}' y='{y_s+17}' text-anchor='end' "
+                        f"font-size='9' fill='#aaa' font-family='sans-serif'>{str(sr['Sędzia'])[:22]}</text>"
+                        f"<text x='{P_sed+blen_s+4:.0f}' y='{y_s+17}' "
+                        f"font-size='9' fill='{k_col}' font-family='sans-serif' font-weight='bold'>"
+                        f"{sr['Total Kart/M ↓']:.1f} ({sr['Meczów']}M)</text>"
+                    )
+                svg_sed = (
+                    f'<svg width="{W_sed}" height="{H_sed}" '
+                    f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
+                    f'<text x="{W_sed//2}" y="18" text-anchor="middle" '
+                    f'font-size="11" fill="#888" font-family="sans-serif">Całkowite kartki/mecz (Y+2R)</text>'
+                    f'{"".join(bars_sed)}</svg>'
+                )
+                st.markdown(svg_sed, unsafe_allow_html=True)
+
+                # Tabela
+                display_cols_sed = [c for c in ["Sędzia","Meczów","Kartki Y/M","Kartki R/M",
+                                                  "Total Kart/M ↓","Gole/M"] if c in sedzio_df.columns]
+                st.dataframe(df_sed[display_cols_sed].reset_index(drop=True),
+                             use_container_width=True, hide_index=True)
+            else:
+                st.info("Brak kolumny 'Referee' w danych – profil sędziów niedostępny dla tej ligi.")
+        else:
+            st.warning("Brak wystarczających danych do Power Rankings.")
 
     # Debug
     if debug_mode:
