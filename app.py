@@ -258,6 +258,47 @@ def load_historical(league_code: str) -> pd.DataFrame:
     df_now["_sezon"] = "biezacy"
     return pd.concat([df_prev_s, df_now], ignore_index=True).sort_values("Date")
 
+# ===========================================================================
+# POPRAWIONA FUNKCJA ŁADOWANIA TERMINARZA – GRUPOWANIE PO TYGODNIACH
+# ===========================================================================
+@st.cache_data(ttl=86400)
+def load_schedule(filename: str) -> pd.DataFrame:
+    """Wczytuje terminarz i poprawnie numeruje kolejki według tygodni ISO"""
+    try:
+        df = pd.read_csv(filename)
+        df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
+        
+        # Dodaj kolumnę z datą bez czasu dla łatwiejszego porównania
+        df["date_only"] = df["date"].dt.date
+        
+        # Jeśli brak kolumny 'round', utwórz ją na podstawie tygodni
+        if "round" not in df.columns:
+            df = df.sort_values("date")
+            
+            # Pobierz tydzień i rok dla każdej daty (ISO week)
+            df["week"] = df["date"].dt.isocalendar().week
+            df["year"] = df["date"].dt.isocalendar().year
+            
+            # Znajdź unikalne kombinacje (rok, tydzień)
+            unique_weeks = df[["year", "week"]].drop_duplicates().sort_values(["year", "week"])
+            
+            # Stwórz mapowanie na numery kolejek (1,2,3...)
+            week_to_round = {}
+            for i, (_, row) in enumerate(unique_weeks.iterrows(), 1):
+                week_to_round[(row["year"], row["week"])] = i
+            
+            # Przypisz numery kolejek
+            df["round"] = df.apply(lambda x: week_to_round[(x["year"], x["week"])], axis=1)
+            
+            # Usuń kolumny pomocnicze
+            df = df.drop(columns=["week", "year"])
+        
+        return df.dropna(subset=["date"]).sort_values("date")
+        
+    except Exception as e:
+        st.error(f"Problem z plikiem terminarza {filename}: {e}")
+        return pd.DataFrame()
+
 @st.cache_data(ttl=86400)
 def load_schedule(filename: str) -> pd.DataFrame:
     try:
@@ -1095,9 +1136,11 @@ with hcol2:
         dzisiaj_t = datetime.now().date()
         przyszle_t = schedule[schedule["date"].dt.date >= dzisiaj_t]
         if not przyszle_t.empty:
-            nb_t = int(przyszle_t["round"].min())
-            n_m = len(schedule[schedule["round"] == nb_t])
-            st.metric("Następna kolejka", f"#{nb_t}", f"{n_m} meczów")
+            # Znajdź najbliższą przyszłą kolejkę
+            pierwsza_data = przyszle_t["date_only"].min()
+            pierwsza_kolejka = przyszle_t[przyszle_t["date_only"] == pierwsza_data]["round"].iloc[0]
+            n_m = len(schedule[schedule["round"] == pierwsza_kolejka])
+            st.metric("Następna kolejka", f"#{pierwsza_kolejka}", f"{n_m} meczów")
 
 if not historical.empty:
     srednie_df  = oblicz_wszystkie_statystyki(historical.to_json())
@@ -1119,8 +1162,9 @@ if not historical.empty:
         dzisiaj  = datetime.now().date()
         przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
         if not przyszle.empty:
-            nb_side = przyszle["round"].min()
-            st.sidebar.info(f"⚽ Następna kolejka: **{int(nb_side)}**")
+            pierwsza_data = przyszle["date_only"].min()
+            pierwsza_kolejka = przyszle[przyszle["date_only"] == pierwsza_data]["round"].iloc[0]
+            st.sidebar.info(f"⚽ Następna kolejka: **{int(pierwsza_kolejka)}**")
 
     # TABS – NOWA KOLEJNOŚĆ: Ranking → Analiza → Deep Data → Skuteczność → Kalibracja → Lab
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -1143,8 +1187,13 @@ if not historical.empty:
             dzisiaj = datetime.now().date()
             przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
             if not przyszle.empty:
-                nb = przyszle["round"].min()
-                mecze = schedule[schedule["round"] == nb]
+                # Znajdź pierwszą przyszłą kolejkę (najbliższa data)
+                pierwsza_data = przyszle["date_only"].min()
+                pierwsza_kolejka = przyszle[przyszle["date_only"] == pierwsza_data]["round"].iloc[0]
+                
+                # Pobierz wszystkie mecze z tej kolejki
+                mecze = schedule[schedule["round"] == pierwsza_kolejka]
+                nb = pierwsza_kolejka
 
                 with st.spinner("Generowanie rankingu..."):
                     wszystkie_zd = []
@@ -1297,9 +1346,11 @@ if not historical.empty:
                             prog_filtr = st.slider(
                                 "Min. prawdopodobieństwo", 
                                 0.55, 0.90, 0.60, 0.01,
-                                format="%.2f%%",
+                                format="%.2f",  # Zmiana z %.0f%% na %.2f
                                 key="full_rank_slider"
                             )
+                            # Dodatkowe wyświetlanie w procentach
+                            st.caption(f"Wybrano: {prog_filtr:.0%}")
                         with col_f3:
                             only_value_full = st.checkbox("Tylko EV>0", key="full_rank_value")
                         
@@ -1373,8 +1424,14 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             dzisiaj  = datetime.now().date()
             przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
             if not przyszle.empty:
-                nb    = przyszle["round"].min()
-                mecze = schedule[schedule["round"] == nb]
+                # Znajdź pierwszą przyszłą kolejkę
+                pierwsza_data = przyszle["date_only"].min()
+                pierwsza_kolejka = przyszle[przyszle["date_only"] == pierwsza_data]["round"].iloc[0]
+                
+                # Pobierz wszystkie mecze z tej kolejki
+                mecze = schedule[schedule["round"] == pierwsza_kolejka]
+                nb = pierwsza_kolejka
+                
                 st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
 
                 kol_a, kol_b = st.columns(2)
@@ -2068,8 +2125,14 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             dzisiaj  = datetime.now().date()
             przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
             if not przyszle.empty:
-                nb    = przyszle["round"].min()
-                mecze = schedule[schedule["round"] == nb]
+                # Znajdź pierwszą przyszłą kolejkę
+                pierwsza_data = przyszle["date_only"].min()
+                pierwsza_kolejka = przyszle[przyszle["date_only"] == pierwsza_data]["round"].iloc[0]
+                
+                # Pobierz wszystkie mecze z tej kolejki
+                mecze = schedule[schedule["round"] == pierwsza_kolejka]
+                nb = pierwsza_kolejka
+                
                 st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
 
                 for _, mecz in mecze.iterrows():
