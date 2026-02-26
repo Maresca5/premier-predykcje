@@ -1297,7 +1297,7 @@ if not historical.empty:
                             prog_filtr = st.slider(
                                 "Min. prawdopodobieństwo", 
                                 0.55, 0.90, 0.60, 0.01,
-                                format="%.2f%%",
+                                format=".2f%%",
                                 key="full_rank_slider"
                             )
                         with col_f3:
