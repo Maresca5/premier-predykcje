@@ -260,19 +260,54 @@ def load_historical(league_code: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=86400)
 def load_schedule(filename: str) -> pd.DataFrame:
+    """
+    Wczytuje terminarz z CSV.
+    Kolumna 'round' z pliku jest zachowana jako 'round_csv' (dla referencji),
+    ale do nawigacji używamy 'round_seq' – numeracji chronologicznej
+    opartej na grupowaniu unikalnych weekendów/dni grania.
+    Mecze tego samego dnia (±1 dzień) należą do tej samej kolejki.
+    """
     try:
         df = pd.read_csv(filename)
         df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
-        if "round" not in df.columns:
-            df = df.sort_values("date")
-            unique_dates = df["date"].dt.date.unique()
-            df["round"] = df["date"].dt.date.map(
-                {d: i + 1 for i, d in enumerate(unique_dates)}
-            )
-        return df.dropna(subset=["date"]).sort_values("date")
+        df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+        # Zachowaj oryginalną kolumnę round jeśli jest
+        if "round" in df.columns:
+            df["round_csv"] = df["round"]
+
+        # Zawsze generuj round_seq – chronologiczna numeracja grup meczowych.
+        # Grupujemy mecze których daty są blisko siebie (okno 4 dni = jeden "weekend grania")
+        dates = df["date"].dt.date.values
+        groups = []
+        current_group = 1
+        prev_date = None
+        for d in dates:
+            if prev_date is None or (d - prev_date).days > 4:
+                if prev_date is not None:
+                    current_group += 1
+            groups.append(current_group)
+            prev_date = d
+        df["round"] = groups
+
+        return df
     except Exception as e:
         st.error(f"Problem z plikiem terminarza {filename}: {e}")
         return pd.DataFrame()
+
+def kolejka_label(schedule: "pd.DataFrame", nb: int) -> str:
+    """Zwraca czytelny label kolejki: 'Kolejka 26 (CSV: 23)' gdy numery się różnią."""
+    if "round_csv" not in schedule.columns:
+        return f"Kolejka {nb}"
+    mecze_nb = schedule[schedule["round"] == nb]
+    if mecze_nb.empty:
+        return f"Kolejka {nb}"
+    csv_rounds = mecze_nb["round_csv"].dropna().unique()
+    if len(csv_rounds) == 1:
+        csv_r = int(csv_rounds[0])
+        if csv_r != nb:
+            return f"Kolejka {nb} *(plik CSV: {csv_r})*"
+    return f"Kolejka {nb}"
 
 # ===========================================================================
 # STATYSTYKI
@@ -1097,7 +1132,7 @@ with hcol2:
         if not przyszle_t.empty:
             nb_t = int(przyszle_t["round"].min())
             n_m = len(schedule[schedule["round"] == nb_t])
-            st.metric("Następna kolejka", f"#{nb_t}", f"{n_m} meczów")
+            st.metric("Następna kolejka", kolejka_label(schedule, nb_t), f"{n_m} meczów")
 
 if not historical.empty:
     srednie_df  = oblicz_wszystkie_statystyki(historical.to_json())
@@ -1120,7 +1155,7 @@ if not historical.empty:
         przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
         if not przyszle.empty:
             nb_side = przyszle["round"].min()
-            st.sidebar.info(f"⚽ Następna kolejka: **{int(nb_side)}**")
+            st.sidebar.info(f"⚽ Następna kolejka: **{kolejka_label(schedule, int(nb_side))}**")
 
     # TABS – NOWA KOLEJNOŚĆ: Ranking → Analiza → Deep Data → Skuteczność → Kalibracja → Lab
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -1329,7 +1364,7 @@ if not historical.empty:
                             st.download_button(
                                 "⬇️ Pobierz pełny ranking (CSV)",
                                 data=df_full[["Mecz", "Rynek", "Typ", "P", "Fair", "EV"]].to_csv(index=False, decimal=","),
-                                file_name=f"ranking_full_kolejka{int(nb)}.csv"
+                                file_name=f"ranking_kolejka{int(nb)}.csv"
                             )
                         else:
                             st.info("Brak zdarzeń po zastosowaniu filtrów")
@@ -1375,7 +1410,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             if not przyszle.empty:
                 nb    = przyszle["round"].min()
                 mecze = schedule[schedule["round"] == nb]
-                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
+                st.caption(f"{kolejka_label(schedule, nb)} – {len(mecze)} meczów")
 
                 kol_a, kol_b = st.columns(2)
                 mecze_list = list(mecze.iterrows())
@@ -2070,7 +2105,7 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             if not przyszle.empty:
                 nb    = przyszle["round"].min()
                 mecze = schedule[schedule["round"] == nb]
-                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
+                st.caption(f"{kolejka_label(schedule, nb)} – {len(mecze)} meczów")
 
                 for _, mecz in mecze.iterrows():
                     h = map_nazwa(mecz["home_team"])
