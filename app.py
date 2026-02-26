@@ -1191,14 +1191,17 @@ if not historical.empty:
                                     "Kategoria": kat
                                 })
                         
-                        # Shot Kings – mecze z najwyższą liczbą strzałów celnych
+                        # Shot Kings – tylko jeśli fair odds ≥ 1.30
                         if lam_sot and lam_sot > 0:
-                            shot_kings.append({
-                                "Mecz": mecz_str,
-                                "Oczekiwane SOT": round(lam_sot, 1),
-                                "Over 5.5 SOT": (1 - poisson.cdf(5, lam_sot)) if lam_sot else 0,
-                                "Fair": fair_odds(1 - poisson.cdf(5, lam_sot)) if lam_sot else 0
-                            })
+                            p_over_55 = 1 - poisson.cdf(5, lam_sot) if lam_sot else 0
+                            fo_over_55 = fair_odds(p_over_55) if p_over_55 > 0 else 0
+                            if fo_over_55 >= 1.30:
+                                shot_kings.append({
+                                    "Mecz": mecz_str,
+                                    "Oczekiwane SOT": round(lam_sot, 1),
+                                    "Over 5.5 SOT": p_over_55,
+                                    "Fair": fo_over_55
+                                })
 
                 if wszystkie_zd:
                     df_rank = pd.DataFrame(wszystkie_zd)
@@ -1260,7 +1263,7 @@ if not historical.empty:
                     # =================================================================
                     if shot_kings:
                         st.markdown("### 🎯 Shot Kings")
-                        st.caption("Mecze z największą oczekiwaną liczbą strzałów celnych")
+                        st.caption("Mecze z największą oczekiwaną liczbą strzałów celnych (fair odds ≥ 1.30)")
                         
                         shot_df = pd.DataFrame(shot_kings).sort_values("Oczekiwane SOT", ascending=False)
                         
@@ -1275,6 +1278,8 @@ if not historical.empty:
                                 if p_over > 0:
                                     st.markdown(f"Over 5.5: {p_over:.0%} (fair {row['Fair']:.2f})")
                             st.divider()
+                    else:
+                        st.info("Brak zdarzeń Shot Kings z fair odds ≥ 1.30")
 
                     # =================================================================
                     # SEKCJA 4: PEŁNY RANKING (w expanderze)
@@ -2110,4 +2115,3 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
 
 else:
     st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
-
