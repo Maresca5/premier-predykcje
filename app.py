@@ -27,7 +27,7 @@ DB_FILE    = "predykcje.db"
 def waga_poprzedniego(n_biezacy: int) -> float:
     return float(np.clip(0.8 - (n_biezacy / 30) * 0.6, 0.2, 0.8))
 
-st.set_page_config(page_title="System Analityczny Piłkarski Top 5", layout="wide")
+st.set_page_config(page_title="Football Analytics System", layout="wide", initial_sidebar_state="expanded")
 
 # ===========================================================================
 # MAPOWANIA NAZW
@@ -1084,8 +1084,20 @@ debug_mode   = st.sidebar.checkbox("🔧 Debug – niezmapowane nazwy", value=Fa
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
-st.title(f"System Analityczny – {wybrana_liga} 2025/26")
-st.markdown("Dixon-Coles • Tracking skuteczności • Kalibracja modelu")
+# ── Nagłówek główny ────────────────────────────────────────────────────────
+hcol1, hcol2 = st.columns([6, 2])
+with hcol1:
+    st.title(f"⚽ {wybrana_liga}")
+    st.caption(f"Dixon-Coles · SOT blend · Brier tracking · Kalibracja modelu")
+with hcol2:
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    if not schedule.empty:
+        dzisiaj_t = datetime.now().date()
+        przyszle_t = schedule[schedule["date"].dt.date >= dzisiaj_t]
+        if not przyszle_t.empty:
+            nb_t = int(przyszle_t["round"].min())
+            n_m = len(schedule[schedule["round"] == nb_t])
+            st.metric("Następna kolejka", f"#{nb_t}", f"{n_m} meczów")
 
 if not historical.empty:
     srednie_df  = oblicz_wszystkie_statystyki(historical.to_json())
@@ -1099,299 +1111,33 @@ if not historical.empty:
     # Pobierz dane do ostrzeżeń sędziowskich
     power_df, sedziowie_df = deep_data_stats(historical.to_json())
 
-    # Sidebar: szybki podgląd kolejki
-    if not schedule.empty and not srednie_df.empty:
-        dzisiaj    = datetime.now().date()
-        przyszle   = schedule[schedule["date"].dt.date >= dzisiaj]
+    # Sidebar: info o danych
+    st.sidebar.divider()
+    st.sidebar.caption(f"📅 Sezon 2025/26 · {n_biezacy} meczów w bazie")
+    st.sidebar.caption(f"ρ Dixon-Coles: `{rho:.4f}` · w_prev: `{w_prev:.2f}`")
+    if not schedule.empty:
+        dzisiaj  = datetime.now().date()
+        przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
         if not przyszle.empty:
-            nb_side    = przyszle["round"].min()
-            mecze_side = schedule[schedule["round"] == nb_side]
-            st.sidebar.divider()
-            st.sidebar.markdown(f"**⚽ Kolejka {int(nb_side)} – typy modelu**")
-            for _, m in mecze_side.iterrows():
-                h_s = map_nazwa(m["home_team"])
-                a_s = map_nazwa(m["away_team"])
-                if h_s not in srednie_df.index or a_s not in srednie_df.index:
-                    continue
-                lh_s, la_s, _r_s, _k_s, _sot_s, _lsot_s = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
-                pr_s = predykcja_meczu(lh_s, la_s, rho=rho)
-                ikona = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}.get(pr_s["typ"], "⚪")
-                st.sidebar.markdown(
-                    f"{ikona} **{h_s[:10]}** vs **{a_s[:10]}**  \n"
-                    f"&nbsp;&nbsp;&nbsp;`{pr_s['typ']}` @ {pr_s['fo_typ']:.2f} "
-                    f"· {pr_s['conf_emoji']} {pr_s['conf_level']}",
-                    unsafe_allow_html=True,
-                )
+            nb_side = przyszle["round"].min()
+            st.sidebar.info(f"⚽ Następna kolejka: **{int(nb_side)}**")
 
-    # ── Mini metryki w sidebarze ────────────────────────────────────────────
-    mg_side = metryki_globalne(wybrana_liga)
-    if mg_side:
-        st.sidebar.divider()
-        st.sidebar.markdown("**📐 Model Health**")
-        brier_s = mg_side["brier"]
-        ece_s   = mg_side["ece"]
-        b_icon  = "🟢" if brier_s < 0.20 else ("🟡" if brier_s < 0.25 else "🔴")
-        e_icon  = "🟢" if ece_s < 0.05  else ("🟡" if ece_s < 0.10  else "🔴")
-        brier_line = f"{b_icon} Brier: `{brier_s:.4f}`  {e_icon} ECE: `{ece_s:.4f}`"
-        hit_line   = f"N: `{mg_side['n']}` | Hit: `{mg_side['hit_rate']:.1%}`"
-        st.sidebar.markdown(brier_line + "  \n" + hit_line, unsafe_allow_html=True)
-
-    # TABS – NOWA STRUKTURA
+    # TABS – NOWA KOLEJNOŚĆ: Ranking → Analiza → Deep Data → Skuteczność → Kalibracja → Lab
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "🎯 Bet Builder (Lab)",
-        "⚽ Analiza Meczu",
         "📊 Ranking Zdarzeń",
+        "⚽ Analiza Meczu",
+        "🔬 Deep Data",
         "📈 Skuteczność + ROI",
-        "📉 Kalibracja Modelu",
-        "🔬 Deep Data"
+        "📉 Kalibracja",
+        "🎛️ Laboratorium",
     ])
 
     # =========================================================================
-    # TAB 1 – BET BUILDER (Laboratorium)
+    # TAB 1 – RANKING ZDARZEŃ (główny widok)
     # =========================================================================
     with tab1:
-        st.subheader("🎛️ Bet Builder – laboratorium modelu")
-        st.caption("Eksperymentuj z kombinacjami zdarzeń. Nie są to rekomendacje, tylko symulacje.")
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            linia_gole   = st.selectbox("Linia goli",    [1.5, 2.5, 3.5], index=1)
-            typ_gole     = st.selectbox("Typ goli",      ["Over", "Under"])
-        with c2:
-            linia_rogi   = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5], index=1)
-            typ_rogi     = st.selectbox("Typ rożnych",   ["Over", "Under"])
-        with c3:
-            linia_kartki = st.selectbox("Linia kartek",  [2.5, 3.5, 4.5, 5.5], index=1)
-            typ_kartki   = st.selectbox("Typ kartek",    ["Over", "Under"])
-        min_prob = st.slider("Min. prawdopodobieństwo", 0.0, 1.0, 0.40, 0.01)
-
-        if not schedule.empty and not srednie_df.empty:
-            dzisiaj  = datetime.now().date()
-            przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
-            if not przyszle.empty:
-                nb    = przyszle["round"].min()
-                mecze = schedule[schedule["round"] == nb]
-                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
-
-                for _, mecz in mecze.iterrows():
-                    h = map_nazwa(mecz["home_team"])
-                    a = map_nazwa(mecz["away_team"])
-                    if h not in srednie_df.index or a not in srednie_df.index:
-                        continue
-                    
-                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    
-                    p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
-                    p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
-                    p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
-                    p_combo = p_g * p_r * p_k
-                    # Pokaż ekspander tylko gdy combo >= min_prob
-                    label_bb = (f"{'✅' if p_combo >= min_prob else '❌'} {h} vs {a}"
-                                f"  ·  combo {p_combo:.0%}  ·  fair AKO {fair_odds(p_combo):.2f}")
-                    with st.expander(label_bb, expanded=False):
-                        bc1, bc2, bc3, bc4 = st.columns(4)
-                        bc1.metric(f"{typ_gole} {linia_gole}",
-                                   f"{p_g:.1%}", f"fair {fair_odds(p_g):.2f}",
-                                   delta_color="normal" if p_g >= 0.55 else "off")
-                        bc2.metric(f"{typ_rogi} {linia_rogi} rożnych",
-                                   f"{p_r:.1%}", f"fair {fair_odds(p_r):.2f}",
-                                   delta_color="normal" if p_r >= 0.55 else "off")
-                        bc3.metric(f"{typ_kartki} {linia_kartki} kartek",
-                                   f"{p_k:.1%}", f"fair {fair_odds(p_k):.2f}",
-                                   delta_color="normal" if p_k >= 0.55 else "off")
-                        if p_combo >= min_prob:
-                            bc4.metric("COMBO", f"{p_combo:.1%}", f"fair AKO {fair_odds(p_combo):.2f}",
-                                       delta_color="normal")
-                        else:
-                            bc4.metric("COMBO", f"{p_combo:.1%}", "↓ poniżej progu", delta_color="off")
-
-    # =========================================================================
-    # TAB 2 – ANALIZA MECZU (z ostrzeżeniami sędziowskimi)
-    # =========================================================================
-    with tab2:
-        st.subheader("⚽ Analiza meczu – najbliższa kolejka")
-        st.caption("Szczegółowa analiza każdego meczu z macierzą wyników i alternatywnymi rynkami.")
-
-        tgl1, tgl2 = st.columns(2)
-        with tgl1: pokaz_komentarz = st.toggle("💬 Komentarz", value=True)
-        with tgl2: pokaz_macierz  = st.toggle("🔢 Macierz wyników", value=False)
-
-        if not schedule.empty and not srednie_df.empty:
-            dzisiaj  = datetime.now().date()
-            przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
-            if not przyszle.empty:
-                nb    = przyszle["round"].min()
-                mecze = schedule[schedule["round"] == nb]
-                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
-
-                kol_a, kol_b = st.columns(2)
-                mecze_list = list(mecze.iterrows())
-
-                for idx, (_, mecz) in enumerate(mecze_list):
-                    h = map_nazwa(mecz["home_team"])
-                    a = map_nazwa(mecz["away_team"])
-                    if h not in srednie_df.index or a not in srednie_df.index:
-                        continue
-
-                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred = predykcja_meczu(lam_h, lam_a, rho=rho)
-                    data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
-
-                    kolumna = kol_a if idx % 2 == 0 else kol_b
-                    ikony_t = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
-                    conf_i  = "🟢" if pred["conf_level"]=="High" else ("🟡" if pred["conf_level"]=="Medium" else "🔴")
-                    sot_badge = " 🎯SOT" if sot_ok else ""
-                    
-                    # Dodaj ostrzeżenie sędziowskie do etykiety
-                    sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
-                    sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
-                    
-                    label_t2 = (f"{conf_i} {h} vs {a}{sot_badge}"
-                                f"  ·  {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
-                                f"  ·  {data_meczu}")
-                    with kolumna:
-                        with st.expander(label_t2, expanded=False):
-                            # Nagłówek
-                            ch, cmid, ca = st.columns([5,2,5])
-                            with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
-                            with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
-                            with ca: st.markdown(f"<div style='font-weight:bold;text-align:right'>{a}</div>", unsafe_allow_html=True)
-
-                            # Przewidywany wynik
-                            st.markdown(
-                                f"<div style='text-align:center;font-size:1.7em;font-weight:bold;margin:4px 0'>"
-                                f"⚽ {pred['wynik_h']}:{pred['wynik_a']}"
-                                f"<span style='font-size:0.5em;color:#888;margin-left:8px'>({pred['p_exact']:.1%})</span></div>",
-                                unsafe_allow_html=True,
-                            )
-
-                            # Typ + confidence + chaos index
-                            conf_colors  = {"High":"#4CAF50","Medium":"#FF9800","Coinflip":"#F44336"}
-                            chaos_colors = {"Pewny":"#4CAF50","Klarowny":"#8BC34A","Otwarty":"#FF9800","Chaos":"#F44336"}
-                            conf_c = conf_colors.get(pred["conf_level"], "#888")
-                            ch_c   = chaos_colors.get(pred["chaos_label"], "#888")
-                            bar_w  = int(pred["chaos_pct"] * 100)
-                            st.markdown(
-                                f"<div style='text-align:center;margin-bottom:4px'>"
-                                f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
-                                f"<span style='font-size:0.88em;color:#888'>Fair Odds: <b>{pred['fo_typ']:.2f}</b> ({pred['p_typ']:.1%})</span>"
-                                f"</div>"
-                                f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:6px'>"
-                                f"{pred['conf_emoji']} <b>{pred['conf_level']}</b> · {pred['conf_opis']}"
-                                f"</div>"
-                                f"<div style='margin:0 8px 8px 8px'>"
-                                f"<div style='font-size:0.78em;color:#888'>"
-                                f"{pred['chaos_emoji']} Chaos Index: <b style='color:{ch_c}'>{pred['chaos_label']}</b>"
-                                f" ({pred['entropy']:.2f} bits)</div>"
-                                f"<div style='background:#333;border-radius:4px;height:4px;margin-top:4px'>"
-                                f"<div style='background:{ch_c};width:{bar_w}%;height:4px;border-radius:4px'></div>"
-                                f"</div></div>",
-                                unsafe_allow_html=True,
-                            )
-
-                            # Metryki 1X2
-                            mc1, mc2, mc3 = st.columns(3)
-                            mc1.metric("1", f"{pred['p_home']:.0%}", f"fair {pred['fo_home']}")
-                            mc2.metric("X", f"{pred['p_draw']:.0%}", f"fair {pred['fo_draw']}")
-                            mc3.metric("2", f"{pred['p_away']:.0%}", f"fair {pred['fo_away']}")
-                            
-                            # Lambda info + SOT status
-                            sot_info = " · 🎯 SOT blend aktywny" if sot_ok else " · gole only"
-                            st.markdown(
-                                f"<div style='text-align:center;font-size:0.78em;color:#555;margin-top:2px'>"
-                                f"λ {h[:8]}: <b style='color:#aaa'>{lam_h:.2f}</b> &nbsp;|&nbsp; "
-                                f"λ {a[:8]}: <b style='color:#aaa'>{lam_a:.2f}</b> &nbsp;|&nbsp; "
-                                f"Σ: <b style='color:#aaa'>{lam_h+lam_a:.2f}</b>"
-                                f"<span style='color:#4CAF50'>{sot_info}</span></div>",
-                                unsafe_allow_html=True,
-                            )
-                            
-                            # Ostrzeżenie sędziego
-                            st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
-
-                            # Alternatywne rynki
-                            with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
-                                alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
-                                if alt:
-                                    cat_colors = {"Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336","1X2":"#4CAF50","SOT":"#00BCD4"}
-                                    rows_alt = []
-                                    for emoji, nazwa, p, fo, kat, linia_z in alt[:8]:
-                                        kc = cat_colors.get(kat, "#888")
-                                        bw = int(p * 100)
-                                        fc = "#4CAF50" if fo <= 1.60 else ("#FF9800" if fo <= 2.00 else "#aaa")
-                                        rows_alt.append(
-                                            f"<tr><td style='padding:4px 8px;font-size:0.88em'>{emoji} {nazwa}</td>"
-                                            f"<td style='padding:4px 8px;width:110px'>"
-                                            f"<div style='display:flex;align-items:center;gap:5px'>"
-                                            f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                                            f"<div style='background:{kc};width:{bw}%;height:5px;border-radius:3px'></div></div>"
-                                            f"<span style='color:{kc};font-size:0.82em;min-width:30px'>{p:.0%}</span></div></td>"
-                                            f"<td style='padding:4px 8px;text-align:right;color:{fc};font-weight:bold;font-size:0.88em'>{fo:.2f}</td></tr>"
-                                        )
-                                    st.markdown(
-                                        f"<table style='width:100%;border-collapse:collapse'>"
-                                        f"<thead><tr style='color:#555;font-size:0.75em;text-transform:uppercase'>"
-                                        f"<th style='padding:4px 8px;text-align:left'>Rynek</th>"
-                                        f"<th style='padding:4px 8px;text-align:left'>P</th>"
-                                        f"<th style='padding:4px 8px;text-align:right'>Fair</th></tr></thead>"
-                                        f"<tbody>{''.join(rows_alt)}</tbody></table>"
-                                        f"<p style='color:#444;font-size:0.72em;margin:4px 0 0'>⚠️ Rożne/kartki – Poisson bez korelacji. Orientacyjnie.</p>",
-                                        unsafe_allow_html=True,
-                                    )
-                                else:
-                                    st.caption("Brak zdarzeń powyżej progu 55%.")
-
-                            if pokaz_komentarz:
-                                st.info(generuj_komentarz(h, a, pred, forma_dict))
-
-                            if pokaz_macierz:
-                                st.markdown("**Macierz wyników**")
-                                st.markdown(render_macierz_html(pred["macierz"], h, a), unsafe_allow_html=True)
-
-                # ── Tracking i aktualizacja wyników ──────────────────────────
-                st.divider()
-                tc1, tc2 = st.columns(2)
-                with tc1:
-                    if st.toggle("💾 Zapisz zdarzenia tej kolejki do trackingu", key="save_zd",
-                                 help="Zapisuje wszystkie zdarzenia (1X2 + alt. rynki) do bazy analitycznej."):
-                        n_saved = 0
-                        for _, mecz_s in mecze.iterrows():
-                            h_s = map_nazwa(mecz_s["home_team"])
-                            a_s = map_nazwa(mecz_s["away_team"])
-                            if h_s not in srednie_df.index or a_s not in srednie_df.index:
-                                continue
-                            lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
-                            pred_s = predykcja_meczu(lhs, las, rho=rho)
-                            mecz_str_s = f"{h_s} – {a_s}"
-                            # Główny typ 1X2
-                            zapisz_zdarzenia(wybrana_liga, int(nb), mecz_str_s, h_s, a_s,
-                                             "1X2", pred_s["typ"], 0.0, pred_s["p_typ"], pred_s["fo_typ"])
-                            n_saved += 1
-                            # Alternatywne
-                            for emo, nazwa_z, pz, foz, katz, liniz in alternatywne_zdarzenia(lhs, las, lrs, lks, rho, lam_sot=_lsot_sv):
-                                zapisz_zdarzenia(wybrana_liga, int(nb), mecz_str_s, h_s, a_s,
-                                                 katz, nazwa_z, liniz, pz, foz)
-                        st.success(f"✅ Zapisano zdarzenia dla {n_saved} meczów.")
-                with tc2:
-                    if st.button("🔄 Aktualizuj wyniki (po meczach)", help="Sprawdza bazę historyczną i uzupełnia wyniki zapisanych zdarzeń."):
-                        n_updated = 0
-                        init_db()
-                        con_u = sqlite3.connect(DB_FILE)
-                        mecze_db = con_u.execute(
-                            "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
-                            (wybrana_liga,)
-                        ).fetchall()
-                        con_u.close()
-                        for h_db, a_db in mecze_db:
-                            aktualizuj_wynik_zdarzenia(h_db, a_db, historical)
-                            n_updated += 1
-                        st.success(f"✅ Zaktualizowano wyniki dla {n_updated} meczów.")
-
-    # =========================================================================
-    # TAB 3 – RANKING ZDARZEŃ (ULEPSZONY Z KATEGORIAMI)
-    # =========================================================================
-    with tab3:
         st.subheader("📊 Ranking zdarzeń kolejki")
+        st.caption("Centrum systemu – Value Bets, Safe Haven i Shot Kings dla najbliższej kolejki.")
         
         if not schedule.empty and not srednie_df.empty:
             dzisiaj = datetime.now().date()
@@ -1590,324 +1336,209 @@ if not historical.empty:
             st.warning("Brak danych")
 
     # =========================================================================
-    # TAB 4 – SKUTECZNOŚĆ + ROI
+    # TAB 2 – ANALIZA MECZU
     # =========================================================================
-    with tab4:
-        st.subheader("📈 Skuteczność modelu per rynek")
-        st.caption(
-            "Analiza skuteczności i ROI po rozegraniu meczów. "
-            "Aby zobaczyć dane: zapisz zdarzenia w Analizie Meczu, poczekaj na wyniki, "
-            "potem kliknij 🔄 Aktualizuj wyniki w Tab 2."
-        )
+    with tab2:
+        st.subheader("⚽ Analiza meczu – najbliższa kolejka")
+        st.caption("Szczegółowa analiza każdego meczu. Rozwiń mecz → sprawdź rynki → zapisz do trackingu.")
 
-        stats_df = statystyki_skutecznosci(wybrana_liga)
-
-        if not stats_df.empty:
-            stats_df["ROI_value"] = stats_df["ROI"].str.replace("+","").str.replace("%","").astype(float)
-
-            # ── Metryki globalne (Brier, ECE, BSS) ────────────────────────
-            mg = metryki_globalne(wybrana_liga)
-            total_typow   = int(stats_df["Typów"].sum())
-            total_trafion = int(stats_df["Trafione"].sum())
-            avg_skut      = total_trafion / total_typow if total_typow > 0 else 0
-            w_roi_raw     = (stats_df["ROI_value"] * stats_df["Typów"]).sum() / total_typow if total_typow > 0 else 0
-
-            with st.container(border=True):
-                st.caption("📊 Metryki globalne modelu")
-                m1, m2, m3, m4, m5, m6 = st.columns(6)
-                m1.metric("📋 Typów",       total_typow)
-                m2.metric("✅ Trafione",     total_trafion)
-                m3.metric("🎯 Hit Rate",    f"{avg_skut:.1%}")
-                m4.metric("💹 Ważony ROI",  f"{w_roi_raw:+.1f}%",
-                          delta_color="normal" if w_roi_raw > 0 else "inverse")
-                if mg:
-                    bss_delta = f"vs naive {mg['bss']:+.3f}"
-                    m5.metric("📐 Brier Score ↓", f"{mg['brier']:.4f}",
-                              delta=bss_delta,
-                              delta_color="normal" if mg['bss'] > 0 else "inverse",
-                              help="0=idealny, 0.25=losowy. BSS>0 = model bije naive predictor.")
-                    ece_col  = "normal" if mg['ece'] < 0.05 else "inverse"
-                    m6.metric("🎯 ECE ↓",    f"{mg['ece']:.4f}",
-                              delta=f"sharpness {mg['sharpness']:.3f}",
-                              delta_color=ece_col,
-                              help="Expected Calibration Error. <0.05 = dobrze skalibrowany.")
-                else:
-                    m5.metric("📐 Brier", "–")
-                    m6.metric("🎯 ECE",   "–")
-
-            # ── HTML tabela per rynek ─────────────────────────────────────
-            # Sortuj: wybór kryterium
-            sort_by = st.radio("Sortuj po", ["ROI ↓", "Brier ↑", "Typów ↓"],
-                               horizontal=True, key="sort_tab4")
-            if sort_by == "ROI ↓":
-                stats_sorted = stats_df.sort_values("_roi_v", ascending=False)
-            elif sort_by == "Brier ↑":
-                stats_sorted = stats_df.sort_values("_brier_v", ascending=True)
-            else:
-                stats_sorted = stats_df.sort_values("Typów", ascending=False)
-
-            cat_col4 = {"1X2":"#4CAF50","Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336"}
-
-            rows_s4 = []
-            for _, row in stats_sorted.iterrows():
-                roi_v   = row["_roi_v"]
-                brier_v = row["_brier_v"]
-                skill_v = row["Skill"]
-                roi_col = "#4CAF50" if roi_v > 0.03 else ("#F44336" if roi_v < -0.03 else "#FF9800")
-                roi_bg  = "#1a2e1a" if roi_v > 0.03 else ("#2e1a1a" if roi_v < -0.03 else "transparent")
-                skut_v  = row["_skut_v"]
-                bw_s    = int(skut_v * 100)
-                rynek_n = row["Rynek"]
-                kat4    = next((k for k in cat_col4 if k in rynek_n), "Gole")
-                kc4     = cat_col4.get(kat4, "#888")
-                # Brier color: niższy = lepszy (<0.20 dobry, >0.25 zły)
-                bc4 = "#4CAF50" if brier_v < 0.20 else ("#FF9800" if brier_v < 0.25 else "#F44336")
-                # Skill score: >0 = lepszy od baseline
-                sk_c = "#4CAF50" if skill_v > 0.05 else ("#888" if skill_v > -0.05 else "#F44336")
-                rows_s4.append(
-                    f"<tr style='background:{roi_bg}'>"
-                    f"<td style='padding:6px 10px;font-weight:bold;font-size:0.88em'>{rynek_n}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Typów']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Trafione']}</td>"
-                    f"<td style='padding:6px 10px;width:110px'>"
-                    f"<div style='display:flex;align-items:center;gap:5px'>"
-                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                    f"<div style='background:{kc4};width:{bw_s}%;height:5px;border-radius:3px'></div></div>"
-                    f"<span style='color:{kc4};font-size:0.82em;min-width:34px'>{row['Skuteczność']}</span></div></td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:{bc4};font-weight:bold'>{brier_v:.3f}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:{sk_c};font-size:0.85em'>{skill_v:+.2f}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Śr. P model']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#aaa'>{row['Śr. Fair']}</td>"
-                    f"<td style='padding:6px 10px;text-align:right;font-weight:bold;color:{roi_col}'>{row['ROI']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center'>{row['Kolor']}</td>"
-                    f"</tr>"
-                )
+        # ── Onboarding tracking ───────────────────────────────────────────
+        with st.expander("ℹ️ Jak działa tracking skuteczności?", expanded=False):
             st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.75em;text-transform:uppercase'>"
-                f"<th style='padding:8px 10px;text-align:left'>Rynek</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Typów</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Trafione</th>"
-                f"<th style='padding:8px 10px;text-align:left'>Skuteczność</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Brier ↓</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Skill</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Śr. P</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Śr. Fair</th>"
-                f"<th style='padding:8px 10px;text-align:right'>ROI</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Status</th>"
-                f"</tr></thead><tbody>{''.join(rows_s4)}</tbody></table></div>"
-                f"<p style='color:#444;font-size:0.73em;margin-top:4px'>"
-                f"Brier ↓: niższy = lepszy (0=idealny, 0.25=losowy). "
-                f"Skill: >0 = model bije baseline (naive predictor).</p>",
-                unsafe_allow_html=True,
+                """
+**Workflow w 3 krokach:**
+
+**Krok 1 →** Przed meczami: włącz przełącznik *💾 Zapisz zdarzenia* poniżej.  
+Model zapisze wszystkie predykcje do bazy (1X2 + rynki alternatywne).
+
+**Krok 2 →** Poczekaj na wyniki meczów.
+
+**Krok 3 →** Po meczach: kliknij *🔄 Aktualizuj wyniki*.  
+System automatycznie porówna predykcje z wynikami i wyliczy skuteczność.
+
+Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
+                """
             )
 
-            # ── SVG Bar chart ROI – zero zewnętrznych deps ────────────────
-            st.divider()
-            st.markdown("**📊 ROI per rynek** *(fair odds, bez marży)*")
-            chart_sorted = stats_sorted.sort_values("ROI_value")
-            W4, H4, pad4 = 600, max(200, len(chart_sorted) * 32 + 60), 50
-            bar_max = max(abs(chart_sorted["ROI_value"].max()), abs(chart_sorted["ROI_value"].min()), 5)
-            zero_x  = pad4 + (0 + bar_max) / (2 * bar_max) * (W4 - 2 * pad4)
-            bars4   = []
-            for i, (_, row4) in enumerate(chart_sorted.iterrows()):
-                y4    = pad4 + i * 32
-                rv    = row4["ROI_value"]
-                blen  = abs(rv) / bar_max * (W4 - 2 * pad4) / 2
-                bc4   = "#4CAF50" if rv >= 0 else "#F44336"
-                bx4   = zero_x if rv >= 0 else zero_x - blen
-                bars4.append(
-                    f"<rect x='{bx4:.0f}' y='{y4+8:.0f}' width='{blen:.0f}' height='16' "
-                    f"fill='{bc4}' fill-opacity='0.8' rx='3'/>"
-                    f"<text x='{pad4-4:.0f}' y='{y4+20:.0f}' text-anchor='end' "
-                    f"font-size='10' fill='#aaa' font-family='sans-serif'>{row4['Rynek'][:16]}</text>"
-                    f"<text x='{(bx4+blen+4) if rv>=0 else (bx4-4):.0f}' y='{y4+20:.0f}' "
-                    f"text-anchor='{'start' if rv>=0 else 'end'}' "
-                    f"font-size='10' fill='{bc4}' font-family='sans-serif' font-weight='bold'>{rv:+.1f}%</text>"
-                )
-            svg4 = (
-                f'<svg width="{W4}" height="{H4}" '
-                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
-                f'<line x1="{zero_x:.0f}" y1="{pad4-10}" x2="{zero_x:.0f}" y2="{H4-10}" '
-                f'stroke="#444" stroke-width="1" stroke-dasharray="4,3"/>'
-                f'<text x="{zero_x:.0f}" y="{pad4-14}" text-anchor="middle" '
-                f'font-size="9" fill="#555" font-family="sans-serif">0%</text>'
-                f'{"".join(bars4)}</svg>'
-            )
-            st.markdown(svg4, unsafe_allow_html=True)
-            st.caption("ROI = (trafione × (fair−1) − chybione) / wszystkie. Symulacja na fair odds (bez marży bukmachera).")
+        tgl1, tgl2 = st.columns(2)
+        with tgl1: pokaz_komentarz = st.toggle("💬 Komentarz", value=True)
+        with tgl2: pokaz_macierz  = st.toggle("🔢 Macierz wyników", value=False)
 
-            # Export
-            internal_cols = [c for c in stats_df.columns if c.startswith("_") or c in ["ROI_value","Kolor"]]
-            st.download_button("⬇️ Pobierz statystyki (CSV)",
-                               data=stats_df.drop(columns=internal_cols, errors="ignore")
-                                   .to_csv(index=False, decimal=","),
-                               file_name="skutecznosc_modelu.csv", mime="text/csv")
-        else:
-            st.info("Brak danych do analizy. Zapisz predykcje w zakładce 'Analiza Meczu' i poczekaj na wyniki.")
+        if not schedule.empty and not srednie_df.empty:
+            dzisiaj  = datetime.now().date()
+            przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
+            if not przyszle.empty:
+                nb    = przyszle["round"].min()
+                mecze = schedule[schedule["round"] == nb]
+                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
 
-    # =========================================================================
-    # TAB 5 – KALIBRACJA + ROLLING PERFORMANCE
-    # =========================================================================
-    with tab5:
-        st.subheader("📉 Kalibracja modelu & Rolling Performance")
-        st.caption(
-            "Kalibracja: czy model mówi 65% → trafia ~65%? "
-            "Rolling: jak ewoluuje jakość modelu w czasie."
-        )
+                kol_a, kol_b = st.columns(2)
+                mecze_list = list(mecze.iterrows())
 
-        # ── ROLLING WINDOW ─────────────────────────────────────────────────
-        st.markdown("### 📈 Rolling Performance (okno 50 zdarzeń)")
-        okno_r = st.slider("Rozmiar okna rolling", 20, 100, 50, 10, key="roll_win")
-        roll_df = rolling_stats(wybrana_liga, okno=okno_r)
+                for idx, (_, mecz) in enumerate(mecze_list):
+                    h = map_nazwa(mecz["home_team"])
+                    a = map_nazwa(mecz["away_team"])
+                    if h not in srednie_df.index or a not in srednie_df.index:
+                        continue
 
-        if not roll_df.empty:
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                st.markdown("**Brier Score rolling ↓** *(niższy = lepszy)*")
-                chart_brier = roll_df[["idx","brier_roll"]].rename(
-                    columns={"idx":"Zdarzenie","brier_roll":"Brier Score"}
-                ).set_index("Zdarzenie")
-                st.line_chart(chart_brier, height=200, color="#F44336")
-                last_b = roll_df["brier_roll"].iloc[-1]
-                trend_b = roll_df["brier_roll"].iloc[-1] - roll_df["brier_roll"].iloc[max(0,len(roll_df)-10)]
-                st.caption(f"Ostatni rolling Brier: **{last_b:.4f}** "
-                           f"({'↓ poprawa' if trend_b < 0 else '↑ pogorszenie'} o {abs(trend_b):.4f})")
-            with rc2:
-                st.markdown("**Hit Rate rolling** *(model vs rzeczywistość)*")
-                chart_hit = roll_df[["idx","hit_roll","p_roll"]].rename(
-                    columns={"idx":"Zdarzenie","hit_roll":"Hit Rate rzeczywisty","p_roll":"P model (avg)"}
-                ).set_index("Zdarzenie")
-                st.line_chart(chart_hit, height=200)
-                last_hit = roll_df["hit_roll"].iloc[-1]
-                last_p   = roll_df["p_roll"].iloc[-1]
-                gap = last_hit - last_p
-                gap_col = "✅" if abs(gap) < 0.03 else ("⚠️" if abs(gap) < 0.08 else "❌")
-                st.caption(f"{gap_col} Hit Rate: **{last_hit:.1%}** | P model: **{last_p:.1%}** | "
-                           f"Gap: **{gap:+.1%}**")
-        else:
-            st.info(f"Rolling dostępny po min. {okno_r//2} zdarzeniach z wynikami.")
+                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    pred = predykcja_meczu(lam_h, lam_a, rho=rho)
+                    data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
-        # ── BRIER PER KOLEJKA ─────────────────────────────────────────────
-        bpk_df = brier_per_kolejka(wybrana_liga)
-        if not bpk_df.empty and len(bpk_df) >= 2:
-            st.divider()
-            st.markdown("### 📊 Brier Score per kolejka")
-            bpk_chart = bpk_df[["kolejnosc","brier","hit_rate"]].rename(
-                columns={"kolejnosc":"Kolejka","brier":"Brier Score","hit_rate":"Hit Rate"}
-            ).set_index("Kolejka")
-            st.line_chart(bpk_chart, height=180)
-            worst_k  = bpk_df.loc[bpk_df["brier"].idxmax(), "kolejnosc"]
-            best_k   = bpk_df.loc[bpk_df["brier"].idxmin(), "kolejnosc"]
-            st.caption(f"Najlepsza kolejka: **{int(best_k)}** ({bpk_df['brier'].min():.4f}) · "
-                       f"Najgorsza: **{int(worst_k)}** ({bpk_df['brier'].max():.4f})")
+                    kolumna = kol_a if idx % 2 == 0 else kol_b
+                    ikony_t = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
+                    conf_i  = "🟢" if pred["conf_level"]=="High" else ("🟡" if pred["conf_level"]=="Medium" else "🔴")
+                    sot_badge = " 🎯SOT" if sot_ok else ""
+                    
+                    # Dodaj ostrzeżenie sędziowskie do etykiety
+                    sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
+                    sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
+                    
+                    label_t2 = (f"{conf_i} {h} vs {a}{sot_badge}"
+                                f"  ·  {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
+                                f"  ·  {data_meczu}")
+                    with kolumna:
+                        with st.expander(label_t2, expanded=False):
+                            # Nagłówek
+                            ch, cmid, ca = st.columns([5,2,5])
+                            with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
+                            with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
+                            with ca: st.markdown(f"<div style='font-weight:bold;text-align:right'>{a}</div>", unsafe_allow_html=True)
 
-        st.divider()
-        st.markdown("### 🎯 Reliability Curve")
-        kal_df = kalibracja_modelu(wybrana_liga if wybrana_liga != "Wszystkie" else None)
-        
-        if not kal_df.empty:
-            kal_df = kal_df.dropna(subset=["skutecznosc"])
+                            # Przewidywany wynik
+                            st.markdown(
+                                f"<div style='text-align:center;font-size:1.7em;font-weight:bold;margin:4px 0'>"
+                                f"⚽ {pred['wynik_h']}:{pred['wynik_a']}"
+                                f"<span style='font-size:0.5em;color:#888;margin-left:8px'>({pred['p_exact']:.1%})</span></div>",
+                                unsafe_allow_html=True,
+                            )
 
-            # ── Tabela kalibracji ─────────────────────────────────────────
-            rows_k = []
-            for _, rk in kal_df.iterrows():
-                diff = rk["rozbieznosc"]
-                diff_col = "#4CAF50" if abs(diff) < 0.05 else ("#FF9800" if abs(diff) < 0.12 else "#F44336")
-                diff_icon = "✅" if abs(diff) < 0.05 else ("⚠️" if abs(diff) < 0.12 else "❌")
-                rows_k.append(
-                    f"<tr>"
-                    f"<td style='padding:6px 10px;font-weight:bold'>{rk['przedzial']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{int(rk['liczba'])}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#2196F3'>{rk['p_srednia']:.1%}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#4CAF50'>{rk['skutecznosc']:.1%}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:{diff_col};font-weight:bold'>"
-                    f"{diff_icon} {diff:+.1%}</td>"
-                    f"</tr>"
-                )
-            st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.78em;text-transform:uppercase'>"
-                f"<th style='padding:8px 10px;text-align:left'>Przedział P</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Typów</th>"
-                f"<th style='padding:8px 10px;text-align:center'>P model</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Hit Rate</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Rozbieżność</th>"
-                f"</tr></thead><tbody>{''.join(rows_k)}</tbody></table></div>",
-                unsafe_allow_html=True,
-            )
+                            # Typ + confidence + chaos index
+                            conf_colors  = {"High":"#4CAF50","Medium":"#FF9800","Coinflip":"#F44336"}
+                            chaos_colors = {"Pewny":"#4CAF50","Klarowny":"#8BC34A","Otwarty":"#FF9800","Chaos":"#F44336"}
+                            conf_c = conf_colors.get(pred["conf_level"], "#888")
+                            ch_c   = chaos_colors.get(pred["chaos_label"], "#888")
+                            bar_w  = int(pred["chaos_pct"] * 100)
+                            st.markdown(
+                                f"<div style='text-align:center;margin-bottom:4px'>"
+                                f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
+                                f"<span style='font-size:0.88em;color:#888'>Fair Odds: <b>{pred['fo_typ']:.2f}</b> ({pred['p_typ']:.1%})</span>"
+                                f"</div>"
+                                f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:6px'>"
+                                f"{pred['conf_emoji']} <b>{pred['conf_level']}</b> · {pred['conf_opis']}"
+                                f"</div>"
+                                f"<div style='margin:0 8px 8px 8px'>"
+                                f"<div style='font-size:0.78em;color:#888'>"
+                                f"{pred['chaos_emoji']} Chaos Index: <b style='color:{ch_c}'>{pred['chaos_label']}</b>"
+                                f" ({pred['entropy']:.2f} bits)</div>"
+                                f"<div style='background:#333;border-radius:4px;height:4px;margin-top:4px'>"
+                                f"<div style='background:{ch_c};width:{bar_w}%;height:4px;border-radius:4px'></div>"
+                                f"</div></div>",
+                                unsafe_allow_html=True,
+                            )
 
-            # ── SVG Reliability curve ─────────────────────────────────────
-            st.divider()
-            st.markdown("**📊 Reliability Curve** *(model vs rzeczywistość)*")
-            w_rc5, h_rc5, pad_rc5 = 580, 340, 55
+                            # Metryki 1X2
+                            mc1, mc2, mc3 = st.columns(3)
+                            mc1.metric("1", f"{pred['p_home']:.0%}", f"fair {pred['fo_home']}")
+                            mc2.metric("X", f"{pred['p_draw']:.0%}", f"fair {pred['fo_draw']}")
+                            mc3.metric("2", f"{pred['p_away']:.0%}", f"fair {pred['fo_away']}")
+                            
+                            # Lambda info + SOT status
+                            sot_info = " · 🎯 SOT blend aktywny" if sot_ok else " · gole only"
+                            st.markdown(
+                                f"<div style='text-align:center;font-size:0.78em;color:#555;margin-top:2px'>"
+                                f"λ {h[:8]}: <b style='color:#aaa'>{lam_h:.2f}</b> &nbsp;|&nbsp; "
+                                f"λ {a[:8]}: <b style='color:#aaa'>{lam_a:.2f}</b> &nbsp;|&nbsp; "
+                                f"Σ: <b style='color:#aaa'>{lam_h+lam_a:.2f}</b>"
+                                f"<span style='color:#4CAF50'>{sot_info}</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                            
+                            # Ostrzeżenie sędziego
+                            st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
 
-            def rc5_px(xv, yv):
-                px = pad_rc5 + (xv - 0.45) / 0.55 * (w_rc5 - 2 * pad_rc5)
-                py = h_rc5 - pad_rc5 - (yv - 0.45) / 0.55 * (h_rc5 - 2 * pad_rc5)
-                return px, py
+                            # Alternatywne rynki
+                            with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
+                                alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
+                                if alt:
+                                    cat_colors = {"Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336","1X2":"#4CAF50","SOT":"#00BCD4"}
+                                    rows_alt = []
+                                    for emoji, nazwa, p, fo, kat, linia_z in alt[:8]:
+                                        kc = cat_colors.get(kat, "#888")
+                                        bw = int(p * 100)
+                                        fc = "#4CAF50" if fo <= 1.60 else ("#FF9800" if fo <= 2.00 else "#aaa")
+                                        rows_alt.append(
+                                            f"<tr><td style='padding:4px 8px;font-size:0.88em'>{emoji} {nazwa}</td>"
+                                            f"<td style='padding:4px 8px;width:110px'>"
+                                            f"<div style='display:flex;align-items:center;gap:5px'>"
+                                            f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                                            f"<div style='background:{kc};width:{bw}%;height:5px;border-radius:3px'></div></div>"
+                                            f"<span style='color:{kc};font-size:0.82em;min-width:30px'>{p:.0%}</span></div></td>"
+                                            f"<td style='padding:4px 8px;text-align:right;color:{fc};font-weight:bold;font-size:0.88em'>{fo:.2f}</td></tr>"
+                                        )
+                                    st.markdown(
+                                        f"<table style='width:100%;border-collapse:collapse'>"
+                                        f"<thead><tr style='color:#555;font-size:0.75em;text-transform:uppercase'>"
+                                        f"<th style='padding:4px 8px;text-align:left'>Rynek</th>"
+                                        f"<th style='padding:4px 8px;text-align:left'>P</th>"
+                                        f"<th style='padding:4px 8px;text-align:right'>Fair</th></tr></thead>"
+                                        f"<tbody>{''.join(rows_alt)}</tbody></table>"
+                                        f"<p style='color:#444;font-size:0.72em;margin:4px 0 0'>⚠️ Rożne/kartki – Poisson bez korelacji. Orientacyjnie.</p>",
+                                        unsafe_allow_html=True,
+                                    )
+                                else:
+                                    st.caption("Brak zdarzeń powyżej progu 55%.")
 
-            diag5 = [rc5_px(t, t) for t in [0.5, 0.65, 0.80, 0.95]]
-            diag5_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag5)
-            circles5 = []
-            for _, rk in kal_df.iterrows():
-                xv5 = rk["p_srednia"]; yv5 = rk["skutecznosc"]; n5 = int(rk["liczba"])
-                diff5 = rk["rozbieznosc"]
-                px5, py5 = rc5_px(xv5, yv5)
-                r5 = min(max(int(n5 * 1.2), 6), 22)
-                col5 = "#4CAF50" if abs(diff5) < 0.05 else ("#FF9800" if abs(diff5) < 0.12 else "#F44336")
-                circles5.append(
-                    f"<circle cx='{px5:.0f}' cy='{py5:.0f}' r='{r5}' fill='{col5}' "
-                    f"fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
-                    f"<title>Przedzial: {rk['przedzial']} | Model: {xv5:.1%} | Hit: {yv5:.1%} | N={n5}</title>"
-                    f"</circle>"
-                    f"<text x='{px5 + r5 + 4:.0f}' y='{py5 + 4:.0f}' font-size='9' fill='#ccc' "
-                    f"font-family='sans-serif'>{rk['przedzial']} (n={n5})</text>"
-                )
-            svg5 = (
-                f'<svg width="{w_rc5}" height="{h_rc5}" '
-                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
-                f'<polyline points="{diag5_line}" fill="none" stroke="#444" '
-                f'stroke-width="1.5" stroke-dasharray="6,4"/>'
-                f'<text x="{w_rc5 - pad_rc5 + 4}" y="{pad_rc5 - 4}" font-size="9" fill="#555" '
-                f'font-family="sans-serif">idealny model</text>'
-                f'{"".join(circles5)}'
-                f'<text x="{w_rc5 // 2}" y="{h_rc5 - 6}" text-anchor="middle" '
-                f'font-size="10" fill="#888" font-family="sans-serif">P modelu →</text>'
-                f'<text x="12" y="{h_rc5 // 2}" text-anchor="middle" font-size="10" fill="#888" '
-                f'font-family="sans-serif" transform="rotate(-90,12,{h_rc5 // 2})">Hit Rate →</text>'
-                f'<!-- legenda -->'
-                f'<circle cx="{w_rc5 - 130}" cy="20" r="6" fill="#4CAF50" stroke="white" stroke-width="1"/>'
-                f'<text x="{w_rc5 - 120}" y="25" font-size="9" fill="#aaa" font-family="sans-serif">Dobrze skalibrowany (&lt;5%)</text>'
-                f'<circle cx="{w_rc5 - 130}" cy="38" r="6" fill="#FF9800" stroke="white" stroke-width="1"/>'
-                f'<text x="{w_rc5 - 120}" y="43" font-size="9" fill="#aaa" font-family="sans-serif">Umiarkowany (5–12%)</text>'
-                f'<circle cx="{w_rc5 - 130}" cy="56" r="6" fill="#F44336" stroke="white" stroke-width="1"/>'
-                f'<text x="{w_rc5 - 120}" y="61" font-size="9" fill="#aaa" font-family="sans-serif">Słabo skalibrowany (&gt;12%)</text>'
-                f'</svg>'
-            )
-            st.markdown(svg5, unsafe_allow_html=True)
+                            if pokaz_komentarz:
+                                st.info(generuj_komentarz(h, a, pred, forma_dict))
 
-            # ── Interpretacja ─────────────────────────────────────────────
-            st.divider()
-            avg_bias = float(kal_df["rozbieznosc"].mean())
-            if abs(avg_bias) < 0.02:
-                st.success(f"✅ Model dobrze skalibrowany (średni bias {avg_bias:+.1%})")
-            elif avg_bias > 0:
-                st.warning(f"⚠️ Model zbyt ostrożny – niedoszacowuje szanse (bias {avg_bias:+.1%}). "
-                           f"Rozważ obniżenie progu pewności.")
-            else:
-                st.warning(f"⚠️ Model zbyt pewny siebie – przeszacowuje szanse (bias {avg_bias:+.1%}). "
-                           f"Rozważ podwyższenie progu pewności.")
-            st.caption("Punkty powyżej przekątnej = model był zbyt ostrożny. Poniżej = zbyt pewny siebie.")
-        else:
-            st.info("Brak danych do kalibracji. Potrzebne są zapisane predykcje z wynikami.")
+                            if pokaz_macierz:
+                                st.markdown("**Macierz wyników**")
+                                st.markdown(render_macierz_html(pred["macierz"], h, a), unsafe_allow_html=True)
+
+                # ── Tracking i aktualizacja wyników ──────────────────────────
+                st.divider()
+                tc1, tc2 = st.columns(2)
+                with tc1:
+                    if st.toggle("💾 Zapisz zdarzenia tej kolejki do trackingu", key="save_zd",
+                                 help="Zapisuje wszystkie zdarzenia (1X2 + alt. rynki) do bazy analitycznej."):
+                        n_saved = 0
+                        for _, mecz_s in mecze.iterrows():
+                            h_s = map_nazwa(mecz_s["home_team"])
+                            a_s = map_nazwa(mecz_s["away_team"])
+                            if h_s not in srednie_df.index or a_s not in srednie_df.index:
+                                continue
+                            lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
+                            pred_s = predykcja_meczu(lhs, las, rho=rho)
+                            mecz_str_s = f"{h_s} – {a_s}"
+                            # Główny typ 1X2
+                            zapisz_zdarzenia(wybrana_liga, int(nb), mecz_str_s, h_s, a_s,
+                                             "1X2", pred_s["typ"], 0.0, pred_s["p_typ"], pred_s["fo_typ"])
+                            n_saved += 1
+                            # Alternatywne
+                            for emo, nazwa_z, pz, foz, katz, liniz in alternatywne_zdarzenia(lhs, las, lrs, lks, rho, lam_sot=_lsot_sv):
+                                zapisz_zdarzenia(wybrana_liga, int(nb), mecz_str_s, h_s, a_s,
+                                                 katz, nazwa_z, liniz, pz, foz)
+                        st.success(f"✅ Zapisano zdarzenia dla {n_saved} meczów.")
+                with tc2:
+                    if st.button("🔄 Aktualizuj wyniki (po meczach)", help="Sprawdza bazę historyczną i uzupełnia wyniki zapisanych zdarzeń."):
+                        n_updated = 0
+                        init_db()
+                        con_u = sqlite3.connect(DB_FILE)
+                        mecze_db = con_u.execute(
+                            "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
+                            (wybrana_liga,)
+                        ).fetchall()
+                        con_u.close()
+                        for h_db, a_db in mecze_db:
+                            aktualizuj_wynik_zdarzenia(h_db, a_db, historical)
+                            n_updated += 1
+                        st.success(f"✅ Zaktualizowano wyniki dla {n_updated} meczów.")
 
     # =========================================================================
-    # TAB 6 – DEEP DATA (Power Rankings + Sędziowie)
+    # TAB 3 – DEEP DATA (Power Rankings + Sędziowie)
     # =========================================================================
-    with tab6:
+    with tab3:
         st.subheader("🔬 Deep Data – Power Rankings & Analiza")
         st.caption(
             "Poglądowe statystyki drużyn i sędziów. "
@@ -1915,7 +1546,7 @@ if not historical.empty:
             "Dane historyczne (bieżący + poprzedni sezon)."
         )
 
-        power_df, sedziowie_df = deep_data_stats(historical.to_json())
+        # power_df i sedziowie_df załadowane wyżej
 
         if not power_df.empty:
             # ── Filtry ───────────────────────────────────────────────────
@@ -2077,6 +1708,397 @@ if not historical.empty:
         else:
             st.warning("Brak wystarczających danych do Power Rankings.")
 
+    # =========================================================================
+    # TAB 4 – SKUTECZNOŚĆ + ROI
+    # =========================================================================
+    with tab4:
+        st.subheader("📈 Skuteczność modelu per rynek")
+
+        stats_df = statystyki_skutecznosci(wybrana_liga)
+
+        if not stats_df.empty:
+            stats_df["ROI_value"] = stats_df["ROI"].str.replace("+","").str.replace("%","").astype(float)
+
+            # ── Metryki globalne (Brier, ECE, BSS) ────────────────────────
+            mg = metryki_globalne(wybrana_liga)
+            total_typow   = int(stats_df["Typów"].sum())
+            total_trafion = int(stats_df["Trafione"].sum())
+            avg_skut      = total_trafion / total_typow if total_typow > 0 else 0
+            w_roi_raw     = (stats_df["ROI_value"] * stats_df["Typów"]).sum() / total_typow if total_typow > 0 else 0
+
+            with st.container(border=True):
+                st.caption("📊 Metryki globalne modelu")
+                m1, m2, m3, m4, m5, m6 = st.columns(6)
+                m1.metric("📋 Typów",       total_typow)
+                m2.metric("✅ Trafione",     total_trafion)
+                m3.metric("🎯 Hit Rate",    f"{avg_skut:.1%}")
+                m4.metric("💹 Ważony ROI",  f"{w_roi_raw:+.1f}%",
+                          delta_color="normal" if w_roi_raw > 0 else "inverse")
+                if mg:
+                    bss_delta = f"vs naive {mg['bss']:+.3f}"
+                    m5.metric("📐 Brier Score ↓", f"{mg['brier']:.4f}",
+                              delta=bss_delta,
+                              delta_color="normal" if mg['bss'] > 0 else "inverse",
+                              help="0=idealny, 0.25=losowy. BSS>0 = model bije naive predictor.")
+                    ece_col  = "normal" if mg['ece'] < 0.05 else "inverse"
+                    m6.metric("🎯 ECE ↓",    f"{mg['ece']:.4f}",
+                              delta=f"sharpness {mg['sharpness']:.3f}",
+                              delta_color=ece_col,
+                              help="Expected Calibration Error. <0.05 = dobrze skalibrowany.")
+                else:
+                    m5.metric("📐 Brier", "–")
+                    m6.metric("🎯 ECE",   "–")
+
+            # ── HTML tabela per rynek ─────────────────────────────────────
+            # Sortuj: wybór kryterium
+            sort_by = st.radio("Sortuj po", ["ROI ↓", "Brier ↑", "Typów ↓"],
+                               horizontal=True, key="sort_tab4")
+            if sort_by == "ROI ↓":
+                stats_sorted = stats_df.sort_values("_roi_v", ascending=False)
+            elif sort_by == "Brier ↑":
+                stats_sorted = stats_df.sort_values("_brier_v", ascending=True)
+            else:
+                stats_sorted = stats_df.sort_values("Typów", ascending=False)
+
+            cat_col4 = {"1X2":"#4CAF50","Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336"}
+
+            rows_s4 = []
+            for _, row in stats_sorted.iterrows():
+                roi_v   = row["_roi_v"]
+                brier_v = row["_brier_v"]
+                skill_v = row["Skill"]
+                roi_col = "#4CAF50" if roi_v > 0.03 else ("#F44336" if roi_v < -0.03 else "#FF9800")
+                roi_bg  = "#1a2e1a" if roi_v > 0.03 else ("#2e1a1a" if roi_v < -0.03 else "transparent")
+                skut_v  = row["_skut_v"]
+                bw_s    = int(skut_v * 100)
+                rynek_n = row["Rynek"]
+                kat4    = next((k for k in cat_col4 if k in rynek_n), "Gole")
+                kc4     = cat_col4.get(kat4, "#888")
+                # Brier color: niższy = lepszy (<0.20 dobry, >0.25 zły)
+                bc4 = "#4CAF50" if brier_v < 0.20 else ("#FF9800" if brier_v < 0.25 else "#F44336")
+                # Skill score: >0 = lepszy od baseline
+                sk_c = "#4CAF50" if skill_v > 0.05 else ("#888" if skill_v > -0.05 else "#F44336")
+                rows_s4.append(
+                    f"<tr style='background:{roi_bg}'>"
+                    f"<td style='padding:6px 10px;font-weight:bold;font-size:0.88em'>{rynek_n}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Typów']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Trafione']}</td>"
+                    f"<td style='padding:6px 10px;width:110px'>"
+                    f"<div style='display:flex;align-items:center;gap:5px'>"
+                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                    f"<div style='background:{kc4};width:{bw_s}%;height:5px;border-radius:3px'></div></div>"
+                    f"<span style='color:{kc4};font-size:0.82em;min-width:34px'>{row['Skuteczność']}</span></div></td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:{bc4};font-weight:bold'>{brier_v:.3f}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:{sk_c};font-size:0.85em'>{skill_v:+.2f}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Śr. P model']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#aaa'>{row['Śr. Fair']}</td>"
+                    f"<td style='padding:6px 10px;text-align:right;font-weight:bold;color:{roi_col}'>{row['ROI']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center'>{row['Kolor']}</td>"
+                    f"</tr>"
+                )
+            st.markdown(
+                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
+                f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
+                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.75em;text-transform:uppercase'>"
+                f"<th style='padding:8px 10px;text-align:left'>Rynek</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Typów</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Trafione</th>"
+                f"<th style='padding:8px 10px;text-align:left'>Skuteczność</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Brier ↓</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Skill</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Śr. P</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Śr. Fair</th>"
+                f"<th style='padding:8px 10px;text-align:right'>ROI</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Status</th>"
+                f"</tr></thead><tbody>{''.join(rows_s4)}</tbody></table></div>"
+                f"<p style='color:#444;font-size:0.73em;margin-top:4px'>"
+                f"Brier ↓: niższy = lepszy (0=idealny, 0.25=losowy). "
+                f"Skill: >0 = model bije baseline (naive predictor).</p>",
+                unsafe_allow_html=True,
+            )
+
+            # ── SVG Bar chart ROI – zero zewnętrznych deps ────────────────
+            st.divider()
+            st.markdown("**📊 ROI per rynek** *(fair odds, bez marży)*")
+            chart_sorted = stats_sorted.sort_values("ROI_value")
+            W4, H4, pad4 = 600, max(200, len(chart_sorted) * 32 + 60), 50
+            bar_max = max(abs(chart_sorted["ROI_value"].max()), abs(chart_sorted["ROI_value"].min()), 5)
+            zero_x  = pad4 + (0 + bar_max) / (2 * bar_max) * (W4 - 2 * pad4)
+            bars4   = []
+            for i, (_, row4) in enumerate(chart_sorted.iterrows()):
+                y4    = pad4 + i * 32
+                rv    = row4["ROI_value"]
+                blen  = abs(rv) / bar_max * (W4 - 2 * pad4) / 2
+                bc4   = "#4CAF50" if rv >= 0 else "#F44336"
+                bx4   = zero_x if rv >= 0 else zero_x - blen
+                bars4.append(
+                    f"<rect x='{bx4:.0f}' y='{y4+8:.0f}' width='{blen:.0f}' height='16' "
+                    f"fill='{bc4}' fill-opacity='0.8' rx='3'/>"
+                    f"<text x='{pad4-4:.0f}' y='{y4+20:.0f}' text-anchor='end' "
+                    f"font-size='10' fill='#aaa' font-family='sans-serif'>{row4['Rynek'][:16]}</text>"
+                    f"<text x='{(bx4+blen+4) if rv>=0 else (bx4-4):.0f}' y='{y4+20:.0f}' "
+                    f"text-anchor='{'start' if rv>=0 else 'end'}' "
+                    f"font-size='10' fill='{bc4}' font-family='sans-serif' font-weight='bold'>{rv:+.1f}%</text>"
+                )
+            svg4 = (
+                f'<svg width="{W4}" height="{H4}" '
+                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
+                f'<line x1="{zero_x:.0f}" y1="{pad4-10}" x2="{zero_x:.0f}" y2="{H4-10}" '
+                f'stroke="#444" stroke-width="1" stroke-dasharray="4,3"/>'
+                f'<text x="{zero_x:.0f}" y="{pad4-14}" text-anchor="middle" '
+                f'font-size="9" fill="#555" font-family="sans-serif">0%</text>'
+                f'{"".join(bars4)}</svg>'
+            )
+            st.markdown(svg4, unsafe_allow_html=True)
+            st.caption("ROI = (trafione × (fair−1) − chybione) / wszystkie. Symulacja na fair odds (bez marży bukmachera).")
+
+            # Export
+            internal_cols = [c for c in stats_df.columns if c.startswith("_") or c in ["ROI_value","Kolor"]]
+            st.download_button("⬇️ Pobierz statystyki (CSV)",
+                               data=stats_df.drop(columns=internal_cols, errors="ignore")
+                                   .to_csv(index=False, decimal=","),
+                               file_name="skutecznosc_modelu.csv", mime="text/csv")
+        else:
+            st.info("📭 Brak danych do analizy skuteczności.")
+            with st.container(border=True):
+                st.markdown("#### 🚀 Jak zacząć zbierać dane?")
+                st.markdown("""
+**1️⃣ Przejdź do zakładki ⚽ Analiza Meczu**  
+Otwórz dowolny mecz z listy – zobaczysz predykcje modelu.
+
+**2️⃣ Włącz przełącznik 💾 Zapisz zdarzenia**  
+Model zapisze wszystkie predykcje do lokalnej bazy danych.
+
+**3️⃣ Poczekaj na rozegranie meczów**  
+Dane historyczne są pobierane automatycznie z football-data.co.uk.
+
+**4️⃣ Kliknij 🔄 Aktualizuj wyniki**  
+System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
+
+**5️⃣ Wróć tutaj** – zobaczysz Brier Score, ROI i tabelę per rynek.
+                """)
+
+    # =========================================================================
+    # TAB 5 – KALIBRACJA + ROLLING PERFORMANCE
+    # =========================================================================
+    with tab5:
+        st.subheader("📉 Kalibracja modelu & Rolling Performance")
+        st.caption(
+            "Kalibracja: czy model mówi 65% → trafia ~65%? "
+            "Rolling: jak ewoluuje jakość modelu w czasie."
+        )
+
+        # ── ROLLING WINDOW ─────────────────────────────────────────────────
+        st.markdown("### 📈 Rolling Performance (okno 50 zdarzeń)")
+        okno_r = st.slider("Rozmiar okna rolling", 20, 100, 50, 10, key="roll_win")
+        roll_df = rolling_stats(wybrana_liga, okno=okno_r)
+
+        if not roll_df.empty:
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                st.markdown("**Brier Score rolling ↓** *(niższy = lepszy)*")
+                chart_brier = roll_df[["idx","brier_roll"]].rename(
+                    columns={"idx":"Zdarzenie","brier_roll":"Brier Score"}
+                ).set_index("Zdarzenie")
+                st.line_chart(chart_brier, height=200, color="#F44336")
+                last_b = roll_df["brier_roll"].iloc[-1]
+                trend_b = roll_df["brier_roll"].iloc[-1] - roll_df["brier_roll"].iloc[max(0,len(roll_df)-10)]
+                st.caption(f"Ostatni rolling Brier: **{last_b:.4f}** "
+                           f"({'↓ poprawa' if trend_b < 0 else '↑ pogorszenie'} o {abs(trend_b):.4f})")
+            with rc2:
+                st.markdown("**Hit Rate rolling** *(model vs rzeczywistość)*")
+                chart_hit = roll_df[["idx","hit_roll","p_roll"]].rename(
+                    columns={"idx":"Zdarzenie","hit_roll":"Hit Rate rzeczywisty","p_roll":"P model (avg)"}
+                ).set_index("Zdarzenie")
+                st.line_chart(chart_hit, height=200)
+                last_hit = roll_df["hit_roll"].iloc[-1]
+                last_p   = roll_df["p_roll"].iloc[-1]
+                gap = last_hit - last_p
+                gap_col = "✅" if abs(gap) < 0.03 else ("⚠️" if abs(gap) < 0.08 else "❌")
+                st.caption(f"{gap_col} Hit Rate: **{last_hit:.1%}** | P model: **{last_p:.1%}** | "
+                           f"Gap: **{gap:+.1%}**")
+        else:
+            st.info(f"Rolling dostępny po min. {okno_r//2} zdarzeniach z wynikami.")
+
+        # ── BRIER PER KOLEJKA ─────────────────────────────────────────────
+        bpk_df = brier_per_kolejka(wybrana_liga)
+        if not bpk_df.empty and len(bpk_df) >= 2:
+            st.divider()
+            st.markdown("### 📊 Brier Score per kolejka")
+            bpk_chart = bpk_df[["kolejnosc","brier","hit_rate"]].rename(
+                columns={"kolejnosc":"Kolejka","brier":"Brier Score","hit_rate":"Hit Rate"}
+            ).set_index("Kolejka")
+            st.line_chart(bpk_chart, height=180)
+            worst_k  = bpk_df.loc[bpk_df["brier"].idxmax(), "kolejnosc"]
+            best_k   = bpk_df.loc[bpk_df["brier"].idxmin(), "kolejnosc"]
+            st.caption(f"Najlepsza kolejka: **{int(best_k)}** ({bpk_df['brier'].min():.4f}) · "
+                       f"Najgorsza: **{int(worst_k)}** ({bpk_df['brier'].max():.4f})")
+
+        st.divider()
+        st.markdown("### 🎯 Reliability Curve")
+        kal_df = kalibracja_modelu(wybrana_liga if wybrana_liga != "Wszystkie" else None)
+        
+        if not kal_df.empty:
+            kal_df = kal_df.dropna(subset=["skutecznosc"])
+
+            # ── Tabela kalibracji ─────────────────────────────────────────
+            rows_k = []
+            for _, rk in kal_df.iterrows():
+                diff = rk["rozbieznosc"]
+                diff_col = "#4CAF50" if abs(diff) < 0.05 else ("#FF9800" if abs(diff) < 0.12 else "#F44336")
+                diff_icon = "✅" if abs(diff) < 0.05 else ("⚠️" if abs(diff) < 0.12 else "❌")
+                rows_k.append(
+                    f"<tr>"
+                    f"<td style='padding:6px 10px;font-weight:bold'>{rk['przedzial']}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{int(rk['liczba'])}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#2196F3'>{rk['p_srednia']:.1%}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:#4CAF50'>{rk['skutecznosc']:.1%}</td>"
+                    f"<td style='padding:6px 10px;text-align:center;color:{diff_col};font-weight:bold'>"
+                    f"{diff_icon} {diff:+.1%}</td>"
+                    f"</tr>"
+                )
+            st.markdown(
+                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
+                f"<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
+                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.78em;text-transform:uppercase'>"
+                f"<th style='padding:8px 10px;text-align:left'>Przedział P</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Typów</th>"
+                f"<th style='padding:8px 10px;text-align:center'>P model</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Hit Rate</th>"
+                f"<th style='padding:8px 10px;text-align:center'>Rozbieżność</th>"
+                f"</tr></thead><tbody>{''.join(rows_k)}</tbody></table></div>",
+                unsafe_allow_html=True,
+            )
+
+            # ── SVG Reliability curve ─────────────────────────────────────
+            st.divider()
+            st.markdown("**📊 Reliability Curve** *(model vs rzeczywistość)*")
+            w_rc5, h_rc5, pad_rc5 = 580, 340, 55
+
+            def rc5_px(xv, yv):
+                px = pad_rc5 + (xv - 0.45) / 0.55 * (w_rc5 - 2 * pad_rc5)
+                py = h_rc5 - pad_rc5 - (yv - 0.45) / 0.55 * (h_rc5 - 2 * pad_rc5)
+                return px, py
+
+            diag5 = [rc5_px(t, t) for t in [0.5, 0.65, 0.80, 0.95]]
+            diag5_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag5)
+            circles5 = []
+            for _, rk in kal_df.iterrows():
+                xv5 = rk["p_srednia"]; yv5 = rk["skutecznosc"]; n5 = int(rk["liczba"])
+                diff5 = rk["rozbieznosc"]
+                px5, py5 = rc5_px(xv5, yv5)
+                r5 = min(max(int(n5 * 1.2), 6), 22)
+                col5 = "#4CAF50" if abs(diff5) < 0.05 else ("#FF9800" if abs(diff5) < 0.12 else "#F44336")
+                circles5.append(
+                    f"<circle cx='{px5:.0f}' cy='{py5:.0f}' r='{r5}' fill='{col5}' "
+                    f"fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
+                    f"<title>Przedzial: {rk['przedzial']} | Model: {xv5:.1%} | Hit: {yv5:.1%} | N={n5}</title>"
+                    f"</circle>"
+                    f"<text x='{px5 + r5 + 4:.0f}' y='{py5 + 4:.0f}' font-size='9' fill='#ccc' "
+                    f"font-family='sans-serif'>{rk['przedzial']} (n={n5})</text>"
+                )
+            svg5 = (
+                f'<svg width="{w_rc5}" height="{h_rc5}" '
+                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
+                f'<polyline points="{diag5_line}" fill="none" stroke="#444" '
+                f'stroke-width="1.5" stroke-dasharray="6,4"/>'
+                f'<text x="{w_rc5 - pad_rc5 + 4}" y="{pad_rc5 - 4}" font-size="9" fill="#555" '
+                f'font-family="sans-serif">idealny model</text>'
+                f'{"".join(circles5)}'
+                f'<text x="{w_rc5 // 2}" y="{h_rc5 - 6}" text-anchor="middle" '
+                f'font-size="10" fill="#888" font-family="sans-serif">P modelu →</text>'
+                f'<text x="12" y="{h_rc5 // 2}" text-anchor="middle" font-size="10" fill="#888" '
+                f'font-family="sans-serif" transform="rotate(-90,12,{h_rc5 // 2})">Hit Rate →</text>'
+                f'<!-- legenda -->'
+                f'<circle cx="{w_rc5 - 130}" cy="20" r="6" fill="#4CAF50" stroke="white" stroke-width="1"/>'
+                f'<text x="{w_rc5 - 120}" y="25" font-size="9" fill="#aaa" font-family="sans-serif">Dobrze skalibrowany (&lt;5%)</text>'
+                f'<circle cx="{w_rc5 - 130}" cy="38" r="6" fill="#FF9800" stroke="white" stroke-width="1"/>'
+                f'<text x="{w_rc5 - 120}" y="43" font-size="9" fill="#aaa" font-family="sans-serif">Umiarkowany (5–12%)</text>'
+                f'<circle cx="{w_rc5 - 130}" cy="56" r="6" fill="#F44336" stroke="white" stroke-width="1"/>'
+                f'<text x="{w_rc5 - 120}" y="61" font-size="9" fill="#aaa" font-family="sans-serif">Słabo skalibrowany (&gt;12%)</text>'
+                f'</svg>'
+            )
+            st.markdown(svg5, unsafe_allow_html=True)
+
+            # ── Interpretacja ─────────────────────────────────────────────
+            st.divider()
+            avg_bias = float(kal_df["rozbieznosc"].mean())
+            if abs(avg_bias) < 0.02:
+                st.success(f"✅ Model dobrze skalibrowany (średni bias {avg_bias:+.1%})")
+            elif avg_bias > 0:
+                st.warning(f"⚠️ Model zbyt ostrożny – niedoszacowuje szanse (bias {avg_bias:+.1%}). "
+                           f"Rozważ obniżenie progu pewności.")
+            else:
+                st.warning(f"⚠️ Model zbyt pewny siebie – przeszacowuje szanse (bias {avg_bias:+.1%}). "
+                           f"Rozważ podwyższenie progu pewności.")
+            st.caption("Punkty powyżej przekątnej = model był zbyt ostrożny. Poniżej = zbyt pewny siebie.")
+        else:
+            with st.container(border=True):
+                st.markdown("**📭 Brak danych do reliability curve.**")
+                st.markdown(
+                    "Potrzebne są co najmniej **30 zdarzeń z wynikami** w każdym przedziale p.  \n"
+                    "Wróć po kilku kolejkach trackingu – wtedy krzywa będzie statystycznie znacząca."
+                )
+
+    # =========================================================================
+    # TAB 6 – LABORATORIUM (Bet Builder)
+    # =========================================================================
+    with tab6:
+        st.subheader("🎛️ Bet Builder – laboratorium modelu")
+        st.caption("Eksperymentuj z kombinacjami zdarzeń. Nie są to rekomendacje, tylko symulacje.")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            linia_gole   = st.selectbox("Linia goli",    [1.5, 2.5, 3.5], index=1)
+            typ_gole     = st.selectbox("Typ goli",      ["Over", "Under"])
+        with c2:
+            linia_rogi   = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5], index=1)
+            typ_rogi     = st.selectbox("Typ rożnych",   ["Over", "Under"])
+        with c3:
+            linia_kartki = st.selectbox("Linia kartek",  [2.5, 3.5, 4.5, 5.5], index=1)
+            typ_kartki   = st.selectbox("Typ kartek",    ["Over", "Under"])
+        min_prob = st.slider("Min. prawdopodobieństwo", 0.0, 1.0, 0.40, 0.01)
+
+        if not schedule.empty and not srednie_df.empty:
+            dzisiaj  = datetime.now().date()
+            przyszle = schedule[schedule["date"].dt.date >= dzisiaj]
+            if not przyszle.empty:
+                nb    = przyszle["round"].min()
+                mecze = schedule[schedule["round"] == nb]
+                st.caption(f"Kolejka {int(nb)} – {len(mecze)} meczów")
+
+                for _, mecz in mecze.iterrows():
+                    h = map_nazwa(mecz["home_team"])
+                    a = map_nazwa(mecz["away_team"])
+                    if h not in srednie_df.index or a not in srednie_df.index:
+                        continue
+                    
+                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    
+                    p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
+                    p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
+                    p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
+                    p_combo = p_g * p_r * p_k
+                    # Pokaż ekspander tylko gdy combo >= min_prob
+                    label_bb = (f"{'✅' if p_combo >= min_prob else '❌'} {h} vs {a}"
+                                f"  ·  combo {p_combo:.0%}  ·  fair AKO {fair_odds(p_combo):.2f}")
+                    with st.expander(label_bb, expanded=False):
+                        bc1, bc2, bc3, bc4 = st.columns(4)
+                        bc1.metric(f"{typ_gole} {linia_gole}",
+                                   f"{p_g:.1%}", f"fair {fair_odds(p_g):.2f}",
+                                   delta_color="normal" if p_g >= 0.55 else "off")
+                        bc2.metric(f"{typ_rogi} {linia_rogi} rożnych",
+                                   f"{p_r:.1%}", f"fair {fair_odds(p_r):.2f}",
+                                   delta_color="normal" if p_r >= 0.55 else "off")
+                        bc3.metric(f"{typ_kartki} {linia_kartki} kartek",
+                                   f"{p_k:.1%}", f"fair {fair_odds(p_k):.2f}",
+                                   delta_color="normal" if p_k >= 0.55 else "off")
+                        if p_combo >= min_prob:
+                            bc4.metric("COMBO", f"{p_combo:.1%}", f"fair AKO {fair_odds(p_combo):.2f}",
+                                       delta_color="normal")
+                        else:
+                            bc4.metric("COMBO", f"{p_combo:.1%}", "↓ poniżej progu", delta_color="off")
+
     # Debug
     if debug_mode:
         st.sidebar.divider()
@@ -2088,3 +2110,4 @@ if not historical.empty:
 
 else:
     st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
+
