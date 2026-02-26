@@ -1300,8 +1300,6 @@ if not historical.empty:
                                 format="%.2f%%",
                                 key="full_rank_slider"
                             )
- # Dodatkowe wyświetlanie w procentach
-        st.caption(f"Wybrano: {prog_filtr:.0%}")
                         with col_f3:
                             only_value_full = st.checkbox("Tylko EV>0", key="full_rank_value")
                         
