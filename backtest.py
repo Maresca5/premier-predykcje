@@ -304,7 +304,20 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
         else:
             df_p = pd.DataFrame()
 
-        df_train = pd.concat([df_p, mecze_przed], ignore_index=True).sort_values("Date")
+        # Ujednolicenie nazwy kolumny daty przed concat (Date vs date)
+        def _norm_date_col(d):
+            if d.empty:
+                return d
+            if "date" in d.columns and "Date" not in d.columns:
+                d = d.rename(columns={"date": "Date"})
+            return d
+        df_p        = _norm_date_col(df_p)
+        mecze_przed = _norm_date_col(mecze_przed)
+        df_train = pd.concat([df_p, mecze_przed], ignore_index=True)
+        if "Date" in df_train.columns:
+            df_train = df_train.sort_values("Date")
+        elif "date" in df_train.columns:
+            df_train = df_train.sort_values("date").rename(columns={"date": "Date"})
 
         if len(df_train) < 10:
             skipped += len(k_df); continue
