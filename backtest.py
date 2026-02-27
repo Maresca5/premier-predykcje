@@ -337,14 +337,25 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
         else:
             df_train = pd.DataFrame()
 
-        # Sortowanie - używamy kolumny Date jeśli istnieje
+        # WAŻNE: Sprawdź czy kolumna Date istnieje PRZED sortowaniem
         if not df_train.empty:
-            if 'Date' in df_train.columns:
+            # Sprawdź wszystkie możliwe nazwy kolumn z datą
+            date_columns = [col for col in df_train.columns if col.lower() == 'date']
+            
+            if date_columns:
+                # Użyj pierwszej znalezionej kolumny z datą
+                date_col = date_columns[0]
+                if date_col != 'Date':
+                    df_train = df_train.rename(columns={date_col: 'Date'})
                 df_train = df_train.sort_values('Date').reset_index(drop=True)
             else:
-                # Awaryjnie sortuj po indeksie
-                print(f"Ostrzeżenie: df_train nie ma kolumny Date. Sortuję po indeksie.")
+                # Jeśli nie ma kolumny z datą, użyj indeksu
+                print(f"Ostrzeżenie: Brak kolumny z datą w df_train. Używam indeksu do sortowania.")
                 df_train = df_train.sort_index().reset_index(drop=True)
+        else:
+            # Jeśli df_train jest pusty, pomiń tę kolejkę
+            skipped += len(k_df)
+            continue
 
         if len(df_train) < 10:
             skipped += len(k_df)
@@ -359,7 +370,15 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
         for _, mecz in k_df.iterrows():
             h = str(mecz["HomeTeam"]); a = str(mecz["AwayTeam"])
             fthg = int(mecz["FTHG"]); ftag = int(mecz["FTAG"])
-            data = str(mecz["Date"].date()) if pd.notna(mecz["Date"]) else ""
+            
+            # Sprawdź czy kolumna Date istnieje w mecz
+            if 'Date' in mecz:
+                data = str(mecz["Date"].date()) if pd.notna(mecz["Date"]) else ""
+            elif 'date' in mecz:
+                data = str(mecz["date"].date()) if pd.notna(mecz["date"]) else ""
+            else:
+                data = ""
+                
             fh = _forma(df_train, h); fa = _forma(df_train, a)
             lh, la, rho = _oblicz_lambdy(h, a, st_df, sl, fh, fa)
             if lh is None: 
