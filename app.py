@@ -58,7 +58,7 @@ LIGA_PROFILES = {
     "Bundesliga": {
         "dampening_factor": 0.6,
         "avg_goals": 3.2,
-        "style": "high": "high_intensity"
+        "style": "high_intensity"
     },
     "Serie A": {
         "dampening_factor": 0.4,
@@ -355,8 +355,8 @@ def oblicz_wszystkie_statystyki(df_json: str, tau_days: float = 25.0) -> pd.Data
             "Gole stracone (dom)": weighted_mean(home["FTAG"], h_dates, tau_days),
             "Gole strzelone (wyjazd)": weighted_mean(away["FTAG"], a_dates, tau_days),
             "Gole stracone (wyjazd)": weighted_mean(away["FTHG"], a_dates, tau_days),
-            "Różne (dom)": weighted_mean(home["total_rozne"], h_dates, tau_days),
-            "Różne (wyjazd)": weighted_mean(away["total_rozne"], a_dates, tau_days),
+            "Rozne (dom)": weighted_mean(home["total_rozne"], h_dates, tau_days),
+            "Rozne (wyjazd)": weighted_mean(away["total_rozne"], a_dates, tau_days),
             "Kartki (dom)": weighted_mean(home["total_kartki"], h_dates, tau_days),
             "Kartki (wyjazd)": weighted_mean(away["total_kartki"], a_dates, tau_days),
             "SOT (dom)": weighted_mean(home.loc[home["HST"].notna(), "HST"], h_sot_dates, tau_days) if len(home_sot) >= 2 else None,
@@ -439,7 +439,7 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame, srednie_lig: dict, f
             lam_a = (1 - sot_w) * lam_a_goals + sot_w * lam_sot_a
             sot_aktywny = True
 
-    lam_r = (srednie_df.loc[h, "Różne (dom)"] + srednie_df.loc[a, "Różne (wyjazd)"]) / 2
+    lam_r = (srednie_df.loc[h, "Rozne (dom)"] + srednie_df.loc[a, "Rozne (wyjazd)"]) / 2
     lam_k = (srednie_df.loc[h, "Kartki (dom)"] + srednie_df.loc[a, "Kartki (wyjazd)"]) / 2
     
     sot_h_raw = srednie_df.loc[h, "SOT (dom)"] if "SOT (dom)" in srednie_df.columns else None
@@ -595,11 +595,11 @@ def predykcja_meczu_cached(lam_h: float, lam_a: float, rho: float, config_hash: 
     edge = vals[0] - vals[1]
     
     if edge > 0.18:
-        conf_level, conf_emoji, conf_opis = "High", "🟢", f"Wyraźny faworyt (+{edge:.0%} nad 2. opcją)"
+        conf_level, conf_emoji, conf_opis = "High", "🟢", f"Wyrazny faworyt (+{edge:.0%} nad 2. opcja)"
     elif edge > 0.08:
         conf_level, conf_emoji, conf_opis = "Medium", "🟡", f"Umiarkowana przewaga (+{edge:.0%})"
     else:
-        conf_level, conf_emoji, conf_opis = "Coinflip", "🔴", f"Mecz bardzo wyrównany (spread {spread:.0%})"
+        conf_level, conf_emoji, conf_opis = "Coinflip", "🔴", f"Mecz bardzo wyrownany (spread {spread:.0%})"
     
     ent = -sum(p * np.log2(p) for p in [p_home_cal, p_draw_cal, p_away_cal] if p > 0)
     pct = ent / np.log2(3)
@@ -660,7 +660,7 @@ def alternatywne_zdarzenia_cached(lam_h: float, lam_a: float, lam_r: float,
     for linia in [7.5, 8.5, 9.5, 10.5]:
         p_over = float(1 - poisson.cdf(int(linia), lam_r))
         if p_over >= prog_min:
-            zdarzenia.append(("🚩", f"Over {linia} rożnych", p_over, fair_odds(p_over), "Rożne", linia))
+            zdarzenia.append(("🚩", f"Over {linia} roznych", p_over, fair_odds(p_over), "Rozne", linia))
 
     for linia in [2.5, 3.5, 4.5]:
         p_over = float(1 - poisson.cdf(int(linia), lam_k))
@@ -739,9 +739,9 @@ class EdgeVisualizer:
             fig = go.Figure(go.Indicator(
                 mode="number+delta",
                 value=expected_profit,
-                number={'prefix': "€", 'font': {'size': 48, 'color': profit_color}},
+                number={'prefix': "EUR", 'font': {'size': 48, 'color': profit_color}},
                 delta={'reference': 0, 'relative': False, 'valueformat': '.0f'},
-                title={'text': "Expected Profit<br><span style='font-size:0.5em'>na 100€ stawki</span>"},
+                title={'text': "Expected Profit<br><span style='font-size:0.5em'>na 100 EUR stawki</span>"},
             ))
             fig.update_layout(height=200, margin=dict(l=20, r=20, t=50, b=20))
             st.plotly_chart(fig, use_container_width=True)
@@ -768,7 +768,7 @@ class EdgeVisualizer:
             ))
             fig.update_layout(
                 title="Edge Visualization",
-                xaxis_title="Prawdopodobieństwo (%)",
+                xaxis_title="Prawdopodobienstwo (%)",
                 showlegend=False,
                 height=200,
                 margin=dict(l=20, r=20, t=50, b=20)
@@ -782,8 +782,8 @@ class EdgeVisualizer:
             fig = px.line(
                 x=range(1, 1001),
                 y=cumulative,
-                title="Symulacja: 1000 zakładów",
-                labels={'x': 'Numer zakładu', 'y': 'Zysk/Strata (€)'}
+                title="Symulacja: 1000 zakladow",
+                labels={'x': 'Numer zakladu', 'y': 'Zysk/Strata (EUR)'}
             )
             fig.add_hline(y=0, line_dash="dash", line_color="red")
             fig.update_layout(height=200, margin=dict(l=20, r=20, t=50, b=20))
@@ -819,8 +819,8 @@ class EdgeVisualizer:
         fig.add_vline(x=be, line_dash="dash", line_color="red", annotation_text="Break-even")
         
         fig.update_layout(
-            title=f"Niepewność modelu (95% CI)<br>Prawdopodobieństwo: {lower_bound:.1%} - {upper_bound:.1%}",
-            xaxis_title="Prawdopodobieństwo sukcesu",
+            title=f"Niepewnosc modelu (95% CI)<br>Prawdopodobienstwo: {lower_bound:.1%} - {upper_bound:.1%}",
+            xaxis_title="Prawdopodobienstwo sukcesu",
             yaxis_visible=False,
             showlegend=False,
             height=250
@@ -830,9 +830,9 @@ class EdgeVisualizer:
         if lower_bound > be:
             st.success("✅ **High Confidence Edge** - Nawet pesymistyczny scenariusz daje zysk")
         elif upper_bound < be:
-            st.error("❌ **No Edge** - Nawet optymistyczny scenariusz poniżej break-even")
+            st.error("❌ **No Edge** - Nawet optymistyczny scenariusz ponizej break-even")
         else:
-            st.warning("⚠️ **Marginal Edge** - Zależy od wariancji, wymaga większej próby")
+            st.warning("⚠️ **Marginal Edge** - Zalezy od wariancji, wymaga wiekszej proby")
 
 class SyndicateTools:
     def render_staking_calculator(self, edge: float, bankroll: float, kelly_fraction: float = 0.25):
@@ -851,8 +851,8 @@ class SyndicateTools:
                    help="Teoretycznie optymalna stawka")
         col2.metric(f"Fractional ({kelly_fraction:.0%})", f"{fractional_kelly:.1%}",
                    help="Konserwatywna wersja Kelly")
-        col3.metric("Rekomendowana stawka", f"€{recommended_stake:.2f}",
-                   help=f""Przy bankrollu €{bankroll:.0f}")
+        col3.metric("Rekomendowana stawka", f"EUR {recommended_stake:.2f}",
+                   help=f"Przy bankrollu EUR {bankroll:.0f}")
         
         fractions = np.linspace(0, kelly_pct * 1.5, 50)
         growth_rates = [p * np.log(1 + f * b) + q * np.log(1 - f) for f in fractions]
@@ -935,7 +935,7 @@ def render_header():
     """, unsafe_allow_html=True)
 
 # ===========================================================================
-# GŁÓWNA APLIKACJA
+# GLOWNA APLIKACJA
 # ===========================================================================
 def main():
     render_header()
@@ -944,7 +944,7 @@ def main():
     
     # Sidebar
     st.sidebar.header("⚙️ Konfiguracja")
-    wybrana_liga = st.sidebar.selectbox("Wybierz ligę", list(LIGI.keys()))
+    wybrana_liga = st.sidebar.selectbox("Wybierz lige", list(LIGI.keys()))
     
     with st.sidebar.expander("Parametry modelu", expanded=False):
         st.session_state.sot_blend_w = st.slider("Waga SOT", 0.0, 0.5, 0.35, 0.05)
@@ -953,10 +953,10 @@ def main():
     
     with st.sidebar.expander("Bet Builder", expanded=False):
         st.session_state.combo_edge_threshold = st.slider("Min Edge", 0.0, 0.20, 0.05, 0.01)
-        st.session_state.max_combo_legs = st.slider("Max nóg", 2, 5, 4)
+        st.session_state.max_combo_legs = st.slider("Max nog", 2, 5, 4)
     
-    # Ładowanie danych
-    with st.spinner("Ładowanie danych..."):
+    # Ladowanie danych
+    with st.spinner("Ladowanie danych..."):
         historical = load_historical(LIGI[wybrana_liga]["csv_code"])
         schedule = load_schedule(LIGI[wybrana_liga]["file"])
     
@@ -974,15 +974,15 @@ def main():
     # Info
     aktualna_kolejka = get_current_round(schedule) if not schedule.empty else 0
     st.sidebar.metric("Aktualna kolejka", f"#{aktualna_kolejka}")
-    st.sidebar.caption(f"ρ: {rho:.3f} | Style: {liga_profile['style']}")
+    st.sidebar.caption(f"rho: {rho:.3f} | Style: {liga_profile['style']}")
     
     # Tabs
-    tab1, tab2, tab3 = st.tabs(["🎯 Smart Bet Builder", "📊 Analiza Meczu", "📈 Skuteczność"])
+    tab1, tab2, tab3 = st.tabs(["🎯 Smart Bet Builder", "📊 Analiza Meczu", "📈 Skutecznosc"])
     
     # TAB 1: Smart Bet Builder
     with tab1:
         st.subheader("Korelacyjny Silnik Bet Buildera")
-        st.caption("Wykrywamy prawdziwe zależności między rynkami, nie zakładamy niezależności")
+        st.caption("Wykrywamy prawdziwe zaleznosci miedzy rynkami, nie zakladamy niezaleznosci")
         
         if schedule.empty:
             st.warning("Brak terminarza")
@@ -1003,7 +1003,7 @@ def main():
                     home, away, srednie_df, srednie_lig, forma_dict
                 )
                 
-                # Przygotowanie rynków
+                # Przygotowanie rynkow
                 markets = []
                 pred = predykcja_meczu(lam_h, lam_a, rho)
                 
@@ -1076,7 +1076,7 @@ def main():
                             if 'correlation_effect' in combo:
                                 ce = combo['correlation_effect']
                                 ce_color = "#4CAF50" if ce > 0 else "#F44336"
-                                st.caption(f"Efekt korelacji: <span style='color: {ce_color};'>{ce:+.1%}</span> vs niezależności", unsafe_allow_html=True)
+                                st.caption(f"Efekt korelacji: <span style='color: {ce_color};'>{ce:+.1%}</span> vs niezaleznosci", unsafe_allow_html=True)
                             
                             # Komercyjna analiza
                             if st.button(f"💰 Analiza komercyjna #{i}", key=f"comm_{i}"):
@@ -1085,20 +1085,20 @@ def main():
                                 
                                 visualizer.render_money_on_table(combo)
                                 
-                                with st.expander("Szczegółowa analiza"):
+                                with st.expander("Szczegolowa analiza"):
                                     visualizer.render_confidence_interval(combo)
                                 
                                 with st.expander("Kelly Calculator"):
                                     kelly_frac = st.slider("Kelly %", 0.05, 0.5, 0.25, 0.05, key=f"kelly_{i}")
                                     syndicate.render_staking_calculator(combo['ev'], 1000.0, kelly_frac)
                 else:
-                    st.info("Brak combo spełniających kryteria edge. Spróbuj obniżyć próg.")
+                    st.info("Brak combo spelniajacych kryteria edge. Sprobuj obnizyc prog.")
             else:
-                st.warning("Brak dostępnych meczów")
+                st.warning("Brak dostepnych meczow")
     
     # TAB 2: Analiza Meczu
     with tab2:
-        st.subheader("Szczegółowa analiza meczów")
+        st.subheader("Szczegolowa analiza meczow")
         
         if not schedule.empty:
             mecze = schedule[schedule["round"] == aktualna_kolejka]
@@ -1126,13 +1126,13 @@ def main():
                     if sot_ok:
                         st.success("🎯 SOT blend aktywny")
     
-    # TAB 3: Skuteczność
+    # TAB 3: Skutecznosc
     with tab3:
-        st.subheader("Tracking skuteczności")
-        st.info("Zapisuj zakłady przyciskiem 'Analiza komercyjna' -> 'Dodaj do portfela' aby śledzić wyniki.")
+        st.subheader("Tracking skutecznosci")
+        st.info("Zapisuj zaklady przyciskiem 'Analiza komercyjna' -> 'Dodaj do portfela' aby sledzic wyniki.")
         
         if st.session_state.get('portfolio'):
-            st.markdown(f"**Zapisane zakłady:** {len(st.session_state['portfolio'])}")
+            st.markdown(f"**Zapisane zaklady:** {len(st.session_state['portfolio'])}")
             for item in st.session_state['portfolio'][-5:]:
                 st.caption(f"• {item.get('rationale', 'Unknown')[:50]}... (EV: {item.get('ev', 0):.2f})")
 
