@@ -49,7 +49,8 @@ def _pobierz_csv(league_code: str, sezon: str) -> pd.DataFrame:
         df["total_kartki"] = df["HY"] + df["AY"] + (df["HR"] + df["AR"]) * 2
         df["total_rozne"]  = df["HC"] + df["AC"]
         return df.sort_values("Date").reset_index(drop=True)
-    except Exception:
+    except Exception as e:
+        print(f"Błąd pobierania {league_code}/{sezon}: {e}")
         return pd.DataFrame()
 
 
@@ -254,7 +255,7 @@ def _insert(rows,db):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GŁÓWNA FUNKCJA
+# GŁÓWNA FUNKCJA – POPRAWIONA
 # ═══════════════════════════════════════════════════════════════════════════
 def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
     """
@@ -304,20 +305,21 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
         else:
             df_p = pd.DataFrame()
 
-        # Ujednolicenie nazwy kolumny daty przed concat (Date vs date)
-        def _norm_date_col(d):
-            if d.empty:
-                return d
-            if "date" in d.columns and "Date" not in d.columns:
-                d = d.rename(columns={"date": "Date"})
-            return d
-        df_p        = _norm_date_col(df_p)
-        mecze_przed = _norm_date_col(mecze_przed)
+        # Ujednolicenie nazwy kolumny daty - zawsze używamy "Date" (z dużej litery)
+        for df_tmp in [df_p, mecze_przed]:
+            if not df_tmp.empty:
+                if 'date' in df_tmp.columns and 'Date' not in df_tmp.columns:
+                    df_tmp.rename(columns={'date': 'Date'}, inplace=True)
+
         df_train = pd.concat([df_p, mecze_przed], ignore_index=True)
-        if "Date" in df_train.columns:
-            df_train = df_train.sort_values("Date")
-        elif "date" in df_train.columns:
-            df_train = df_train.sort_values("date").rename(columns={"date": "Date"})
+        
+        # Sortowanie po dacie - używamy kolumny "Date" jeśli istnieje
+        if not df_train.empty:
+            if 'Date' in df_train.columns:
+                df_train = df_train.sort_values("Date").reset_index(drop=True)
+            else:
+                # Jeśli nie ma kolumny Date, sortuj po indeksie (awaryjnie)
+                df_train = df_train.sort_index().reset_index(drop=True)
 
         if len(df_train) < 10:
             skipped += len(k_df); continue
@@ -328,30 +330,47 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
             skipped += len(k_df); continue
 
         for _, mecz in k_df.iterrows():
-            h=str(mecz["HomeTeam"]); a=str(mecz["AwayTeam"])
-            fthg=int(mecz["FTHG"]); ftag=int(mecz["FTAG"])
-            data=str(mecz["Date"].date()) if pd.notna(mecz["Date"]) else ""
-            fh=_forma(df_train,h); fa=_forma(df_train,a)
-            lh,la,rho = _oblicz_lambdy(h,a,st_df,sl,fh,fa)
-            if lh is None: skipped+=1; continue
-            p = _pred(lh,la,rho)
-            wn = _wynik(fthg,ftag)
-            tr = _traf(p["typ"],wn)
-            y1=1 if wn=="1" else 0; yx=1 if wn=="X" else 0; y2=1 if wn=="2" else 0
-            brier = ((p["ph"]-y1)**2+(p["pd"]-yx)**2+(p["pa"]-y2)**2)/3
-            fo = round(1/p["pt"],2) if p["pt"]>0 else 999.0
+            h = str(mecz["HomeTeam"]); a = str(mecz["AwayTeam"])
+            fthg = int(mecz["FTHG"]); ftag = int(mecz["FTAG"])
+            data = str(mecz["Date"].date()) if pd.notna(mecz["Date"]) else ""
+            fh = _forma(df_train, h); fa = _forma(df_train, a)
+            lh, la, rho = _oblicz_lambdy(h, a, st_df, sl, fh, fa)
+            if lh is None: 
+                skipped += 1
+                continue
+            p = _pred(lh, la, rho)
+            wn = _wynik(fthg, ftag)
+            tr = _traf(p["typ"], wn)
+            y1 = 1 if wn == "1" else 0
+            yx = 1 if wn == "X" else 0
+            y2 = 1 if wn == "2" else 0
+            brier = ((p["ph"] - y1)**2 + (p["pd"] - yx)**2 + (p["pa"] - y2)**2) / 3
+            fo = round(1 / p["pt"], 2) if p["pt"] > 0 else 999.0
 
-            rows_db.append((liga_code,sezon_test,k_nr,data,h,a,fthg,ftag,wn,
-                            p["typ"],p["pt"],p["ph"],p["pd"],p["pa"],
-                            p["lh"],p["la"],tr,round(brier,6),len(df_train)))
+            rows_db.append((
+                liga_code, sezon_test, k_nr, data, h, a, fthg, ftag, wn,
+                p["typ"], p["pt"], p["ph"], p["pd"], p["pa"],
+                p["lh"], p["la"], tr, round(brier, 6), len(df_train)
+            ))
             rows_csv.append({
-                "liga":liga_code,"sezon":sezon_test,"kolejka":k_nr,"data":data,
-                "dom":h,"gosc":a,"wynik_rzecz":f"{fthg}:{ftag} ({wn})",
-                "typ_modelu":p["typ"],"p_typ":round(p["pt"],4),"fair_odds":fo,
-                "p_home":round(p["ph"],4),"p_draw":round(p["pd"],4),"p_away":round(p["pa"],4),
-                "lam_h":round(p["lh"],3),"lam_a":round(p["la"],3),
-                "trafiony":"TAK" if tr else "NIE","brier":round(brier,6),
-                "n_trening":len(df_train),
+                "liga": liga_code,
+                "sezon": sezon_test,
+                "kolejka": k_nr,
+                "data": data,
+                "dom": h,
+                "gosc": a,
+                "wynik_rzecz": f"{fthg}:{ftag} ({wn})",
+                "typ_modelu": p["typ"],
+                "p_typ": round(p["pt"], 4),
+                "fair_odds": fo,
+                "p_home": round(p["ph"], 4),
+                "p_draw": round(p["pd"], 4),
+                "p_away": round(p["pa"], 4),
+                "lam_h": round(p["lh"], 3),
+                "lam_a": round(p["la"], 3),
+                "trafiony": "TAK" if tr else "NIE",
+                "brier": round(brier, 6),
+                "n_trening": len(df_train),
             })
 
     cb(0.94, f"Zapisuję {len(rows_db)} rekordów do SQLite...")
@@ -360,17 +379,30 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
     if not rows_csv:
         return {"error": "Brak wyników – za mało danych treningowych na wszystkich kolejkach."}
 
-    n=len(rows_csv); traf=sum(1 for r in rows_csv if r["trafiony"]=="TAK")
-    brier_avg=float(np.mean([r["brier"] for r in rows_csv]))
-    bn=float(((1/3-1)**2+(1/3)**2+(1/3)**2)/3)
-    bss=float(1-brier_avg/bn) if bn>0 else 0.0
-    roi_s=sum((r["fair_odds"]-1) if r["trafiony"]=="TAK" else -1 for r in rows_csv)
-    roi_pct=roi_s/n*100
+    n = len(rows_csv)
+    traf = sum(1 for r in rows_csv if r["trafiony"] == "TAK")
+    brier_avg = float(np.mean([r["brier"] for r in rows_csv]))
+    # Brier naive (przewidywanie zawsze 1/3)
+    bn = ((1/3 - 1)**2 + (1/3)**2 + (1/3)**2) / 3
+    bss = float(1 - brier_avg / bn) if bn > 0 else 0.0
+    roi_s = sum((r["fair_odds"] - 1) if r["trafiony"] == "TAK" else -1 for r in rows_csv)
+    roi_pct = roi_s / n * 100
 
     cb(1.0, f"Gotowe!  {n} meczów  ·  hit {traf/n:.1%}  ·  Brier {brier_avg:.4f}  ·  ROI {roi_pct:+.1f}%")
-    return {"ok":True,"liga":liga_code,"sezon":sezon_test,"n":n,"trafione":traf,
-            "skipped":skipped,"hit_rate":traf/n,"brier":brier_avg,"bss":bss,
-            "roi_pct":roi_pct,"n_kolejek":n_k,"df":pd.DataFrame(rows_csv)}
+    return {
+        "ok": True,
+        "liga": liga_code,
+        "sezon": sezon_test,
+        "n": n,
+        "trafione": traf,
+        "skipped": skipped,
+        "hit_rate": traf / n,
+        "brier": brier_avg,
+        "bss": bss,
+        "roi_pct": roi_pct,
+        "n_kolejek": n_k,
+        "df": pd.DataFrame(rows_csv)
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -378,51 +410,87 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
 # ═══════════════════════════════════════════════════════════════════════════
 def load_results(liga, sezon, db):
     try:
-        con=sqlite3.connect(db)
-        df=pd.read_sql(f"SELECT * FROM {_T} WHERE liga=? AND sezon=? ORDER BY kolejka,home",
-                       con, params=(liga,sezon))
-        con.close(); return df
-    except Exception: return pd.DataFrame()
+        con = sqlite3.connect(db)
+        df = pd.read_sql(f"SELECT * FROM {_T} WHERE liga=? AND sezon=? ORDER BY kolejka, home",
+                         con, params=(liga, sezon))
+        con.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
 
 def has_results(liga, sezon, db):
     return not load_results(liga, sezon, db).empty
 
+
 def summary(liga, sezon, db):
-    df=load_results(liga,sezon,db)
-    if df.empty: return {}
-    n=len(df); traf=int(df["trafiony"].sum())
-    brier=float(df["brier"].mean())
-    bn=float(((1/3-1)**2+(1/3)**2+(1/3)**2)/3)
-    bss=float(1-brier/bn) if bn>0 else 0.0
-    roi_s=sum((round(1/r["p_typ"],2)-1) if r["trafiony"]==1 else -1
-              for _,r in df.iterrows())
-    roi_pct=roi_s/n*100
+    df = load_results(liga, sezon, db)
+    if df.empty:
+        return {}
+    
+    n = len(df)
+    traf = int(df["trafiony"].sum())
+    brier = float(df["brier"].mean())
+    # Brier naive (przewidywanie zawsze 1/3)
+    bn = ((1/3 - 1)**2 + (1/3)**2 + (1/3)**2) / 3
+    bss = float(1 - brier / bn) if bn > 0 else 0.0
+    
+    # Oblicz ROI na podstawie fair odds
+    roi_s = 0
+    for _, r in df.iterrows():
+        fo = round(1 / r["p_typ"], 2) if 0 < r["p_typ"] <= 1 else 999.0
+        roi_s += (fo - 1) if r["trafiony"] == 1 else -1
+    roi_pct = roi_s / n * 100
 
-    per_k=(df.groupby("kolejka").agg(mecze=("home","count"),trafione=("trafiony","sum"),
-                                      brier=("brier","mean")).reset_index())
-    per_k["hit_rate"]=per_k["trafione"]/per_k["mecze"]
+    # Statystyki per kolejka
+    per_k = (df.groupby("kolejka")
+               .agg(mecze=("home", "count"),
+                    trafione=("trafiony", "sum"),
+                    brier=("brier", "mean"))
+               .reset_index())
+    per_k["hit_rate"] = per_k["trafione"] / per_k["mecze"]
 
-    bins=[0.40,0.48,0.54,0.60,0.65,0.70,0.75,0.80,1.01]
-    kal=[]
-    for lo,hi in zip(bins[:-1],bins[1:]):
-        g=df[(df["p_typ"]>=lo)&(df["p_typ"]<hi)]
-        if len(g)>=3:
-            kal.append({"przedzial":f"{lo:.0%}–{hi:.0%}","n":len(g),
-                        "p_mean":float(g["p_typ"].mean()),"hit":float(g["trafiony"].mean()),
-                        "rozb":float(g["trafiony"].mean())-float(g["p_typ"].mean())})
+    # Kalibracja
+    bins = [0.40, 0.48, 0.54, 0.60, 0.65, 0.70, 0.75, 0.80, 1.01]
+    kal = []
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        g = df[(df["p_typ"] >= lo) & (df["p_typ"] < hi)]
+        if len(g) >= 3:
+            kal.append({
+                "przedzial": f"{lo:.0%}–{hi:.0%}",
+                "n": len(g),
+                "p_mean": float(g["p_typ"].mean()),
+                "hit": float(g["trafiony"].mean()),
+                "rozb": float(g["trafiony"].mean()) - float(g["p_typ"].mean())
+            })
 
-    per_typ=(df.groupby("typ").agg(n=("trafiony","count"),traf=("trafiony","sum"),
-                                    brier=("brier","mean")).reset_index())
-    per_typ["hit"]=per_typ["traf"]/per_typ["n"]
+    # Statystyki per typ
+    per_typ = (df.groupby("typ")
+                 .agg(n=("trafiony", "count"),
+                      traf=("trafiony", "sum"),
+                      brier=("brier", "mean"))
+                 .reset_index())
+    per_typ["hit"] = per_typ["traf"] / per_typ["n"]
 
-    df_s=df.sort_values(["kolejka","home"]).reset_index(drop=True)
-    kap=0.0; eq=[]
-    for _,r in df_s.iterrows():
-        fo=round(1/r["p_typ"],2) if 0<r["p_typ"]<=1 else 999.0
-        kap+=(fo-1) if r["trafiony"]==1 else -1
+    # Equity curve
+    df_s = df.sort_values(["kolejka", "home"]).reset_index(drop=True)
+    kap = 0.0
+    eq = []
+    for _, r in df_s.iterrows():
+        fo = round(1 / r["p_typ"], 2) if 0 < r["p_typ"] <= 1 else 999.0
+        kap += (fo - 1) if r["trafiony"] == 1 else -1
         eq.append(kap)
-    df_s["equity"]=eq
+    df_s["equity"] = eq
 
-    return {"n":n,"trafione":traf,"hit_rate":traf/n,"brier":brier,"bss":bss,"roi_pct":roi_pct,
-            "per_kolejka":per_k,"kalibracja":pd.DataFrame(kal),"per_typ":per_typ,
-            "equity_df":df_s[["kolejka","equity"]]}
+    return {
+        "n": n,
+        "trafione": traf,
+        "hit_rate": traf / n,
+        "brier": brier,
+        "bss": bss,
+        "roi_pct": roi_pct,
+        "per_kolejka": per_k,
+        "kalibracja": pd.DataFrame(kal),
+        "per_typ": per_typ,
+        "equity_df": df_s[["kolejka", "equity"]]
+    }
