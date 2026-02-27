@@ -1,7 +1,6 @@
 import sqlite3
 import pandas as pd
 import numpy as np
-from itertools import combinations
 
 _T = "backtest"
 
@@ -13,7 +12,7 @@ _T = "backtest"
 def _init_db(db):
     con = sqlite3.connect(db)
 
-    # 🔥 ZAWSZE TWORZYMY ŚWIEŻĄ TABELĘ
+    # Zawsze świeża tabela (eliminuje problemy strukturalne)
     con.execute(f"DROP TABLE IF EXISTS {_T}")
 
     con.execute(f"""
@@ -49,9 +48,18 @@ def _insert(db, row):
     con.close()
 
 
-def load_results(db):
+def load_results(liga, sezon, db):
     con = sqlite3.connect(db)
-    df = pd.read_sql_query(f"SELECT * FROM {_T}", con)
+
+    df = pd.read_sql_query(
+        f"""
+        SELECT * FROM {_T}
+        WHERE liga = ? AND sezon = ?
+        """,
+        con,
+        params=(liga, sezon)
+    )
+
     con.close()
     return df
 
@@ -69,7 +77,6 @@ def run_backtest(liga, sezon_test, sezon_prev, db, callback=None):
     df = pd.read_csv(f"{sezon_test}.csv")
     df.columns = df.columns.str.strip()
 
-    # Upewniamy się że kolumny istnieją
     required = ["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]
     for col in required:
         if col not in df.columns:
@@ -77,13 +84,15 @@ def run_backtest(liga, sezon_test, sezon_prev, db, callback=None):
 
     df = df.sort_values("Date").reset_index(drop=True)
 
+    # Tworzymy numer kolejki na podstawie kolejności dat
     df["kolejka"] = (
         df["Date"]
         .rank(method="dense")
         .astype(int)
     )
 
-    # ======= Model bardzo uproszczony (placeholder) =======
+    # ======= PROSTY MODEL TESTOWY =======
+    # (możesz tu później podpiąć swój realny model)
 
     for idx, row in df.iterrows():
 
@@ -93,7 +102,7 @@ def run_backtest(liga, sezon_test, sezon_prev, db, callback=None):
         hg = row["FTHG"]
         ag = row["FTAG"]
 
-        # Prosty model bazowy
+        # Prosty baseline (placeholder)
         p_home = 0.45
         p_draw = 0.25
         p_away = 0.30
@@ -132,21 +141,21 @@ def run_backtest(liga, sezon_test, sezon_prev, db, callback=None):
         if callback:
             callback(idx + 1, len(df))
 
-    return summary(db)
+    return summary(liga, sezon_test, db)
 
 
 # =========================
 # SUMMARY
 # =========================
 
-def summary(db):
+def summary(liga, sezon, db):
 
-    df = load_results(db)
+    df = load_results(liga, sezon, db)
 
     if df.empty:
         return None
 
-    # 🔐 Bezpieczne sortowanie
+    # Bezpieczne sortowanie
     sort_cols = []
     if "kolejka" in df.columns:
         sort_cols.append("kolejka")
@@ -158,15 +167,16 @@ def summary(db):
 
     accuracy = df["correct"].mean()
 
+    # Brier score (dla p_home jako przykład)
     brier = np.mean(
         (df["correct"] - df["p_home"]) ** 2
     )
 
-    equity = df["correct"].cumsum()
+    equity_curve = df["correct"].cumsum()
 
     return {
         "accuracy": round(float(accuracy), 4),
         "brier": round(float(brier), 4),
-        "total_predictions": len(df),
-        "equity_curve": equity.tolist()
+        "total_predictions": int(len(df)),
+        "equity_curve": equity_curve.tolist()
     }
