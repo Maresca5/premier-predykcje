@@ -9,7 +9,7 @@ import sqlite3
 import unicodedata
 import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots
+from scipy.stats import poisson
 
 # ===========================================================================
 # KONFIGURACJA
@@ -58,7 +58,7 @@ LIGA_PROFILES = {
     "Bundesliga": {
         "dampening_factor": 0.6,
         "avg_goals": 3.2,
-        "style": "high_intensity"
+        "style": "high": "high_intensity"
     },
     "Serie A": {
         "dampening_factor": 0.4,
@@ -401,8 +401,6 @@ def oblicz_srednie_ligowe(df_json: str) -> dict:
     }
 
 def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame, srednie_lig: dict, forma_dict: dict) -> tuple:
-    from scipy.stats import poisson
-    
     sot_w = st.session_state.sot_blend_w
     avg_h = max(srednie_lig["avg_home"], 0.5)
     avg_a = max(srednie_lig["avg_away"], 0.5)
@@ -520,8 +518,6 @@ def get_round_status(schedule: pd.DataFrame, round_num: int) -> str:
 # MODEL DIXON-COLES
 # ===========================================================================
 def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float, rho: float = -0.13) -> np.ndarray:
-    from scipy.stats import poisson
-    
     M = M.copy()
     tau = {
         (0, 0): 1 - lam_h * lam_a * rho,
@@ -567,8 +563,6 @@ def fair_odds(p: float) -> float:
 
 @st.cache_data(ttl=300)
 def predykcja_meczu_cached(lam_h: float, lam_a: float, rho: float, config_hash: str) -> dict:
-    from scipy.stats import poisson
-    
     max_gole = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     
     M = dixon_coles_adj(
@@ -640,8 +634,6 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
 def alternatywne_zdarzenia_cached(lam_h: float, lam_a: float, lam_r: float,
                                    lam_k: float, rho: float, lam_sot: float = None,
                                    prog_min: float = 0.55) -> list:
-    from scipy.stats import poisson
-    
     zdarzenia = []
     mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     
@@ -860,7 +852,7 @@ class SyndicateTools:
         col2.metric(f"Fractional ({kelly_fraction:.0%})", f"{fractional_kelly:.1%}",
                    help="Konserwatywna wersja Kelly")
         col3.metric("Rekomendowana stawka", f"€{recommended_stake:.2f}",
-                   help=f"Przy bankrollu €{bankroll:.0f}")
+                   help=f""Przy bankrollu €{bankroll:.0f}")
         
         fractions = np.linspace(0, kelly_pct * 1.5, 50)
         growth_rates = [p * np.log(1 + f * b) + q * np.log(1 - f) for f in fractions]
@@ -934,11 +926,6 @@ class SmartComboGenerator:
 # ===========================================================================
 # UI KOMPONENTY
 # ===========================================================================
-def type_badge(typ: str) -> str:
-    colors = {"1": "#2196F3", "X": "#FF9800", "2": "#E91E63", "1X": "#9C27B0", "X2": "#00BCD4"}
-    color = colors.get(typ, "#888")
-    return f'<span style="background: {color}; color: white; padding: 4px 14px; border-radius: 12px; font-weight: bold;">{typ}</span>'
-
 def render_header():
     st.markdown("""
     <style>
@@ -1035,8 +1022,8 @@ def main():
                 for line in [2.5, 3.5]:
                     mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
                     M = dixon_coles_adj(
-                        np.outer(__import__('scipy.stats').stats.poisson.pmf(range(mg), lam_h),
-                                 __import__('scipy.stats').stats.poisson.pmf(range(mg), lam_a)),
+                        np.outer(poisson.pmf(range(mg), lam_h),
+                                 poisson.pmf(range(mg), lam_a)),
                         lam_h, lam_a, rho=rho
                     )
                     p_over = sum(M[i,j] for i in range(mg) for j in range(mg) if i+j > line)
