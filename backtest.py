@@ -14,8 +14,9 @@ from typing import Optional, Callable
 
 # ── Parametry identyczne z app.py ─────────────────────────────────────────
 SOT_BLEND_W   = 0.30
-PROG_PEWNY    = 0.42
-PROG_PODWOJNA = 0.62
+PROG_PEWNY    = 0.55   # zaktualizowane po backteście (było 0.42)
+PROG_PODWOJNA = 0.55   # zaktualizowane po backteście (było 0.62)
+SHRINK_ALPHA  = 0.20   # shrinkage kalibracyjny – identyczny z app.py
 TAU_DAYS      = 30.0
 
 # ── Nazwa tabeli w SQLite ──────────────────────────────────────────────────
@@ -275,21 +276,30 @@ def _dc(lh: float, la: float, rho: float) -> np.ndarray:
     return M / M.sum()
 
 
+def _kalibruj(ph: float, pd: float, pa: float) -> tuple:
+    """Shrinkage identyczny z kalibruj_prawdopodobienstwa() w app.py."""
+    a = SHRINK_ALPHA
+    ph2 = (1-a)*ph + a/3
+    pd2 = (1-a)*pd + a/3
+    pa2 = (1-a)*pa + a/3
+    s = ph2 + pd2 + pa2
+    return ph2/s, pd2/s, pa2/s
+
 def _pred(lh: float, la: float, rho: float) -> dict:
     M  = _dc(lh, la, rho)
     ph = float(np.tril(M, -1).sum())
     pd_= float(np.trace(M))
     pa = float(np.triu(M, 1).sum())
-    if   ph >= PROG_PEWNY:   typ, pt = "1",  ph
-    elif pa >= PROG_PEWNY:   typ, pt = "2",  pa
-    elif pd_ >= PROG_PEWNY:  typ, pt = "X",  pd_
+    # Shrinkage – identyczny z app.py (kalibruj_prawdopodobienstwa)
+    ph, pd_, pa = _kalibruj(ph, pd_, pa)
+    p1x = ph + pd_; px2 = pa + pd_
+    if   ph >= PROG_PEWNY:  typ, pt = "1",  ph
+    elif pa >= PROG_PEWNY:  typ, pt = "2",  pa
+    elif p1x >= PROG_PODWOJNA or px2 >= PROG_PODWOJNA:
+        typ, pt = ("1X", p1x) if p1x >= px2 else ("X2", px2)
     else:
-        p1x = ph + pd_; px2 = pa + pd_
-        if p1x >= PROG_PODWOJNA or px2 >= PROG_PODWOJNA:
-            typ, pt = ("1X", p1x) if p1x >= px2 else ("X2", px2)
-        else:
-            d = {"1": ph, "X": pd_, "2": pa}
-            typ = max(d, key=d.get); pt = d[typ]
+        d = {"1": ph, "X": pd_, "2": pa}
+        typ = max(d, key=d.get); pt = d[typ]
     return {"ph": ph, "pd": pd_, "pa": pa, "typ": typ, "pt": float(pt), "lh": lh, "la": la}
 
 
