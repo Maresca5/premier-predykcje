@@ -305,29 +305,56 @@ def run_backtest(liga_code, sezon_test, sezon_prev, db_path, progress_cb=None):
         else:
             df_p = pd.DataFrame()
 
-        # Ujednolicenie nazwy kolumny daty - zawsze używamy "Date" (z dużej litery)
-        for df_tmp in [df_p, mecze_przed]:
-            if not df_tmp.empty:
-                if 'date' in df_tmp.columns and 'Date' not in df_tmp.columns:
-                    df_tmp.rename(columns={'date': 'Date'}, inplace=True)
-
-        df_train = pd.concat([df_p, mecze_przed], ignore_index=True)
+        # PRZYGOTOWANIE DANYCH TRENINGOWYCH - DOKŁADNA KONTROLA KOLUMN
+        dfs_to_concat = []
         
-        # Sortowanie po dacie - używamy kolumny "Date" jeśli istnieje
+        # Dodaj df_p jeśli nie jest pusty
+        if not df_p.empty:
+            # Ujednolicenie nazwy kolumny daty
+            if 'Date' not in df_p.columns:
+                if 'date' in df_p.columns:
+                    df_p = df_p.rename(columns={'date': 'Date'})
+                else:
+                    # Jeśli nie ma kolumny z datą, dodaj sztuczną (nie powinno się zdarzyć)
+                    print(f"Ostrzeżenie: df_p nie ma kolumny Date. Dodaję sztuczną.")
+                    df_p['Date'] = pd.Timestamp('2000-01-01')
+            dfs_to_concat.append(df_p)
+        
+        # Dodaj mecze_przed jeśli nie jest pusty
+        if not mecze_przed.empty:
+            if 'Date' not in mecze_przed.columns:
+                if 'date' in mecze_przed.columns:
+                    mecze_przed = mecze_przed.rename(columns={'date': 'Date'})
+                else:
+                    # Jeśli nie ma kolumny z datą, dodaj sztuczną
+                    print(f"Ostrzeżenie: mecze_przed nie ma kolumny Date. Dodaję sztuczną.")
+                    mecze_przed['Date'] = pd.Timestamp('2000-01-01')
+            dfs_to_concat.append(mecze_przed)
+        
+        # Konkatenacja
+        if dfs_to_concat:
+            df_train = pd.concat(dfs_to_concat, ignore_index=True)
+        else:
+            df_train = pd.DataFrame()
+
+        # Sortowanie - używamy kolumny Date jeśli istnieje
         if not df_train.empty:
             if 'Date' in df_train.columns:
-                df_train = df_train.sort_values("Date").reset_index(drop=True)
+                df_train = df_train.sort_values('Date').reset_index(drop=True)
             else:
-                # Jeśli nie ma kolumny Date, sortuj po indeksie (awaryjnie)
+                # Awaryjnie sortuj po indeksie
+                print(f"Ostrzeżenie: df_train nie ma kolumny Date. Sortuję po indeksie.")
                 df_train = df_train.sort_index().reset_index(drop=True)
 
         if len(df_train) < 10:
-            skipped += len(k_df); continue
+            skipped += len(k_df)
+            continue
 
         st_df = _statystyki(df_train)
         sl    = _srednie_lig(df_train)
         if st_df.empty:
-            skipped += len(k_df); continue
+            skipped += len(k_df)
+            continue
 
         for _, mecz in k_df.iterrows():
             h = str(mecz["HomeTeam"]); a = str(mecz["AwayTeam"])
@@ -415,7 +442,8 @@ def load_results(liga, sezon, db):
                          con, params=(liga, sezon))
         con.close()
         return df
-    except Exception:
+    except Exception as e:
+        print(f"Błąd ładowania wyników: {e}")
         return pd.DataFrame()
 
 
