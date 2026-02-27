@@ -12,11 +12,9 @@ _T = "backtest"
 def _init_db(db):
     con = sqlite3.connect(db)
 
-    # Zawsze świeża tabela (eliminuje problemy strukturalne)
-    con.execute(f"DROP TABLE IF EXISTS {_T}")
-
+    # Tworzymy tabelę jeśli nie istnieje
     con.execute(f"""
-        CREATE TABLE {_T}(
+        CREATE TABLE IF NOT EXISTS {_T}(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             liga TEXT,
             sezon TEXT,
@@ -36,6 +34,16 @@ def _init_db(db):
     con.close()
 
 
+def _clear_season(liga, sezon, db):
+    con = sqlite3.connect(db)
+    con.execute(
+        f"DELETE FROM {_T} WHERE liga=? AND sezon=?",
+        (liga, sezon)
+    )
+    con.commit()
+    con.close()
+
+
 def _insert(db, row):
     con = sqlite3.connect(db)
     con.execute(f"""
@@ -51,14 +59,17 @@ def _insert(db, row):
 def load_results(liga, sezon, db):
     con = sqlite3.connect(db)
 
-    df = pd.read_sql_query(
-        f"""
-        SELECT * FROM {_T}
-        WHERE liga = ? AND sezon = ?
-        """,
-        con,
-        params=(liga, sezon)
-    )
+    try:
+        df = pd.read_sql_query(
+            f"""
+            SELECT * FROM {_T}
+            WHERE liga = ? AND sezon = ?
+            """,
+            con,
+            params=(liga, sezon)
+        )
+    except Exception:
+        df = pd.DataFrame()
 
     con.close()
     return df
@@ -71,6 +82,7 @@ def load_results(liga, sezon, db):
 def run_backtest(liga, sezon_test, sezon_prev, db, callback=None):
 
     _init_db(db)
+    _clear_season(liga, sezon_test, db)
 
     # ======= Wczytanie danych =======
 
@@ -84,15 +96,11 @@ def run_backtest(liga, sezon_test, sezon_prev, db, callback=None):
 
     df = df.sort_values("Date").reset_index(drop=True)
 
-    # Tworzymy numer kolejki na podstawie kolejności dat
-    df["kolejka"] = (
-        df["Date"]
-        .rank(method="dense")
-        .astype(int)
-    )
+    # Numer kolejki
+    df["kolejka"] = df["Date"].rank(method="dense").astype(int)
 
     # ======= PROSTY MODEL TESTOWY =======
-    # (możesz tu później podpiąć swój realny model)
+    # (tu później podłączysz swój realny model Dixon-Coles)
 
     for idx, row in df.iterrows():
 
@@ -102,12 +110,12 @@ def run_backtest(liga, sezon_test, sezon_prev, db, callback=None):
         hg = row["FTHG"]
         ag = row["FTAG"]
 
-        # Prosty baseline (placeholder)
+        # Placeholder probabilistyczny
         p_home = 0.45
         p_draw = 0.25
         p_away = 0.30
 
-        if p_home > p_away and p_home > p_draw:
+        if p_home > p_draw and p_home > p_away:
             pred = "H"
         elif p_away > p_home and p_away > p_draw:
             pred = "A"
@@ -167,10 +175,8 @@ def summary(liga, sezon, db):
 
     accuracy = df["correct"].mean()
 
-    # Brier score (dla p_home jako przykład)
-    brier = np.mean(
-        (df["correct"] - df["p_home"]) ** 2
-    )
+    # Brier Score (dla p_home jako przykład)
+    brier = np.mean((df["correct"] - df["p_home"]) ** 2)
 
     equity_curve = df["correct"].cumsum()
 
