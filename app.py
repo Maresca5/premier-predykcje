@@ -660,12 +660,15 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
             zdarzenia.append(("🟨", f"Over {linia} kartek", p_over, fair_odds(p_over), "Kartki", linia))
 
     # Celne strzały (HST+AST) – Poisson, lam_sot przekazywane opcjonalnie
+    # Filtr odds >= 1.30 – poniżej tej granicy rynek nie ma wartości
+    SOT_MIN_ODDS = 1.30
     if lam_sot is not None and lam_sot > 0:
         for linia in [3.5, 4.5, 5.5, 6.5]:
             p_over = float(1 - poisson.cdf(int(linia), lam_sot))
-            if p_over >= prog_min:
+            fo_sot = fair_odds(p_over)
+            if p_over >= prog_min and fo_sot >= SOT_MIN_ODDS:
                 zdarzenia.append(("🎯", f"Over {linia} celnych", p_over,
-                                  fair_odds(p_over), "SOT", linia))
+                                  fo_sot, "SOT", linia))
 
     return sorted(zdarzenia, key=lambda x: -x[2])
 
