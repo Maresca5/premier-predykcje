@@ -541,12 +541,36 @@ def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float,
     M /= M.sum()
     return M
 
-SHRINK_ALPHA  = 0.20
+# Parametry kalibracyjne per liga – wyznaczone empirycznie na backteście
+# E0/SP1/D1: shrink=0.25 (ligi bardziej przewidywalne)
+# I1/F1: shrink=0.28 (ligi bardziej nieprzewidywalne, więcej niespodzianek)
+# Backtest E0 2023/24+2024/25: hit 60.4%, ROI -13.5% (fair odds)
+# Backtest F1 2023/24: hit 60.9%, ROI -14.0% (fair odds)
+KALIBRACJA_PER_LIGA = {
+    "E0":  {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
+    "SP1": {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
+    "D1":  {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
+    "I1":  {"shrink": 0.28, "prog_pewny": 0.55, "prog_podwojna": 0.55},
+    "F1":  {"shrink": 0.28, "prog_pewny": 0.55, "prog_podwojna": 0.55},
+}
+# Domyślne (fallback gdy nieznana liga)
+SHRINK_ALPHA  = 0.25
 PROG_PEWNY    = 0.55
 PROG_PODWOJNA = 0.55
 
+# Aktywna liga – ustawiana przy wyborze ligi w sidebarze
+_AKTYWNA_LIGA_CODE = "E0"
+
+def _get_kal() -> dict:
+    """Zwraca parametry kalibracyjne dla aktywnej ligi."""
+    return KALIBRACJA_PER_LIGA.get(_AKTYWNA_LIGA_CODE,
+           {"shrink": SHRINK_ALPHA, "prog_pewny": PROG_PEWNY, "prog_podwojna": PROG_PODWOJNA})
+
 def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float) -> tuple:
-    a = SHRINK_ALPHA
+    """Shrinkage kalibracyjny – ściąga p w kierunku 1/3.
+    Siła parametru zależy od ligi (bardziej nieprzewidywalne = wyższy shrink).
+    """
+    a = _get_kal()["shrink"]
     p_h = (1-a)*p_home + a/3
     p_d = (1-a)*p_draw + a/3
     p_a = (1-a)*p_away + a/3
@@ -554,11 +578,17 @@ def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float) -> 
     return p_h/s, p_d/s, p_a/s
 
 def wybierz_typ(p_home: float, p_draw: float, p_away: float) -> tuple:
+    """Wybiera typ zakładu na podstawie skalibrowanych p.
+    Progi zależą od ligi (przez _get_kal()).
+    """
     p_home, p_draw, p_away = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away)
+    kal = _get_kal()
+    prog_pewny    = kal["prog_pewny"]
+    prog_podwojna = kal["prog_podwojna"]
     p_1x = p_home + p_draw; p_x2 = p_away + p_draw
-    if p_home >= PROG_PEWNY: return "1",  p_home
-    if p_away >= PROG_PEWNY: return "2",  p_away
-    if p_1x >= PROG_PODWOJNA or p_x2 >= PROG_PODWOJNA:
+    if p_home >= prog_pewny: return "1",  p_home
+    if p_away >= prog_pewny: return "2",  p_away
+    if p_1x >= prog_podwojna or p_x2 >= prog_podwojna:
         return ("1X", p_1x) if p_1x >= p_x2 else ("X2", p_x2)
     probs = {"1": p_home, "X": p_draw, "2": p_away}
     t = max(probs, key=probs.get)
@@ -1159,6 +1189,9 @@ def deep_data_stats(df_json: str) -> tuple:
 st.sidebar.header("🌍 Wybór Rozgrywek")
 wybrana_liga = st.sidebar.selectbox("Wybierz ligę", list(LIGI.keys()))
 debug_mode   = st.sidebar.checkbox("🔧 Debug – niezmapowane nazwy", value=False)
+
+# Ustaw parametry kalibracyjne dla wybranej ligi
+_AKTYWNA_LIGA_CODE = LIGI[wybrana_liga]["csv_code"]
 
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
