@@ -83,6 +83,7 @@ NAZWY_MAP = {
     "Real Betis":              "Betis",
     "CA Osasuna":              "Osasuna",
     "Real Valladolid":         "Valladolid",
+    "Real Oviedo":             "Oviedo",
     "UD Las Palmas":           "Las Palmas",
     "Cadiz CF":                "Cadiz",
     "Granada CF":              "Granada",
