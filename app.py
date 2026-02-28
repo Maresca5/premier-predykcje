@@ -99,6 +99,7 @@ NAZWY_MAP = {
     "VfL Wolfsburg":                  "Wolfsburg",
     "Borussia Mönchengladbach":       "M'gladbach",
     "Borussia Monchengladbach":       "M'gladbach",
+"Borussia M'gladbach": "M'gladbach",
     "1. FC Union Berlin":             "Union Berlin",
     "SC Freiburg":                    "Freiburg",
     "1. FC Köln":                     "FC Koln",
