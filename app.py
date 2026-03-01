@@ -1047,15 +1047,17 @@ def macierz_goli_p(lam_h, lam_a, rho, linia_int, typ_gole):
 # NOWA FUNKCJA – OSTRZEŻENIA SĘDZIOWSKIE
 # ===========================================================================
 def ostrzezenie_sedziego(sedzia, sedziowie_df, prog_kartki=4.5):
-    """Zwraca ostrzeżenie dotyczące sędziego"""
-    if sedziowie_df.empty or sedzia not in sedziowie_df["Sędzia"].values:
-        return "⚪ Brak danych"
-    
+    """Zwraca ostrzeżenie dotyczące sędziego lub None gdy brak danych.
+    Dane sędziów dostępne tylko dla Premier League (kolumna Referee w CSV).
+    """
+    if sedziowie_df.empty or sedzia in ("Nieznany", "", None):
+        return None
+    if sedzia not in sedziowie_df["Sędzia"].values:
+        return None
     sedz = sedziowie_df[sedziowie_df["Sędzia"] == sedzia].iloc[0]
     avg_cards = sedz["Total Kart/M ↓"]
-    
     if avg_cards >= prog_kartki:
-        return f"🚩 Wysokie ryzyko kartek! Śr. {avg_cards:.1f}/mecz"
+        return f"🚩 Wysokie ryzyko kartek – śr. {avg_cards:.1f}/mecz"
     elif avg_cards >= 3.5:
         return f"🟡 Umiarkowane ryzyko kartek ({avg_cards:.1f}/mecz)"
     else:
@@ -1442,33 +1444,64 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             if not mecze.empty:
                 st.caption(f"Kolejka #{aktualna_kolejka} – {len(mecze)} meczów")
 
-                kol_a, kol_b = st.columns(2)
-                mecze_list = list(mecze.iterrows())
+                # Grupuj mecze według dnia
+                DAYS_PL = {
+                    "Monday":"Poniedziałek","Tuesday":"Wtorek","Wednesday":"Środa",
+                    "Thursday":"Czwartek","Friday":"Piątek","Saturday":"Sobota","Sunday":"Niedziela"
+                }
+                mecze_sorted = mecze.sort_values("date")
+                mecze_sorted["_date_only"] = mecze_sorted["date"].dt.date
+                grupy_dni = mecze_sorted.groupby("_date_only", sort=True)
 
-                for idx, (_, mecz) in enumerate(mecze_list):
-                    h = map_nazwa(mecz["home_team"])
-                    a = map_nazwa(mecz["away_team"])
-                    if h not in srednie_df.index or a not in srednie_df.index:
-                        continue
+                ikony_t = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
+                dzien_ikony = {
+                    "Sobota":"🟩","Niedziela":"🟦","Poniedziałek":"⬜",
+                    "Wtorek":"⬜","Środa":"⬜","Czwartek":"⬜","Piątek":"🟨"
+                }
 
-                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred = predykcja_meczu(lam_h, lam_a, rho=rho)
-                    data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
+                for data_dnia, mecze_dnia in grupy_dni:
+                    dzien_en = data_dnia.strftime("%A")
+                    dzien_pl = DAYS_PL.get(dzien_en, dzien_en)
+                    data_fmt = data_dnia.strftime("%d.%m.%Y")
+                    ikona_d  = dzien_ikony.get(dzien_pl, "⬜")
+                    n_dnia   = len(mecze_dnia)
 
-                    kolumna = kol_a if idx % 2 == 0 else kol_b
-                    ikony_t = {"1":"🔵","X":"🟠","2":"🔴","1X":"🟣","X2":"🟣"}
-                    conf_i  = "🟢" if pred["conf_level"]=="High" else ("🟡" if pred["conf_level"]=="Medium" else "🔴")
-                    sot_badge = " 🎯SOT" if sot_ok else ""
-                    
-                    sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
-                    sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
-                    
-                    label_t2 = (f"{conf_i} {h} vs {a}{sot_badge}"
-                                f"  ·  {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
-                                f"  ·  {data_meczu}")
-                    with kolumna:
-                        with st.expander(label_t2, expanded=False):
-                            ch, cmid, ca = st.columns([5,2,5])
+                    # Nagłówek dnia
+                    st.markdown(
+                        f"<div style='background:linear-gradient(90deg,#1a1a2e 0%,#16213e 100%);"
+                        f"padding:8px 16px;border-radius:8px;margin:18px 0 8px;"
+                        f"border-left:3px solid #4CAF50'>"
+                        f"<span style='font-size:0.95em;font-weight:bold;color:#ddd'>"
+                        f"{ikona_d} {dzien_pl}, {data_fmt}</span>"
+                        f"<span style='float:right;color:#555;font-size:0.80em'>{n_dnia} {'mecz' if n_dnia==1 else 'mecze' if n_dnia<5 else 'meczów'}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    kol_a, kol_b = st.columns(2)
+                    for idx, (_, mecz) in enumerate(mecze_dnia.iterrows()):
+                        h = map_nazwa(mecz["home_team"])
+                        a = map_nazwa(mecz["away_team"])
+                        if h not in srednie_df.index or a not in srednie_df.index:
+                            continue
+
+                        lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                        pred = predykcja_meczu(lam_h, lam_a, rho=rho)
+                        data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
+
+                        kolumna = kol_a if idx % 2 == 0 else kol_b
+                        conf_i  = "🟢" if pred["conf_level"]=="High" else ("🟡" if pred["conf_level"]=="Medium" else "🔴")
+                        sot_badge = " 🎯SOT" if sot_ok else ""
+
+                        sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
+                        sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
+
+                        label_t2 = (f"{conf_i} {h} vs {a}{sot_badge}"
+                                    f"  ·  {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
+                                    f"  ·  {data_meczu}")
+                        with kolumna:
+                            with st.expander(label_t2, expanded=False):
+                                ch, cmid, ca = st.columns([5,2,5])
                             with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
                             with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
                             with ca: st.markdown(f"<div style='font-weight:bold;text-align:right'>{a}</div>", unsafe_allow_html=True)
@@ -1557,7 +1590,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 unsafe_allow_html=True,
                             )
 
-                            st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
+                            if sedzia_ostr:
+                                st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
+                            elif sedzia not in ("Nieznany", "", None):
+                                st.caption(f"🟨 **Sędzia:** {sedzia}")
 
                             with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
                                 alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
@@ -1692,9 +1728,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                file_name="power_rankings.csv", mime="text/csv")
 
             st.divider()
-            st.markdown("### 🟨 Profile Sędziów")
             if not sedziowie_df.empty:
-                st.caption("Historyczny profil sędziów – średnia kartek i goli per mecz.")
+                st.markdown("### 🟨 Profile Sędziów")
+                st.caption("Historyczny profil sędziów – średnia kartek i goli per mecz. Dane dostępne tylko dla Premier League.")
                 df_sed = sedziowie_df.sort_values("_tot_k", ascending=False).head(20)
                 W_sed, H_sed, P_sed = 620, max(200, len(df_sed)*28+60), 160
                 max_k = df_sed["_tot_k"].max() if not df_sed.empty else 1
