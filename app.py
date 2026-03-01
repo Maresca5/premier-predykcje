@@ -1065,14 +1065,17 @@ def ostrzezenie_sedziego(sedzia, sedziowie_df, prog_kartki=4.5):
 # DEEP DATA – Power Rankings + Sędziowie
 # ===========================================================================
 @st.cache_data
-def deep_data_stats(df_json: str) -> tuple:
-    """Zwraca (power_df, sedziowie_df) dla tab Deep Data."""
+def deep_data_stats(df_json: str, druzyny_ligi: set = None) -> tuple:
+    """Zwraca (power_df, sedziowie_df) dla tab Deep Data.
+    druzyny_ligi: jeśli podany, pokazuje tylko drużyny bieżącego sezonu (bez spadkowiczów).
+    """
     df = pd.read_json(df_json)
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
     # ── Power Rankings ────────────────────────────────────────────────────
-    druzyny = pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel())
+    druzyny_all = pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel())
+    druzyny = [d for d in druzyny_all if d in druzyny_ligi] if druzyny_ligi else druzyny_all
     power_rows = []
     for d in druzyny:
         h_df = df[df["HomeTeam"] == d]
@@ -1186,7 +1189,15 @@ if not historical.empty:
     w_prev      = waga_poprzedniego(n_biezacy)
 
     # Pobierz dane do ostrzeżeń sędziowskich
-    power_df, sedziowie_df = deep_data_stats(historical.to_json())
+    # Drużyny aktualnie grające w lidze = z terminarza bieżącego sezonu
+    if not schedule.empty:
+        druzyny_ligi = set(
+            list(schedule["home_team"].map(map_nazwa).dropna()) +
+            list(schedule["away_team"].map(map_nazwa).dropna())
+        )
+    else:
+        druzyny_ligi = set()
+    power_df, sedziowie_df = deep_data_stats(historical.to_json(), druzyny_ligi)
 
     # Sidebar: info o danych
     st.sidebar.divider()
@@ -1492,10 +1503,24 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 unsafe_allow_html=True,
                             )
 
-                            mc1, mc2, mc3 = st.columns(3)
-                            mc1.metric("1", f"{pred['p_home']:.0%}", f"fair {pred['fo_home']}")
-                            mc2.metric("X", f"{pred['p_draw']:.0%}", f"fair {pred['fo_draw']}")
-                            mc3.metric("2", f"{pred['p_away']:.0%}", f"fair {pred['fo_away']}")
+                            # 1/X/2 – kompaktowy HTML, mniejsza czcionka
+                            st.markdown(
+                                f"<div style='display:flex;justify-content:space-around;margin:6px 0 2px'>"
+                                f"<div style='text-align:center'>"
+                                f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>1</div>"
+                                f"<div style='font-size:1.10em;font-weight:bold;color:#4CAF50'>{pred['p_home']:.0%}</div>"
+                                f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_home']:.2f}</div></div>"
+                                f"<div style='text-align:center'>"
+                                f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>X</div>"
+                                f"<div style='font-size:1.10em;font-weight:bold;color:#FF9800'>{pred['p_draw']:.0%}</div>"
+                                f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_draw']:.2f}</div></div>"
+                                f"<div style='text-align:center'>"
+                                f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>2</div>"
+                                f"<div style='font-size:1.10em;font-weight:bold;color:#2196F3'>{pred['p_away']:.0%}</div>"
+                                f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_away']:.2f}</div></div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
                             
                             sot_info = " · 🎯 SOT blend aktywny" if sot_ok else " · gole only"
                             st.markdown(
@@ -1507,19 +1532,30 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 unsafe_allow_html=True,
                             )
 
-                            # ── Oczekiwane statystyki meczu ─────────────────
-                            eg1, eg2, eg3, eg4 = st.columns(4)
-                            eg1.metric("⚽ Śr. gole",   f"{lam_h+lam_a:.2f}",
-                                       f"{h[:6]}: {lam_h:.1f} · {a[:6]}: {lam_a:.1f}")
-                            eg2.metric("🚩 Śr. rożne",  f"{lam_r:.1f}",
-                                       help="Suma oczekiwanych rzutów rożnych (obie drużyny)")
-                            eg3.metric("🟨 Śr. kartki", f"{lam_k:.1f}",
-                                       help="Suma oczekiwanych kartek (Y=1pt, R=2pt)")
-                            if lam_sot and lam_sot > 0:
-                                eg4.metric("🎯 Śr. SOT", f"{lam_sot:.1f}",
-                                           help="Oczekiwane celne strzały łącznie")
-                            else:
-                                eg4.metric("🎯 Śr. SOT", "–", help="Brak danych SOT")
+                            # ── Oczekiwane statystyki – kompaktowy pasek ────
+                            _sot_d = f"{lam_sot:.1f}" if (lam_sot and lam_sot > 0) else "–"
+                            st.markdown(
+                                f"<div style='display:flex;justify-content:space-around;"
+                                f"background:#1a1a2e;border-radius:6px;padding:5px 4px;margin:4px 0'>"
+                                f"<div style='text-align:center'>"
+                                f"<div style='font-size:0.62em;color:#555'>⚽ Śr. gole</div>"
+                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_h+lam_a:.2f}</div>"
+                                f"<div style='font-size:0.58em;color:#444'>{h[:5]}:{lam_h:.1f} {a[:5]}:{lam_a:.1f}</div></div>"
+                                f"<div style='text-align:center'>"
+                                f"<div style='font-size:0.62em;color:#555'>🚩 Śr. rożne</div>"
+                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_r:.1f}</div>"
+                                f"<div style='font-size:0.58em;color:#444'>obie drużyny</div></div>"
+                                f"<div style='text-align:center'>"
+                                f"<div style='font-size:0.62em;color:#555'>🟨 Śr. kartki</div>"
+                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_k:.1f}</div>"
+                                f"<div style='font-size:0.58em;color:#444'>Y=1 R=2</div></div>"
+                                f"<div style='text-align:center'>"
+                                f"<div style='font-size:0.62em;color:#555'>🎯 Śr. SOT</div>"
+                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{_sot_d}</div>"
+                                f"<div style='font-size:0.58em;color:#444'>celne strzały</div></div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
 
                             st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
 
@@ -1634,7 +1670,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 hide_index=True,
                 column_config={
                     "Drużyna":        st.column_config.TextColumn("Drużyna", width="medium"),
-                    "M":              st.column_config.NumberColumn("M", format="%d", width="small"),
+                    "M":              st.column_config.NumberColumn("Mecze", format="%d", width="small",
+                                                                    help="Łączna liczba meczów drużyny uwzględnionych w statystykach (bieżący + poprzedni sezon)"),
                     "Gole/M ↑":       st.column_config.NumberColumn("Gole/M ↑",  format="%.2f"),
                     "Strac./M ↓":     st.column_config.NumberColumn("Strac./M ↓", format="%.2f"),
                     "SOT/M":          st.column_config.NumberColumn("SOT/M",      format="%.1f"),
