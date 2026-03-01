@@ -1,5 +1,5 @@
 """
-backtest.py – Dixon-Coles walk-forward backtest z asymetrycznym shrinkiem
+backtest.py â Dixon-Coles walk-forward backtest
 Pobiera dane z football-data.co.uk (jeden plik CSV per sezon).
 Nie wymaga pliku terminarza. Nie importuje nic z app.py.
 """
@@ -12,18 +12,14 @@ from io import StringIO
 from scipy.stats import poisson
 from typing import Optional, Callable
 
-# ── Parametry identyczne z app.py ─────────────────────────────────────────
+# ââ Parametry identyczne z app.py âââââââââââââââââââââââââââââââââââââââââ
 SOT_BLEND_W   = 0.30
-PROG_PEWNY    = 0.55
-PROG_PODWOJNA = 0.55
-SHRINK_ALPHA  = 0.20   # shrinkage kalibracyjny – pozostaje bez zmian
+PROG_PEWNY    = 0.55   # zaktualizowane po backteĹcie (byĹo 0.42)
+PROG_PODWOJNA = 0.55   # zaktualizowane po backteĹcie (byĹo 0.62)
+SHRINK_ALPHA  = 0.20   # shrinkage kalibracyjny â identyczny z app.py
 TAU_DAYS      = 30.0
 
-# ── NOWE STAŁE: Asymetryczny shrinkage ───────────────────────────────────
-ALPHA_OFF = 0.20  # shrinkage dla ataku (lambda domu)
-ALPHA_DEF = 0.10  # shrinkage dla obrony (lambda gościa)
-
-# ── Nazwa tabeli w SQLite ──────────────────────────────────────────────────
+# ââ Nazwa tabeli w SQLite ââââââââââââââââââââââââââââââââââââââââââââââââââ
 _TABLE = "backtest"
 
 # =============================================================================
@@ -33,8 +29,8 @@ _TABLE = "backtest"
 def _pobierz(kod: str, sezon: str) -> pd.DataFrame:
     """
     Pobiera CSV z football-data.co.uk i zwraca znormalizowany DataFrame.
-    Kolumna daty zawsze nazywa się 'Date' (duże D).
-    Przy błędzie zwraca pusty DataFrame – nigdy nie rzuca wyjątku.
+    Kolumna daty zawsze nazywa siÄ 'Date' (duĹźe D).
+    Przy bĹÄdzie zwraca pusty DataFrame â nigdy nie rzuca wyjÄtku.
     """
     url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{kod}.csv"
     try:
@@ -42,10 +38,10 @@ def _pobierz(kod: str, sezon: str) -> pd.DataFrame:
         r.raise_for_status()
         df = pd.read_csv(StringIO(r.text))
 
-        # Normalizuj nazwy kolumn – usuń białe znaki, ujednolicaj Date
+        # Normalizuj nazwy kolumn â usuĹ biaĹe znaki, ujednolicaj Date
         df.columns = df.columns.str.strip()
 
-        # Upewnij się że kolumna daty istnieje i nazywa się "Date"
+        # Upewnij siÄ Ĺźe kolumna daty istnieje i nazywa siÄ "Date"
         if "Date" not in df.columns:
             for alt in ["date", "DATE", "Datetime"]:
                 if alt in df.columns:
@@ -70,7 +66,7 @@ def _pobierz(kod: str, sezon: str) -> pd.DataFrame:
         df["FTHG"] = df["FTHG"].astype(int)
         df["FTAG"] = df["FTAG"].astype(int)
 
-        # Opcjonalne kolumny – uzupełnij NaN jeśli brakuje
+        # Opcjonalne kolumny â uzupeĹnij NaN jeĹli brakuje
         for col in ["HC", "AC", "HY", "AY", "HR", "AR", "HST", "AST"]:
             if col not in df.columns:
                 df[col] = np.nan
@@ -90,8 +86,8 @@ def _pobierz(kod: str, sezon: str) -> pd.DataFrame:
 def _kolejki(df: pd.DataFrame) -> list:
     """
     Dzieli DataFrame sezonu na kolejki.
-    Mecze w oknie ≤4 dni → ta sama kolejka (jeden weekend grania).
-    Zwraca listę DataFrames. Zawsze kolumna daty = 'Date'.
+    Mecze w oknie â¤4 dni â ta sama kolejka (jeden weekend grania).
+    Zwraca listÄ DataFrames. Zawsze kolumna daty = 'Date'.
     """
     if df.empty:
         return []
@@ -112,14 +108,14 @@ def _waga_prev(n: int) -> float:
 
 def _polacz(df_prev: pd.DataFrame, df_biezacy: pd.DataFrame) -> pd.DataFrame:
     """
-    Łączy dane poprzedniego i bieżącego sezonu.
-    Gwarantuje że wynik ma kolumnę 'Date' i jest posortowany.
+    ĹÄczy dane poprzedniego i bieĹźÄcego sezonu.
+    Gwarantuje Ĺźe wynik ma kolumnÄ 'Date' i jest posortowany.
     """
     frames = [f for f in [df_prev, df_biezacy] if not f.empty]
     if not frames:
         return pd.DataFrame()
     result = pd.concat(frames, ignore_index=True)
-    # Upewnij się że kolumna daty istnieje
+    # Upewnij siÄ Ĺźe kolumna daty istnieje
     if "Date" not in result.columns:
         for alt in ["date", "DATE"]:
             if alt in result.columns:
@@ -130,7 +126,7 @@ def _polacz(df_prev: pd.DataFrame, df_biezacy: pd.DataFrame) -> pd.DataFrame:
     return result
 
 # =============================================================================
-# MODEL STATYSTYCZNY
+# MODEL STATYSTYCZNY â identyczny z app.py
 # =============================================================================
 
 def _weighted_mean(values: pd.Series, dates: pd.Series = None) -> float:
@@ -219,16 +215,8 @@ def _forma(df: pd.DataFrame, team: str) -> str:
             pass
     return "".join(wyniki)
 
-# =============================================================================
-# ZMIENIONA FUNKCJA _lambdy - ASYMETRYCZNY SHRINK
-# =============================================================================
 def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
-    """
-    Zwraca (lam_h, lam_a, rho) lub (None, None, rho) gdy brak danych.
-    Asymetryczny shrinkage: 
-    - lam_h (atak) shrinkowany mocniej (ALPHA_OFF)
-    - lam_a (obrona) shrinkowany słabiej (ALPHA_DEF)
-    """
+    """Zwraca (lam_h, lam_a, rho) lub (None, None, rho) gdy brak danych."""
     if st.empty or h not in st.index or a not in st.index:
         return None, None, sl["rho"]
     try:
@@ -242,13 +230,8 @@ def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
         atak_a   = st.loc[a, "Gole strzelone (wyjazd)"] / avg_a
         obrona_h = st.loc[h, "Gole stracone (dom)"]     / avg_h
 
-        # Bazowe lambda bez shrinku
-        lh_raw = avg_h * atak_h * obrona_a * fw(fh)
-        la_raw = avg_a * atak_a * obrona_h * fw(fa)
-
-        # Asymetryczny shrinkage do średniej ligowej
-        lh = (1 - ALPHA_OFF) * lh_raw + ALPHA_OFF * avg_h
-        la = (1 - ALPHA_DEF) * la_raw + ALPHA_DEF * avg_a
+        lh = avg_h * atak_h * obrona_a * fw(fh)
+        la = avg_a * atak_a * obrona_h * fw(fa)
 
         # SOT blend
         if SOT_BLEND_W > 0 and "SOT (dom)" in st.columns and "SOT (wyjazd)" in st.columns:
@@ -269,7 +252,7 @@ def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
         return None, None, sl["rho"]
 
 # =============================================================================
-# DIXON-COLES – identyczny z app.py
+# DIXON-COLES â identyczny z app.py
 # =============================================================================
 
 def _dc(lh: float, la: float, rho: float) -> np.ndarray:
@@ -283,7 +266,7 @@ def _dc(lh: float, la: float, rho: float) -> np.ndarray:
     return M / M.sum()
 
 def _kalibruj(ph: float, pd: float, pa: float) -> tuple:
-    """Shrinkage kalibracyjny – pozostaje bez zmian."""
+    """Shrinkage identyczny z kalibruj_prawdopodobienstwa() w app.py."""
     a = SHRINK_ALPHA
     ph2 = (1-a)*ph + a/3
     pd2 = (1-a)*pd + a/3
@@ -296,7 +279,7 @@ def _pred(lh: float, la: float, rho: float) -> dict:
     ph = float(np.tril(M, -1).sum())
     pd_= float(np.trace(M))
     pa = float(np.triu(M, 1).sum())
-    # Shrinkage kalibracyjny
+    # Shrinkage â identyczny z app.py (kalibruj_prawdopodobienstwa)
     ph, pd_, pa = _kalibruj(ph, pd_, pa)
     p1x = ph + pd_; px2 = pa + pd_
     if   ph >= PROG_PEWNY:  typ, pt = "1",  ph
@@ -385,11 +368,11 @@ def run_backtest(
     Uruchamia walk-forward backtest dla jednego sezonu.
 
     Parametry:
-        liga_code   – kod ligi z football-data.co.uk (np. "E0", "SP1", "D1")
-        sezon_test  – sezon do testowania, format XXYY (np. "2324" = 2023/24)
-        sezon_prev  – poprzedni sezon jako dane startowe (np. "2223")
-        db_path     – ścieżka do pliku SQLite
-        progress_cb – callback(fraction: float, message: str) dla Streamlit
+        liga_code   â kod ligi z football-data.co.uk (np. "E0", "SP1", "D1")
+        sezon_test  â sezon do testowania, format XXYY (np. "2324" = 2023/24)
+        sezon_prev  â poprzedni sezon jako dane startowe (np. "2223")
+        db_path     â ĹcieĹźka do pliku SQLite
+        progress_cb â callback(fraction: float, message: str) dla Streamlit
 
     Zwraca:
         dict z polami: ok, n, trafione, hit_rate, brier, bss, roi_pct, n_kolejek, df
@@ -410,24 +393,24 @@ def run_backtest(
     df_test = _pobierz(liga_code, sezon_test)
     if df_test.empty:
         return {"error": (
-            f"Nie udało się pobrać danych dla {liga_code}/{sezon_test}.\n"
-            "Sprawdź: kod ligi (E0=PL, SP1=LaLiga, D1=Bundesliga, I1=SerieA, F1=Ligue1) "
+            f"Nie udaĹo siÄ pobraÄ danych dla {liga_code}/{sezon_test}.\n"
+            "SprawdĹş: kod ligi (E0=PL, SP1=LaLiga, D1=Bundesliga, I1=SerieA, F1=Ligue1) "
             "oraz format sezonu (np. 2324 = 2023/24)."
         )}
 
     cb(0.12, f"Pobieram sezon bazowy {sezon_prev}...")
     df_prev = _pobierz(liga_code, sezon_prev)
     if df_prev.empty:
-        cb(0.12, f"Sezon bazowy {sezon_prev} niedostępny – model startuje bez poprzedniego sezonu")
+        cb(0.12, f"Sezon bazowy {sezon_prev} niedostÄpny â model startuje bez poprzedniego sezonu")
 
-    cb(0.18, "Dzielę sezon na kolejki...")
+    cb(0.18, "DzielÄ sezon na kolejki...")
     kolejki = _kolejki(df_test)
     n_k = len(kolejki)
     if n_k == 0:
-        return {"error": "Nie udało się podzielić sezonu na kolejki."}
+        return {"error": "Nie udaĹo siÄ podzieliÄ sezonu na kolejki."}
 
     n_mecze = sum(len(k) for k in kolejki)
-    cb(0.20, f"Pobrano {n_mecze} meczów · {n_k} kolejek · start walk-forward")
+    cb(0.20, f"Pobrano {n_mecze} meczĂłw Âˇ {n_k} kolejek Âˇ start walk-forward")
 
     rows_db  = []
     rows_csv = []
@@ -444,7 +427,7 @@ def run_backtest(
             mecze_przed = pd.DataFrame()
         n_biezacy = len(mecze_przed)
 
-        cb(frac, f"Kolejka {k_nr}/{n_k}  ·  trening: {n_biezacy} bież. mecz.")
+        cb(frac, f"Kolejka {k_nr}/{n_k}  Âˇ  trening: {n_biezacy} bieĹź. mecz.")
 
         # Blending z poprzednim sezonem
         if not df_prev.empty and n_biezacy > 0:
@@ -452,7 +435,7 @@ def run_backtest(
             n_p = min(int(n_biezacy * w / max(1 - w, 1e-9)), len(df_prev))
             df_p = df_prev.tail(n_p).copy() if n_p > 0 else pd.DataFrame()
         elif not df_prev.empty:
-            # Pierwsza kolejka – użyj całego poprzedniego sezonu jako start
+            # Pierwsza kolejka â uĹźyj caĹego poprzedniego sezonu jako start
             df_p = df_prev.copy()
         else:
             df_p = pd.DataFrame()
@@ -471,7 +454,7 @@ def run_backtest(
             skipped += len(k_df)
             continue
 
-        # Predykcje dla każdego meczu kolejki K
+        # Predykcje dla kaĹźdego meczu kolejki K
         for _, mecz in k_df.iterrows():
             try:
                 h    = str(mecz["HomeTeam"])
@@ -493,7 +476,7 @@ def run_backtest(
                 tr   = _traf(p["typ"], wn)
                 fo   = round(1 / p["pt"], 2) if p["pt"] > 0 else 999.0
 
-                # Brier Score (trój-klasowy 1X2)
+                # Brier Score (trĂłj-klasowy 1X2)
                 y1 = 1 if wn == "1" else 0
                 yx = 1 if wn == "X" else 0
                 y2 = 1 if wn == "2" else 0
@@ -522,11 +505,11 @@ def run_backtest(
                 skipped += 1
                 continue
 
-    cb(0.95, f"Zapisuję {len(rows_db)} rekordów do bazy...")
+    cb(0.95, f"ZapisujÄ {len(rows_db)} rekordĂłw do bazy...")
     _insert_bulk(rows_db, db_path)
 
     if not rows_csv:
-        return {"error": "Brak wyników – za mało danych treningowych lub błędy pobierania."}
+        return {"error": "Brak wynikĂłw â za maĹo danych treningowych lub bĹÄdy pobierania."}
 
     # Metryki globalne
     n     = len(rows_csv)
@@ -537,7 +520,7 @@ def run_backtest(
     roi   = sum((r["fair"] - 1) if r["trafiony"] == "TAK" else -1 for r in rows_csv)
     roi_pct = roi / n * 100
 
-    cb(1.0, f"Gotowe! {n} meczów · hit {traf/n:.1%} · Brier {brier:.4f} · ROI {roi_pct:+.1f}%")
+    cb(1.0, f"Gotowe! {n} meczĂłw Âˇ hit {traf/n:.1%} Âˇ Brier {brier:.4f} Âˇ ROI {roi_pct:+.1f}%")
 
     return {
         "ok": True,
@@ -566,7 +549,7 @@ def has_results(liga: str, sezon: str, db: str) -> bool:
     return not load_results(liga, sezon, db).empty
 
 def summary(liga: str, sezon: str, db: str) -> dict:
-    """Pełne metryki z zapisanych wyników: globalne + per kolejka + kalibracja + equity."""
+    """PeĹne metryki z zapisanych wynikĂłw: globalne + per kolejka + kalibracja + equity."""
     df = load_results(liga, sezon, db)
     if df.empty:
         return {}
@@ -598,7 +581,7 @@ def summary(liga: str, sezon: str, db: str) -> dict:
         g = df[(df["p_typ"] >= lo) & (df["p_typ"] < hi)]
         if len(g) >= 3:
             kal.append({
-                "przedzial": f"{lo:.0%}–{hi:.0%}",
+                "przedzial": f"{lo:.0%}â{hi:.0%}",
                 "n":      len(g),
                 "p_mean": float(g["p_typ"].mean()),
                 "hit":    float(g["trafiony"].mean()),
