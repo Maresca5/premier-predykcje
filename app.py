@@ -541,36 +541,12 @@ def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float,
     M /= M.sum()
     return M
 
-# Parametry kalibracyjne per liga – wyznaczone empirycznie na backteście
-# E0/SP1/D1: shrink=0.25 (ligi bardziej przewidywalne)
-# I1/F1: shrink=0.28 (ligi bardziej nieprzewidywalne, więcej niespodzianek)
-# Backtest E0 2023/24+2024/25: hit 60.4%, ROI -13.5% (fair odds)
-# Backtest F1 2023/24: hit 60.9%, ROI -14.0% (fair odds)
-KALIBRACJA_PER_LIGA = {
-    "E0":  {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-    "SP1": {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-    "D1":  {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-    "I1":  {"shrink": 0.28, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-    "F1":  {"shrink": 0.28, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-}
-# Domyślne (fallback gdy nieznana liga)
-SHRINK_ALPHA  = 0.25
+SHRINK_ALPHA  = 0.20
 PROG_PEWNY    = 0.55
 PROG_PODWOJNA = 0.55
 
-# Aktywna liga – ustawiana przy wyborze ligi w sidebarze
-_AKTYWNA_LIGA_CODE = "E0"
-
-def _get_kal() -> dict:
-    """Zwraca parametry kalibracyjne dla aktywnej ligi."""
-    return KALIBRACJA_PER_LIGA.get(_AKTYWNA_LIGA_CODE,
-           {"shrink": SHRINK_ALPHA, "prog_pewny": PROG_PEWNY, "prog_podwojna": PROG_PODWOJNA})
-
 def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float) -> tuple:
-    """Shrinkage kalibracyjny – ściąga p w kierunku 1/3.
-    Siła parametru zależy od ligi (bardziej nieprzewidywalne = wyższy shrink).
-    """
-    a = _get_kal()["shrink"]
+    a = SHRINK_ALPHA
     p_h = (1-a)*p_home + a/3
     p_d = (1-a)*p_draw + a/3
     p_a = (1-a)*p_away + a/3
@@ -578,17 +554,11 @@ def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float) -> 
     return p_h/s, p_d/s, p_a/s
 
 def wybierz_typ(p_home: float, p_draw: float, p_away: float) -> tuple:
-    """Wybiera typ zakładu na podstawie skalibrowanych p.
-    Progi zależą od ligi (przez _get_kal()).
-    """
     p_home, p_draw, p_away = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away)
-    kal = _get_kal()
-    prog_pewny    = kal["prog_pewny"]
-    prog_podwojna = kal["prog_podwojna"]
     p_1x = p_home + p_draw; p_x2 = p_away + p_draw
-    if p_home >= prog_pewny: return "1",  p_home
-    if p_away >= prog_pewny: return "2",  p_away
-    if p_1x >= prog_podwojna or p_x2 >= prog_podwojna:
+    if p_home >= PROG_PEWNY: return "1",  p_home
+    if p_away >= PROG_PEWNY: return "2",  p_away
+    if p_1x >= PROG_PODWOJNA or p_x2 >= PROG_PODWOJNA:
         return ("1X", p_1x) if p_1x >= p_x2 else ("X2", p_x2)
     probs = {"1": p_home, "X": p_draw, "2": p_away}
     t = max(probs, key=probs.get)
@@ -1190,9 +1160,6 @@ st.sidebar.header("🌍 Wybór Rozgrywek")
 wybrana_liga = st.sidebar.selectbox("Wybierz ligę", list(LIGI.keys()))
 debug_mode   = st.sidebar.checkbox("🔧 Debug – niezmapowane nazwy", value=False)
 
-# Ustaw parametry kalibracyjne dla wybranej ligi
-_AKTYWNA_LIGA_CODE = LIGI[wybrana_liga]["csv_code"]
-
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
@@ -1236,8 +1203,8 @@ if not historical.empty:
 
     # TABS
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "📊 Ranking Zdarzeń",
         "⚽ Analiza Meczu",
+        "📊 Ranking Zdarzeń",
         "🔬 Deep Data",
         "📈 Skuteczność + ROI",
         "📉 Kalibracja",
@@ -1246,9 +1213,9 @@ if not historical.empty:
     ])
 
     # =========================================================================
-    # TAB 1 – RANKING ZDARZEŃ
+    # TAB 2 – RANKING ZDARZEŃ (przeniesiony)
     # =========================================================================
-    with tab1:
+    with tab2:
         st.subheader("📊 Ranking zdarzeń kolejki")
         st.caption("Centrum systemu – Value Bets, Safe Haven i Shot Kings dla najbliższej kolejki.")
         
@@ -1342,43 +1309,43 @@ if not historical.empty:
                 else:
                     st.info("Brak value bets w tej kolejce")
 
-                # SAFE HAVEN
-                st.markdown("### 🛡️ Safe Haven (p > 70%)")
-                safe_havens = df_rank[df_rank["P"] > 0.70].sort_values("P", ascending=False)
-                if not safe_havens.empty:
-                    for _, row in safe_havens.head(10).iterrows():
-                        cols = st.columns([3, 1, 1, 2])
-                        with cols[0]:
-                            st.markdown(f"**{row['Mecz']}**")
-                            st.caption(f"{row['Typ']}")
-                        with cols[1]:
-                            st.markdown(f"`{row['Rynek']}`")
-                        with cols[2]:
-                            st.markdown(f"🎯 {row['P']:.0%}")
-                        with cols[3]:
-                            st.markdown(f"💹 fair {row['Fair']:.2f}")
-                        st.divider()
-                else:
-                    st.info("Brak zdarzeń z p > 70%")
+                # SAFE HAVEN + SHOT KINGS → zwijana lista na dole
+                with st.expander("🛡️ Safe Haven & 🎯 Shot Kings", expanded=False):
+                    safe_havens = df_rank[df_rank["P"] > 0.70].sort_values("P", ascending=False)
+                    st.markdown("**🛡️ Safe Haven** – zdarzenia z p > 70%")
+                    if not safe_havens.empty:
+                        for _, row in safe_havens.head(10).iterrows():
+                            cols = st.columns([3, 1, 1, 2])
+                            with cols[0]:
+                                st.markdown(f"**{row['Mecz']}**")
+                                st.caption(f"{row['Typ']}")
+                            with cols[1]:
+                                st.markdown(f"`{row['Rynek']}`")
+                            with cols[2]:
+                                st.markdown(f"🎯 {row['P']:.0%}")
+                            with cols[3]:
+                                st.markdown(f"💹 fair {row['Fair']:.2f}")
+                            st.divider()
+                    else:
+                        st.info("Brak zdarzeń z p > 70%")
+                    st.divider()
+                    st.markdown("**🎯 Shot Kings** – mecze z wysokim oczekiwanym SOT")
+                    if shot_kings:
+                        shot_df = pd.DataFrame(shot_kings).sort_values("Oczekiwane SOT", ascending=False)
+                        for _, row in shot_df.head(10).iterrows():
+                            cols = st.columns([3, 1, 2])
+                            with cols[0]:
+                                st.markdown(f"**{row['Mecz']}**")
+                            with cols[1]:
+                                st.markdown(f"🎯 {row['Oczekiwane SOT']} SOT")
+                            with cols[2]:
+                                if row["Over 5.5 SOT"] > 0:
+                                    st.markdown(f"Over 5.5: {row['Over 5.5 SOT']:.0%} (fair {row['Fair']:.2f})")
+                            st.divider()
+                    else:
+                        st.info("Brak zdarzeń Shot Kings z fair odds ≥ 1.30")
 
-                # SHOT KINGS
-                if shot_kings:
-                    st.markdown("### 🎯 Shot Kings")
-                    shot_df = pd.DataFrame(shot_kings).sort_values("Oczekiwane SOT", ascending=False)
-                    for _, row in shot_df.head(10).iterrows():
-                        cols = st.columns([3, 1, 2])
-                        with cols[0]:
-                            st.markdown(f"**{row['Mecz']}**")
-                        with cols[1]:
-                            st.markdown(f"🎯 {row['Oczekiwane SOT']} SOT")
-                        with cols[2]:
-                            if row["Over 5.5 SOT"] > 0:
-                                st.markdown(f"Over 5.5: {row['Over 5.5 SOT']:.0%} (fair {row['Fair']:.2f})")
-                        st.divider()
-                else:
-                    st.info("Brak zdarzeń Shot Kings z fair odds ≥ 1.30")
-
-                # PEŁNY RANKING
+                # PEŁNY RANKING – na samym dole
                 with st.expander("📋 Pełny ranking wszystkich zdarzeń", expanded=False):
                     col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
                     with col_f1:
@@ -1432,9 +1399,9 @@ if not historical.empty:
             st.warning("Brak danych")
 
     # =========================================================================
-    # TAB 2 – ANALIZA MECZU
+    # TAB 1 – ANALIZA MECZU (przeniesiona na pierwsze miejsce)
     # =========================================================================
-    with tab2:
+    with tab1:
         st.subheader("⚽ Analiza meczu – aktualna kolejka")
         st.caption("Szczegółowa analiza każdego meczu. Rozwiń mecz → sprawdź rynki → zapisz do trackingu.")
 
@@ -1539,7 +1506,21 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 f"<span style='color:#4CAF50'>{sot_info}</span></div>",
                                 unsafe_allow_html=True,
                             )
-                            
+
+                            # ── Oczekiwane statystyki meczu ─────────────────
+                            eg1, eg2, eg3, eg4 = st.columns(4)
+                            eg1.metric("⚽ Śr. gole",   f"{lam_h+lam_a:.2f}",
+                                       f"{h[:6]}: {lam_h:.1f} · {a[:6]}: {lam_a:.1f}")
+                            eg2.metric("🚩 Śr. rożne",  f"{lam_r:.1f}",
+                                       help="Suma oczekiwanych rzutów rożnych (obie drużyny)")
+                            eg3.metric("🟨 Śr. kartki", f"{lam_k:.1f}",
+                                       help="Suma oczekiwanych kartek (Y=1pt, R=2pt)")
+                            if lam_sot and lam_sot > 0:
+                                eg4.metric("🎯 Śr. SOT", f"{lam_sot:.1f}",
+                                           help="Oczekiwane celne strzały łącznie")
+                            else:
+                                eg4.metric("🎯 Śr. SOT", "–", help="Brak danych SOT")
+
                             st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
 
                             with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
@@ -1628,100 +1609,43 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
         st.caption("Poglądowe statystyki drużyn i sędziów. Dane historyczne (bieżący + poprzedni sezon).")
 
         if not power_df.empty:
-            d6c1, d6c2 = st.columns([2, 6])
-            with d6c1:
-                sort_dd = st.radio("Sortuj po", ["Gole/M ↑", "Strac./M ↓", "Forma", "Kartki/M", "SOT/M"],
-                                   key="sort_dd")
-            with d6c2:
-                search_dd = st.text_input("🔍 Filtruj drużynę", "", key="search_dd",
-                                          placeholder="Wpisz nazwę...")
+            search_dd = st.text_input("🔍 Filtruj drużynę", "", key="search_dd",
+                                      placeholder="Wpisz nazwę...")
+            st.caption("💡 Kliknij nagłówek kolumny żeby posortować")
 
-            sort_map = {
-                "Gole/M ↑":   ("_gol_str",   False),
-                "Strac./M ↓": ("_gol_strac", True),
-                "Forma":      ("_forma",     False),
-                "Kartki/M":   ("Kartki/M",   False),
-                "SOT/M":      ("SOT/M",      False),
-            }
-            col_s, asc_s = sort_map.get(sort_dd, ("_gol_str", False))
             df_dd = power_df.copy()
             if search_dd:
                 df_dd = df_dd[df_dd["Drużyna"].str.contains(search_dd, case=False, na=False)]
-            try:
-                df_dd = df_dd.sort_values(col_s, ascending=asc_s)
-            except Exception:
-                pass
 
-            cat_dd = {"Gole/M ↑": "#4CAF50", "Strac./M ↓": "#F44336",
-                      "SOT/M": "#2196F3", "Konwersja%": "#9C27B0",
-                      "Kartki/M": "#FF9800", "Forma (pkt/5M)": "#4CAF50"}
+            # Kolumny do wyświetlenia – natywny st.dataframe z sortowaniem przez klik nagłówka
+            display_cols_dd = ["Drużyna","M","Gole/M ↑","Strac./M ↓","SOT/M",
+                               "Konwersja%","xG-proxy","Kartki/M","Rożne/M","Forma (pkt/5M)"]
+            avail_dd = [c for c in display_cols_dd if c in df_dd.columns]
+            df_show = df_dd[avail_dd].copy()
 
-            rows_dd = []
-            max_gol = df_dd["_gol_str"].max() if not df_dd.empty else 1
-            max_strac = df_dd["_gol_strac"].max() if not df_dd.empty else 1
-            max_forma = 15
+            # Konwertuj kolumny numeryczne (mogą być stringiem np. "1.23")
+            for col in ["Gole/M ↑","Strac./M ↓","SOT/M","Konwersja%","xG-proxy","Kartki/M","Rożne/M","Forma (pkt/5M)"]:
+                if col in df_show.columns:
+                    df_show[col] = pd.to_numeric(df_show[col], errors="coerce")
 
-            for _, row in df_dd.iterrows():
-                gol_pct  = int(row["_gol_str"] / max_gol * 100) if max_gol > 0 else 0
-                strac_pct = int(row["_gol_strac"] / max_strac * 100) if max_strac > 0 else 0
-                form_pct  = int(row["_forma"] / max_forma * 100)
-                form_col  = "#4CAF50" if row["_forma"] >= 9 else ("#FF9800" if row["_forma"] >= 5 else "#F44336")
-                try:
-                    xg_v = float(row["xG-proxy"])
-                    gol_v = float(row["_gol_str"])
-                    xg_diff = gol_v - xg_v
-                    xg_icon = "🍀" if xg_diff > 0.25 else ("😤" if xg_diff < -0.20 else "⚖️")
-                    xg_str  = f"{xg_v:.2f} {xg_icon}"
-                except (TypeError, ValueError):
-                    xg_str = "–"
-                rows_dd.append(
-                    f"<tr>"
-                    f"<td style='padding:6px 10px;font-weight:bold;font-size:0.88em'>{row['Drużyna']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['M']}</td>"
-                    f"<td style='padding:6px 10px'>"
-                    f"<div style='display:flex;align-items:center;gap:5px'>"
-                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                    f"<div style='background:#4CAF50;width:{gol_pct}%;height:5px;border-radius:3px'></div></div>"
-                    f"<span style='color:#4CAF50;font-size:0.85em;min-width:28px'>{row['Gole/M ↑']}</span>"
-                    f"</div></td>"
-                    f"<td style='padding:6px 10px'>"
-                    f"<div style='display:flex;align-items:center;gap:5px'>"
-                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                    f"<div style='background:#F44336;width:{strac_pct}%;height:5px;border-radius:3px'></div></div>"
-                    f"<span style='color:#F44336;font-size:0.85em;min-width:28px'>{row['Strac./M ↓']}</span>"
-                    f"</div></td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#2196F3'>{row['SOT/M']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#9C27B0'>{row['Konwersja%']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{xg_str}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#FF9800'>{row['Kartki/M']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#aaa'>{row['Rożne/M']}</td>"
-                    f"<td style='padding:6px 10px'>"
-                    f"<div style='display:flex;align-items:center;gap:5px'>"
-                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                    f"<div style='background:{form_col};width:{form_pct}%;height:5px;border-radius:3px'></div></div>"
-                    f"<span style='color:{form_col};font-size:0.85em;min-width:18px'>{row['Forma (pkt/5M)']}</span>"
-                    f"</div></td>"
-                    f"</tr>"
-                )
-
-            st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.86em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.75em;text-transform:uppercase'>"
-                f"<th style='padding:8px 10px;text-align:left'>Drużyna</th>"
-                f"<th style='padding:8px 10px;text-align:center'>M</th>"
-                f"<th style='padding:8px 10px;text-align:left'>Gole/M ↑</th>"
-                f"<th style='padding:8px 10px;text-align:left'>Strac./M ↓</th>"
-                f"<th style='padding:8px 10px;text-align:center'>SOT/M</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Konwersja</th>"
-                f"<th style='padding:8px 10px;text-align:center'>xG-proxy</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Kartki/M</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Rożne/M</th>"
-                f"<th style='padding:8px 10px;text-align:left'>Forma/5M</th>"
-                f"</tr></thead><tbody>{''.join(rows_dd)}</tbody></table></div>",
-                unsafe_allow_html=True,
+            st.dataframe(
+                df_show,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Drużyna":        st.column_config.TextColumn("Drużyna", width="medium"),
+                    "M":              st.column_config.NumberColumn("M", format="%d", width="small"),
+                    "Gole/M ↑":       st.column_config.NumberColumn("Gole/M ↑",  format="%.2f"),
+                    "Strac./M ↓":     st.column_config.NumberColumn("Strac./M ↓", format="%.2f"),
+                    "SOT/M":          st.column_config.NumberColumn("SOT/M",      format="%.1f"),
+                    "Konwersja%":     st.column_config.NumberColumn("Konwersja%", format="%.1f%%"),
+                    "xG-proxy":       st.column_config.NumberColumn("xG-proxy",   format="%.2f"),
+                    "Kartki/M":       st.column_config.NumberColumn("Kartki/M",   format="%.2f"),
+                    "Rożne/M":        st.column_config.NumberColumn("Rożne/M",    format="%.1f"),
+                    "Forma (pkt/5M)": st.column_config.NumberColumn("Forma/5M",   format="%.0f"),
+                },
             )
-            st.caption("🍀 Szczęściarz (gole > xG-proxy) · 😤 Pechowiec (gole < xG-proxy) · ⚖️ Normalny. Konwersja = gole/celne strzały. xG-proxy = SOT × 0.11.")
+            st.caption("🍀 Szczęściarz (gole > xG-proxy) · 😤 Pechowiec · ⚖️ Normalny. Konwersja = gole/SOT. xG-proxy = SOT×0.11.")
 
             export_cols = ["Drużyna","M","Gole/M ↑","Strac./M ↓","SOT/M",
                            "Konwersja%","xG-proxy","Kartki/M","Rożne/M","Forma (pkt/5M)"]
@@ -2108,19 +2032,24 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             if not mecze.empty:
                 st.caption(f"Kolejka {aktualna_kolejka} – {len(mecze)} meczów")
 
+                # Zbierz wszystkie mecze z combo p – posortuj po p_combo malejąco
+                lab_rows = []
                 for _, mecz in mecze.iterrows():
                     h = map_nazwa(mecz["home_team"])
                     a = map_nazwa(mecz["away_team"])
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
-                    
                     lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    
                     p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
                     p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
                     p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
                     p_combo = p_g * p_r * p_k
-                    
+                    lab_rows.append((p_combo, h, a, lam_h, lam_a, lam_r, lam_k, p_g, p_r, p_k))
+
+                # Sortuj: powyżej progu pierwsze (malejąco), poniżej na końcu
+                lab_rows.sort(key=lambda x: -x[0])
+
+                for p_combo, h, a, lam_h, lam_a, lam_r, lam_k, p_g, p_r, p_k in lab_rows:
                     label_bb = (f"{'✅' if p_combo >= min_prob else '❌'} {h} vs {a}"
                                 f"  ·  combo {p_combo:.0%}  ·  fair AKO {fair_odds(p_combo):.2f}")
                     with st.expander(label_bb, expanded=False):
