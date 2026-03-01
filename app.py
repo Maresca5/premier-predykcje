@@ -1502,136 +1502,136 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         with kolumna:
                             with st.expander(label_t2, expanded=False):
                                 ch, cmid, ca = st.columns([5,2,5])
-                            with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
-                            with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
-                            with ca: st.markdown(f"<div style='font-weight:bold;text-align:right'>{a}</div>", unsafe_allow_html=True)
+                                with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
+                                with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
+                                with ca: st.markdown(f"<div style='font-weight:bold;text-align:right'>{a}</div>", unsafe_allow_html=True)
 
-                            st.markdown(
-                                f"<div style='text-align:center;font-size:1.7em;font-weight:bold;margin:4px 0'>"
-                                f"⚽ {pred['wynik_h']}:{pred['wynik_a']}"
-                                f"<span style='font-size:0.5em;color:#888;margin-left:8px'>({pred['p_exact']:.1%})</span></div>",
-                                unsafe_allow_html=True,
-                            )
+                                st.markdown(
+                                    f"<div style='text-align:center;font-size:1.7em;font-weight:bold;margin:4px 0'>"
+                                    f"⚽ {pred['wynik_h']}:{pred['wynik_a']}"
+                                    f"<span style='font-size:0.5em;color:#888;margin-left:8px'>({pred['p_exact']:.1%})</span></div>",
+                                    unsafe_allow_html=True,
+                                )
 
-                            conf_colors  = {"High":"#4CAF50","Medium":"#FF9800","Coinflip":"#F44336"}
-                            chaos_colors = {"Pewny":"#4CAF50","Klarowny":"#8BC34A","Otwarty":"#FF9800","Chaos":"#F44336"}
-                            conf_c = conf_colors.get(pred["conf_level"], "#888")
-                            ch_c   = chaos_colors.get(pred["chaos_label"], "#888")
-                            bar_w  = int(pred["chaos_pct"] * 100)
-                            st.markdown(
-                                f"<div style='text-align:center;margin-bottom:4px'>"
-                                f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
-                                f"<span style='font-size:0.88em;color:#888'>Fair Odds: <b>{pred['fo_typ']:.2f}</b> ({pred['p_typ']:.1%})</span>"
-                                f"</div>"
-                                f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:6px'>"
-                                f"{pred['conf_emoji']} <b>{pred['conf_level']}</b> · {pred['conf_opis']}"
-                                f"</div>"
-                                f"<div style='margin:0 8px 8px 8px'>"
-                                f"<div style='font-size:0.78em;color:#888'>"
-                                f"{pred['chaos_emoji']} Chaos Index: <b style='color:{ch_c}'>{pred['chaos_label']}</b>"
-                                f" ({pred['entropy']:.2f} bits)</div>"
-                                f"<div style='background:#333;border-radius:4px;height:4px;margin-top:4px'>"
-                                f"<div style='background:{ch_c};width:{bar_w}%;height:4px;border-radius:4px'></div>"
-                                f"</div></div>",
-                                unsafe_allow_html=True,
-                            )
+                                conf_colors  = {"High":"#4CAF50","Medium":"#FF9800","Coinflip":"#F44336"}
+                                chaos_colors = {"Pewny":"#4CAF50","Klarowny":"#8BC34A","Otwarty":"#FF9800","Chaos":"#F44336"}
+                                conf_c = conf_colors.get(pred["conf_level"], "#888")
+                                ch_c   = chaos_colors.get(pred["chaos_label"], "#888")
+                                bar_w  = int(pred["chaos_pct"] * 100)
+                                st.markdown(
+                                    f"<div style='text-align:center;margin-bottom:4px'>"
+                                    f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
+                                    f"<span style='font-size:0.88em;color:#888'>Fair Odds: <b>{pred['fo_typ']:.2f}</b> ({pred['p_typ']:.1%})</span>"
+                                    f"</div>"
+                                    f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:6px'>"
+                                    f"{pred['conf_emoji']} <b>{pred['conf_level']}</b> · {pred['conf_opis']}"
+                                    f"</div>"
+                                    f"<div style='margin:0 8px 8px 8px'>"
+                                    f"<div style='font-size:0.78em;color:#888'>"
+                                    f"{pred['chaos_emoji']} Chaos Index: <b style='color:{ch_c}'>{pred['chaos_label']}</b>"
+                                    f" ({pred['entropy']:.2f} bits)</div>"
+                                    f"<div style='background:#333;border-radius:4px;height:4px;margin-top:4px'>"
+                                    f"<div style='background:{ch_c};width:{bar_w}%;height:4px;border-radius:4px'></div>"
+                                    f"</div></div>",
+                                    unsafe_allow_html=True,
+                                )
 
-                            # 1/X/2 – kompaktowy HTML, mniejsza czcionka
-                            st.markdown(
-                                f"<div style='display:flex;justify-content:space-around;margin:6px 0 2px'>"
-                                f"<div style='text-align:center'>"
-                                f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>1</div>"
-                                f"<div style='font-size:1.10em;font-weight:bold;color:#4CAF50'>{pred['p_home']:.0%}</div>"
-                                f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_home']:.2f}</div></div>"
-                                f"<div style='text-align:center'>"
-                                f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>X</div>"
-                                f"<div style='font-size:1.10em;font-weight:bold;color:#FF9800'>{pred['p_draw']:.0%}</div>"
-                                f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_draw']:.2f}</div></div>"
-                                f"<div style='text-align:center'>"
-                                f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>2</div>"
-                                f"<div style='font-size:1.10em;font-weight:bold;color:#2196F3'>{pred['p_away']:.0%}</div>"
-                                f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_away']:.2f}</div></div>"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
-                            
-                            sot_info = " · 🎯 SOT blend aktywny" if sot_ok else " · gole only"
-                            st.markdown(
-                                f"<div style='text-align:center;font-size:0.78em;color:#555;margin-top:2px'>"
-                                f"λ {h[:8]}: <b style='color:#aaa'>{lam_h:.2f}</b> &nbsp;|&nbsp; "
-                                f"λ {a[:8]}: <b style='color:#aaa'>{lam_a:.2f}</b> &nbsp;|&nbsp; "
-                                f"Σ: <b style='color:#aaa'>{lam_h+lam_a:.2f}</b>"
-                                f"<span style='color:#4CAF50'>{sot_info}</span></div>",
-                                unsafe_allow_html=True,
-                            )
+                                # 1/X/2 – kompaktowy HTML, mniejsza czcionka
+                                st.markdown(
+                                    f"<div style='display:flex;justify-content:space-around;margin:6px 0 2px'>"
+                                    f"<div style='text-align:center'>"
+                                    f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>1</div>"
+                                    f"<div style='font-size:1.10em;font-weight:bold;color:#4CAF50'>{pred['p_home']:.0%}</div>"
+                                    f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_home']:.2f}</div></div>"
+                                    f"<div style='text-align:center'>"
+                                    f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>X</div>"
+                                    f"<div style='font-size:1.10em;font-weight:bold;color:#FF9800'>{pred['p_draw']:.0%}</div>"
+                                    f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_draw']:.2f}</div></div>"
+                                    f"<div style='text-align:center'>"
+                                    f"<div style='font-size:0.70em;color:#888;text-transform:uppercase;letter-spacing:1px'>2</div>"
+                                    f"<div style='font-size:1.10em;font-weight:bold;color:#2196F3'>{pred['p_away']:.0%}</div>"
+                                    f"<div style='font-size:0.68em;color:#555'>fair {pred['fo_away']:.2f}</div></div>"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
 
-                            # ── Oczekiwane statystyki – kompaktowy pasek ────
-                            _sot_d = f"{lam_sot:.1f}" if (lam_sot and lam_sot > 0) else "–"
-                            st.markdown(
-                                f"<div style='display:flex;justify-content:space-around;"
-                                f"background:#1a1a2e;border-radius:6px;padding:5px 4px;margin:4px 0'>"
-                                f"<div style='text-align:center'>"
-                                f"<div style='font-size:0.62em;color:#555'>⚽ Śr. gole</div>"
-                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_h+lam_a:.2f}</div>"
-                                f"<div style='font-size:0.58em;color:#444'>{h[:5]}:{lam_h:.1f} {a[:5]}:{lam_a:.1f}</div></div>"
-                                f"<div style='text-align:center'>"
-                                f"<div style='font-size:0.62em;color:#555'>🚩 Śr. rożne</div>"
-                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_r:.1f}</div>"
-                                f"<div style='font-size:0.58em;color:#444'>obie drużyny</div></div>"
-                                f"<div style='text-align:center'>"
-                                f"<div style='font-size:0.62em;color:#555'>🟨 Śr. kartki</div>"
-                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_k:.1f}</div>"
-                                f"<div style='font-size:0.58em;color:#444'>Y=1 R=2</div></div>"
-                                f"<div style='text-align:center'>"
-                                f"<div style='font-size:0.62em;color:#555'>🎯 Śr. SOT</div>"
-                                f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{_sot_d}</div>"
-                                f"<div style='font-size:0.58em;color:#444'>celne strzały</div></div>"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
+                                sot_info = " · 🎯 SOT blend aktywny" if sot_ok else " · gole only"
+                                st.markdown(
+                                    f"<div style='text-align:center;font-size:0.78em;color:#555;margin-top:2px'>"
+                                    f"λ {h[:8]}: <b style='color:#aaa'>{lam_h:.2f}</b> &nbsp;|&nbsp; "
+                                    f"λ {a[:8]}: <b style='color:#aaa'>{lam_a:.2f}</b> &nbsp;|&nbsp; "
+                                    f"Σ: <b style='color:#aaa'>{lam_h+lam_a:.2f}</b>"
+                                    f"<span style='color:#4CAF50'>{sot_info}</span></div>",
+                                    unsafe_allow_html=True,
+                                )
 
-                            if sedzia_ostr:
-                                st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
-                            elif sedzia not in ("Nieznany", "", None):
-                                st.caption(f"🟨 **Sędzia:** {sedzia}")
+                                # ── Oczekiwane statystyki – kompaktowy pasek ────
+                                _sot_d = f"{lam_sot:.1f}" if (lam_sot and lam_sot > 0) else "–"
+                                st.markdown(
+                                    f"<div style='display:flex;justify-content:space-around;"
+                                    f"background:#1a1a2e;border-radius:6px;padding:5px 4px;margin:4px 0'>"
+                                    f"<div style='text-align:center'>"
+                                    f"<div style='font-size:0.62em;color:#555'>⚽ Śr. gole</div>"
+                                    f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_h+lam_a:.2f}</div>"
+                                    f"<div style='font-size:0.58em;color:#444'>{h[:5]}:{lam_h:.1f} {a[:5]}:{lam_a:.1f}</div></div>"
+                                    f"<div style='text-align:center'>"
+                                    f"<div style='font-size:0.62em;color:#555'>🚩 Śr. rożne</div>"
+                                    f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_r:.1f}</div>"
+                                    f"<div style='font-size:0.58em;color:#444'>obie drużyny</div></div>"
+                                    f"<div style='text-align:center'>"
+                                    f"<div style='font-size:0.62em;color:#555'>🟨 Śr. kartki</div>"
+                                    f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_k:.1f}</div>"
+                                    f"<div style='font-size:0.58em;color:#444'>Y=1 R=2</div></div>"
+                                    f"<div style='text-align:center'>"
+                                    f"<div style='font-size:0.62em;color:#555'>🎯 Śr. SOT</div>"
+                                    f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{_sot_d}</div>"
+                                    f"<div style='font-size:0.58em;color:#444'>celne strzały</div></div>"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
 
-                            with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
-                                alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
-                                if alt:
-                                    cat_colors = {"Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336","1X2":"#4CAF50","SOT":"#00BCD4"}
-                                    rows_alt = []
-                                    for emoji, nazwa, p, fo, kat, linia_z in alt[:8]:
-                                        kc = cat_colors.get(kat, "#888")
-                                        bw = int(p * 100)
-                                        fc = "#4CAF50" if fo <= 1.60 else ("#FF9800" if fo <= 2.00 else "#aaa")
-                                        rows_alt.append(
-                                            f"<tr><td style='padding:4px 8px;font-size:0.88em'>{emoji} {nazwa}</td>"
-                                            f"<td style='padding:4px 8px;width:110px'>"
-                                            f"<div style='display:flex;align-items:center;gap:5px'>"
-                                            f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                                            f"<div style='background:{kc};width:{bw}%;height:5px;border-radius:3px'></div></div>"
-                                            f"<span style='color:{kc};font-size:0.82em;min-width:30px'>{p:.0%}</span></div></td>"
-                                            f"<td style='padding:4px 8px;text-align:right;color:{fc};font-weight:bold;font-size:0.88em'>{fo:.2f}</td></tr>"
+                                if sedzia_ostr:
+                                    st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
+                                elif sedzia not in ("Nieznany", "", None):
+                                    st.caption(f"🟨 **Sędzia:** {sedzia}")
+
+                                with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
+                                    alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
+                                    if alt:
+                                        cat_colors = {"Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336","1X2":"#4CAF50","SOT":"#00BCD4"}
+                                        rows_alt = []
+                                        for emoji, nazwa, p, fo, kat, linia_z in alt[:8]:
+                                            kc = cat_colors.get(kat, "#888")
+                                            bw = int(p * 100)
+                                            fc = "#4CAF50" if fo <= 1.60 else ("#FF9800" if fo <= 2.00 else "#aaa")
+                                            rows_alt.append(
+                                                f"<tr><td style='padding:4px 8px;font-size:0.88em'>{emoji} {nazwa}</td>"
+                                                f"<td style='padding:4px 8px;width:110px'>"
+                                                f"<div style='display:flex;align-items:center;gap:5px'>"
+                                                f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                                                f"<div style='background:{kc};width:{bw}%;height:5px;border-radius:3px'></div></div>"
+                                                f"<span style='color:{kc};font-size:0.82em;min-width:30px'>{p:.0%}</span></div></td>"
+                                                f"<td style='padding:4px 8px;text-align:right;color:{fc};font-weight:bold;font-size:0.88em'>{fo:.2f}</td></tr>"
+                                            )
+                                        st.markdown(
+                                            f"<table style='width:100%;border-collapse:collapse'>"
+                                            f"<thead><tr style='color:#555;font-size:0.75em;text-transform:uppercase'>"
+                                            f"<th style='padding:4px 8px;text-align:left'>Rynek</th>"
+                                            f"<th style='padding:4px 8px;text-align:left'>P</th>"
+                                            f"<th style='padding:4px 8px;text-align:right'>Fair</th></tr></thead>"
+                                            f"<tbody>{''.join(rows_alt)}</tbody></table>"
+                                            f"<p style='color:#444;font-size:0.72em;margin:4px 0 0'>⚠️ Rożne/kartki – Poisson bez korelacji. Orientacyjnie.</p>",
+                                            unsafe_allow_html=True,
                                         )
-                                    st.markdown(
-                                        f"<table style='width:100%;border-collapse:collapse'>"
-                                        f"<thead><tr style='color:#555;font-size:0.75em;text-transform:uppercase'>"
-                                        f"<th style='padding:4px 8px;text-align:left'>Rynek</th>"
-                                        f"<th style='padding:4px 8px;text-align:left'>P</th>"
-                                        f"<th style='padding:4px 8px;text-align:right'>Fair</th></tr></thead>"
-                                        f"<tbody>{''.join(rows_alt)}</tbody></table>"
-                                        f"<p style='color:#444;font-size:0.72em;margin:4px 0 0'>⚠️ Rożne/kartki – Poisson bez korelacji. Orientacyjnie.</p>",
-                                        unsafe_allow_html=True,
-                                    )
-                                else:
-                                    st.caption("Brak zdarzeń powyżej progu 55%.")
+                                    else:
+                                        st.caption("Brak zdarzeń powyżej progu 55%.")
 
-                            if pokaz_komentarz:
-                                st.info(generuj_komentarz(h, a, pred, forma_dict))
+                                if pokaz_komentarz:
+                                    st.info(generuj_komentarz(h, a, pred, forma_dict))
 
-                            if pokaz_macierz:
-                                st.markdown("**Macierz wyników**")
-                                st.markdown(render_macierz_html(pred["macierz"], h, a), unsafe_allow_html=True)
+                                if pokaz_macierz:
+                                    st.markdown("**Macierz wyników**")
+                                    st.markdown(render_macierz_html(pred["macierz"], h, a), unsafe_allow_html=True)
 
                 st.divider()
                 tc1, tc2 = st.columns(2)
