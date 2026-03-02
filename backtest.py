@@ -15,10 +15,10 @@ from scipy.stats import poisson
 # ---------------------------------------------------------------------------
 KALIBRACJA_PER_LIGA = {
     "E0":  {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-    "SP1": {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-    "D1":  {"shrink": 0.25, "prog_pewny": 0.55, "prog_podwojna": 0.55},
+    "SP1": {"shrink": 0.38, "prog_pewny": 0.55, "prog_podwojna": 0.55},  # bylo 0.25 – SP1 mocno przeszacowany
+    "D1":  {"shrink": 0.40, "prog_pewny": 0.55, "prog_podwojna": 0.55},  # bylo 0.25 – D1 mocno przeszacowany
     "I1":  {"shrink": 0.28, "prog_pewny": 0.55, "prog_podwojna": 0.55},
-    "F1":  {"shrink": 0.28, "prog_pewny": 0.55, "prog_podwojna": 0.55},
+    "F1":  {"shrink": 0.45, "prog_pewny": 0.55, "prog_podwojna": 0.55},  # bylo 0.28 – F1 mocno przeszacowana
 }
 
 ALPHA_OFF    = 0.10   # shrink ofensywny (atak zmienny)
