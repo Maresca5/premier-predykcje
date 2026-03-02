@@ -415,13 +415,20 @@ def summary(liga: str, sezon: str, db_file: str) -> dict:
         roi_vals.append((fo - 1) if r["trafiony"] == 1 else -1)
     roi_pct = sum(roi_vals) / n * 100
 
-    # Per typ
-    per_typ = {}
+    # Per typ – DataFrame z kolumnami: typ, n, hit, brier
+    per_typ_rows = []
     for typ, g in df.groupby("typ"):
         nt = len(g); ht = float(g["trafiony"].mean())
         rt = sum((round(1/r["p_typ"],2)-1 if r["trafiony"]==1 else -1)
                  for _, r in g.iterrows())
-        per_typ[typ] = {"n": nt, "hit": round(ht, 4), "roi": round(rt/nt*100, 2)}
+        per_typ_rows.append({
+            "typ":   typ,
+            "n":     nt,
+            "hit":   round(ht, 4),
+            "brier": round(float(g["brier"].mean()), 5),
+            "roi":   round(rt/nt*100, 2),
+        })
+    per_typ = pd.DataFrame(per_typ_rows)
 
     # Per kolejka
     per_k_rows = []
@@ -434,7 +441,7 @@ def summary(liga: str, sezon: str, db_file: str) -> dict:
                            "brier": round(float(g["brier"].mean()), 5)})
     per_kolejka = pd.DataFrame(per_k_rows).sort_values("kolejka").reset_index(drop=True)
 
-    # Equity curve (skumulowany ROI)
+    # Equity curve
     equity = 0.0
     eq_rows = []
     for k, rv in zip(df["kolejka"], roi_vals):
@@ -442,18 +449,20 @@ def summary(liga: str, sezon: str, db_file: str) -> dict:
         eq_rows.append({"kolejka": int(k), "equity": round(equity, 3)})
     equity_df = pd.DataFrame(eq_rows)
 
-    # Kalibracja (buckety p_typ)
+    # Kalibracja – kolumny: przedzial, n, p_mean, hit, rozb
     bins = [0.40, 0.50, 0.57, 0.63, 0.68, 0.73, 0.80, 1.01]
     kal_rows = []
     for lo, hi in zip(bins[:-1], bins[1:]):
         g = df[(df["p_typ"] >= lo) & (df["p_typ"] < hi)]
         if len(g) >= 3:
+            p_mean = float(g["p_typ"].mean())
+            hit_k  = float(g["trafiony"].mean())
             kal_rows.append({
-                "zakres":   f"{lo:.0%}–{hi:.0%}",
-                "n":        len(g),
-                "avg_p":    round(float(g["p_typ"].mean()), 4),
-                "hit":      round(float(g["trafiony"].mean()), 4),
-                "delta":    round(float(g["trafiony"].mean()) - float(g["p_typ"].mean()), 4),
+                "przedzial": f"{lo:.0%}–{hi:.0%}",
+                "n":         len(g),
+                "p_mean":    round(p_mean, 4),
+                "hit":       round(hit_k, 4),
+                "rozb":      round(hit_k - p_mean, 4),
             })
     kalibracja = pd.DataFrame(kal_rows)
 
