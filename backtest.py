@@ -164,20 +164,38 @@ def _trafiony(typ, wynik):
 # ---------------------------------------------------------------------------
 # KURSY  –  helpers
 # ---------------------------------------------------------------------------
-def _kurs_dla_typu(typ, oh, od, oa):
-    """Zwraca kurs bukmachera odpowiadający typowi modelu."""
-    if typ == "1":  return oh
-    if typ == "X":  return od
-    if typ == "2":  return oa
-    if typ == "1X": return min(oh, od) if (oh and od) else None
-    if typ == "X2": return min(od, oa) if (od and oa) else None
-    return None
+def _kurs_dc(typ, oh, od, oa):
+    """
+    Zwraca (kurs_dc, impl_dc) dla danego typu.
+    Dla prostych typów (1/X/2): kurs bezpośredni z B365.
+    Dla podwójnej szansy (1X/X2): kurs DC obliczony z znormalizowanych
+    implied probabilities – jedyna poprawna metoda bez dedykowanych kursów DC.
 
-def _implied(kurs):
-    """Implied probability bez normalizacji (z marginem)."""
-    if kurs and kurs > 1.0:
-        return 1.0 / kurs
-    return None
+    Overround: sum_impl = 1/oh + 1/od + 1/oa > 1 (np. 1.06)
+    Znormalizowane: impl_h = (1/oh) / sum_impl  itd.
+    Kurs DC na 1X: 1 / (impl_h + impl_d)
+    """
+    if not (oh and od and oa and oh > 1.0 and od > 1.0 and oa > 1.0):
+        return None, None
+
+    sum_impl = 1/oh + 1/od + 1/oa          # overround
+    impl_h = (1/oh) / sum_impl
+    impl_d = (1/od) / sum_impl
+    impl_a = (1/oa) / sum_impl
+
+    if typ == "1":
+        return oh, round(impl_h, 4)
+    if typ == "X":
+        return od, round(impl_d, 4)
+    if typ == "2":
+        return oa, round(impl_a, 4)
+    if typ == "1X":
+        impl_dc = impl_h + impl_d
+        return round(1 / impl_dc, 3), round(impl_dc, 4)
+    if typ == "X2":
+        impl_dc = impl_d + impl_a
+        return round(1 / impl_dc, 3), round(impl_dc, 4)
+    return None, None
 
 def _ev(p_model, kurs):
     """EV = p_model * kurs - 1"""
@@ -328,17 +346,24 @@ def run_backtest(liga, sezon_test, sezon_prev, db_file, progress_cb=None):
                 traf=_trafiony(typ,wynik)
                 br=_brier(phk,pdk,pak,wynik)
 
-                # Kursy bukmacherskie
+                # Kursy bukmacherskie – znormalizowane implied dla DC
                 oh=float(row["_odds_h"]) if pd.notna(row.get("_odds_h")) else None
                 od=float(row["_odds_d"]) if pd.notna(row.get("_odds_d")) else None
                 oa=float(row["_odds_a"]) if pd.notna(row.get("_odds_a")) else None
-                ot=_kurs_dla_typu(typ,oh,od,oa)
 
-                ih=_implied(oh); id_=_implied(od); ia=_implied(oa); it=_implied(ot)
-                ev_val=_ev(p_typ,ot)
+                # Implied proste (do zapisu surowego)
+                sum_impl = (1/oh + 1/od + 1/oa) if (oh and od and oa) else None
+                ih = round((1/oh)/sum_impl, 4) if (oh and sum_impl) else None
+                id_ = round((1/od)/sum_impl, 4) if (od and sum_impl) else None
+                ia = round((1/oa)/sum_impl, 4) if (oa and sum_impl) else None
+
+                # Kurs i implied dla wybranego typu (DC-poprawne)
+                ot, it = _kurs_dc(typ, oh, od, oa)
+
+                ev_val=_ev(p_typ, ot)
                 is_val=1 if (ev_val is not None and ev_val>=EV_PROG) else 0
 
-                # ROI realny (przy kursie bukmachera)
+                # ROI realny (przy kursie DC bukmachera)
                 if ot and ot>1.0:
                     roi_r=(ot-1) if traf==1 else -1.0
                 else:
