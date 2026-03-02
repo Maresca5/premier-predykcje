@@ -401,26 +401,72 @@ def load_results(liga: str, sezon: str, db_file: str) -> pd.DataFrame:
 def summary(liga: str, sezon: str, db_file: str) -> dict:
     df = load_results(liga, sezon, db_file)
     if df.empty: return {}
+
     n     = len(df)
     hit   = float(df["trafiony"].mean())
     brier = float(df["brier"].mean())
-    bn    = ((1/3-1)**2+(1/3)**2+(1/3)**2)/3
-    bss   = 1 - brier/bn
-    roi_s = sum(
-        (round(1/r["p_typ"],2)-1 if r["trafiony"]==1 else -1)
-        for _, r in df.iterrows()
-    )
+    bn    = ((1/3-1)**2 + (1/3)**2 + (1/3)**2) / 3
+    bss   = 1 - brier / bn
+
+    # ROI per mecz
+    roi_vals = []
+    for _, r in df.iterrows():
+        fo = round(1 / r["p_typ"], 2) if r["p_typ"] > 0 else 999
+        roi_vals.append((fo - 1) if r["trafiony"] == 1 else -1)
+    roi_pct = sum(roi_vals) / n * 100
+
+    # Per typ
     per_typ = {}
     for typ, g in df.groupby("typ"):
         nt = len(g); ht = float(g["trafiony"].mean())
         rt = sum((round(1/r["p_typ"],2)-1 if r["trafiony"]==1 else -1)
                  for _, r in g.iterrows())
-        per_typ[typ] = {"n":nt, "hit":round(ht,4), "roi":round(rt/nt*100,2)}
+        per_typ[typ] = {"n": nt, "hit": round(ht, 4), "roi": round(rt/nt*100, 2)}
+
+    # Per kolejka
+    per_k_rows = []
+    for k, g in df.groupby("kolejka"):
+        nt = len(g); ht = float(g["trafiony"].mean())
+        rt = sum((round(1/r["p_typ"],2)-1 if r["trafiony"]==1 else -1)
+                 for _, r in g.iterrows())
+        per_k_rows.append({"kolejka": int(k), "n": nt,
+                           "hit": round(ht, 4), "roi": round(rt/nt*100, 2),
+                           "brier": round(float(g["brier"].mean()), 5)})
+    per_kolejka = pd.DataFrame(per_k_rows).sort_values("kolejka").reset_index(drop=True)
+
+    # Equity curve (skumulowany ROI)
+    equity = 0.0
+    eq_rows = []
+    for k, rv in zip(df["kolejka"], roi_vals):
+        equity += rv
+        eq_rows.append({"kolejka": int(k), "equity": round(equity, 3)})
+    equity_df = pd.DataFrame(eq_rows)
+
+    # Kalibracja (buckety p_typ)
+    bins = [0.40, 0.50, 0.57, 0.63, 0.68, 0.73, 0.80, 1.01]
+    kal_rows = []
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        g = df[(df["p_typ"] >= lo) & (df["p_typ"] < hi)]
+        if len(g) >= 3:
+            kal_rows.append({
+                "zakres":   f"{lo:.0%}–{hi:.0%}",
+                "n":        len(g),
+                "avg_p":    round(float(g["p_typ"].mean()), 4),
+                "hit":      round(float(g["trafiony"].mean()), 4),
+                "delta":    round(float(g["trafiony"].mean()) - float(g["p_typ"].mean()), 4),
+            })
+    kalibracja = pd.DataFrame(kal_rows)
+
     return {
-        "liga":liga, "sezon":sezon, "n":n,
-        "hit":round(hit,4), "brier":round(brier,4),
-        "bss":round(bss,4), "roi":round(roi_s/n*100,2),
-        "per_typ":per_typ,
+        "liga": liga, "sezon": sezon, "n": n,
+        "hit_rate":    round(hit, 4),
+        "brier":       round(brier, 4),
+        "bss":         round(bss, 4),
+        "roi_pct":     round(roi_pct, 2),
+        "per_typ":     per_typ,
+        "per_kolejka": per_kolejka,
+        "equity_df":   equity_df,
+        "kalibracja":  kalibracja,
     }
 
 
