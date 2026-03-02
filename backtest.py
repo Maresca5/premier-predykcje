@@ -430,7 +430,7 @@ def summary(liga: str, sezon: str, db_file: str) -> dict:
         rt = sum((round(1/r["p_typ"],2)-1 if r["trafiony"]==1 else -1)
                  for _, r in g.iterrows())
         per_k_rows.append({"kolejka": int(k), "n": nt,
-                           "hit": round(ht, 4), "roi": round(rt/nt*100, 2),
+                           "hit_rate": round(ht, 4), "roi": round(rt/nt*100, 2),
                            "brier": round(float(g["brier"].mean()), 5)})
     per_kolejka = pd.DataFrame(per_k_rows).sort_values("kolejka").reset_index(drop=True)
 
