@@ -554,20 +554,34 @@ def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float,
     M /= M.sum()
     return M
 
-SHRINK_ALPHA  = 0.20
+# Kalibracja per liga – shrinkage zoptymalizowany na backtestach 2024/25
+# E0: 0.25 (dobra kalibracja), I1: 0.28, SP1: 0.38, D1: 0.40, F1: 0.45
+KALIBRACJA_PER_LIGA = {
+    "E0":  0.25,
+    "SP1": 0.38,
+    "D1":  0.40,
+    "I1":  0.28,
+    "F1":  0.45,  # bylo 0.28 – F1 mocno przeszacowana (+4pp hit rate)
+}
+SHRINK_ALPHA  = 0.25   # fallback dla nieznanych lig
 PROG_PEWNY    = 0.55
 PROG_PODWOJNA = 0.55
 
-def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float) -> tuple:
-    a = SHRINK_ALPHA
+def _get_shrink(csv_code: str) -> float:
+    return KALIBRACJA_PER_LIGA.get(csv_code, SHRINK_ALPHA)
+
+def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float,
+                                 csv_code: str = "E0") -> tuple:
+    a = _get_shrink(csv_code)
     p_h = (1-a)*p_home + a/3
     p_d = (1-a)*p_draw + a/3
     p_a = (1-a)*p_away + a/3
     s = p_h+p_d+p_a
     return p_h/s, p_d/s, p_a/s
 
-def wybierz_typ(p_home: float, p_draw: float, p_away: float) -> tuple:
-    p_home, p_draw, p_away = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away)
+def wybierz_typ(p_home: float, p_draw: float, p_away: float,
+                csv_code: str = "E0") -> tuple:
+    p_home, p_draw, p_away = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away, csv_code)
     p_1x = p_home + p_draw; p_x2 = p_away + p_draw
     if p_home >= PROG_PEWNY: return "1",  p_home
     if p_away >= PROG_PEWNY: return "2",  p_away
@@ -609,7 +623,8 @@ def confidence_score(p_home: float, p_draw: float, p_away: float) -> tuple:
 def fair_odds(p: float) -> float:
     return round(1 / p, 2) if 0 < p <= 1 else 999.0
 
-def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
+def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13,
+                    csv_code: str = "E0") -> dict:
     max_gole = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     M = dixon_coles_adj(
         np.outer(poisson.pmf(range(max_gole), lam_h),
@@ -620,8 +635,8 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
     p_draw = float(np.trace(M))
     p_away = float(np.triu(M, 1).sum())
     wynik_h, wynik_a, p_exact = wybierz_wynik(M, lam_h, lam_a)
-    p_home_cal, p_draw_cal, p_away_cal = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away)
-    typ, p_typ = wybierz_typ(p_home, p_draw, p_away)
+    p_home_cal, p_draw_cal, p_away_cal = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away, csv_code)
+    typ, p_typ = wybierz_typ(p_home, p_draw, p_away, csv_code)
     conf_level, conf_emoji, conf_opis = confidence_score(p_home_cal, p_draw_cal, p_away_cal)
     ent = entropy_meczu(p_home_cal, p_draw_cal, p_away_cal)
     ch_label, ch_emoji, ch_pct = chaos_label(ent)
@@ -1264,7 +1279,8 @@ if not historical.empty:
                         continue
                     
                     lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred = predykcja_meczu(lam_h, lam_a, rho=rho)
+                    _csv = LIGI[wybrana_liga]["csv_code"]
+                    pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=_csv)
                     mecz_str = f"{h} – {a}"
 
                     def _ev(p_val, fo_val):
@@ -1499,7 +1515,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             continue
 
                         lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                        pred = predykcja_meczu(lam_h, lam_a, rho=rho)
+                        pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
                         data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
                         kolumna = kol_a if idx % 2 == 0 else kol_b
@@ -1658,7 +1674,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             if h_s not in srednie_df.index or a_s not in srednie_df.index:
                                 continue
                             lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
-                            pred_s = predykcja_meczu(lhs, las, rho=rho)
+                            pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
                             mecz_str_s = f"{h_s} – {a_s}"
                             zapisz_zdarzenia(wybrana_liga, int(aktualna_kolejka), mecz_str_s, h_s, a_s,
                                              "1X2", pred_s["typ"], 0.0, pred_s["p_typ"], pred_s["fo_typ"])
