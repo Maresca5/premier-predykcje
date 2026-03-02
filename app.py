@@ -554,16 +554,20 @@ def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float,
     M /= M.sum()
     return M
 
-# Kalibracja per liga – shrinkage zoptymalizowany na backtestach 2024/25
-# E0: 0.25 (dobra kalibracja), I1: 0.28, SP1: 0.38, D1: 0.40, F1: 0.45
+SHRINK_ALPHA  = 0.20
+PROG_PEWNY    = 0.55
+PROG_PODWOJNA = 0.55
+
+# Kalibracja per liga – shrinkage zoptymalizowany na backtestach 2 sezony x 5 lig (3098 meczow)
+# E0:0.25 (dobra kal.) | I1:0.28 | SP1:0.38 | D1:0.40 | F1:0.45 (najnizej przewidywalna)
 KALIBRACJA_PER_LIGA = {
     "E0":  0.25,
     "SP1": 0.38,
     "D1":  0.40,
     "I1":  0.28,
-    "F1":  0.45,  # bylo 0.28 – F1 mocno przeszacowana (+4pp hit rate)
+    "F1":  0.45,
 }
-SHRINK_ALPHA  = 0.25   # fallback dla nieznanych lig
+SHRINK_ALPHA  = 0.25   # fallback
 PROG_PEWNY    = 0.55
 PROG_PODWOJNA = 0.55
 
@@ -571,7 +575,7 @@ def _get_shrink(csv_code: str) -> float:
     return KALIBRACJA_PER_LIGA.get(csv_code, SHRINK_ALPHA)
 
 def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float,
-                                 csv_code: str = "E0") -> tuple:
+                                csv_code: str = "E0") -> tuple:
     a = _get_shrink(csv_code)
     p_h = (1-a)*p_home + a/3
     p_d = (1-a)*p_draw + a/3
@@ -590,7 +594,6 @@ def wybierz_typ(p_home: float, p_draw: float, p_away: float,
     probs = {"1": p_home, "X": p_draw, "2": p_away}
     t = max(probs, key=probs.get)
     return t, probs[t]
-
 def wybierz_wynik(M: np.ndarray, lam_h: float, lam_a: float) -> tuple:
     idx_max = np.unravel_index(M.argmax(), M.shape)
     p_max = float(M[idx_max])
@@ -651,10 +654,6 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13,
         "entropy": ent, "chaos_label": ch_label, "chaos_emoji": ch_emoji, "chaos_pct": ch_pct,
         "macierz": M,
     }
-
-# ===========================================================================
-# ALTERNATYWNE ZDARZENIA
-# ===========================================================================
 def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
                             lam_k: float, rho: float,
                             prog_min: float = 0.55,
@@ -1190,8 +1189,113 @@ def deep_data_stats(df_json: str, druzyny_ligi: set = None) -> tuple:
 # ŁADOWANIE DANYCH I SIDEBAR
 # ===========================================================================
 st.sidebar.header("🌍 Wybór Rozgrywek")
+
+# ---------------------------------------------------------------------------
+# ODDS API – integracja (The Odds API v4, free plan 500 req/mies.)
+# ---------------------------------------------------------------------------
+try:
+    import odds_api as _oa
+    _OA_OK = True
+except ImportError:
+    _OA_OK = False
+
+def _oa_get_key():
+    """Pobiera klucz Odds API ze Streamlit secrets lub session_state."""
+    try:
+        return st.secrets["ODDS_API_KEY"]
+    except Exception:
+        return st.session_state.get("_odds_key")
+
+def _kurs_dc_live(typ, oh, od, oa):
+    """Oblicza poprawny kurs DC i EV dla danego typu wobec kursow live."""
+    try:
+        oh, od, oa = float(oh), float(od), float(oa)
+        if oh <= 1 or od <= 1 or oa <= 1: return None, None, None
+        s = 1/oh + 1/od + 1/oa
+        ih=(1/oh)/s; id_=(1/od)/s; ia=(1/oa)/s
+        if typ=="1":  return oh,  ih,  None
+        if typ=="X":  return od,  id_, None
+        if typ=="2":  return oa,  ia,  None
+        if typ=="1X": idc=ih+id_; return round(1/idc,3), idc, None
+        if typ=="X2": idc=id_+ia; return round(1/idc,3), idc, None
+    except Exception:
+        pass
+    return None, None, None
+
+# ===========================================================================
+# SIDEBAR
+# ===========================================================================
+st.sidebar.header("🌍 Wybór Rozgrywek")
 wybrana_liga = st.sidebar.selectbox("Wybierz ligę", list(LIGI.keys()))
 debug_mode   = st.sidebar.checkbox("🔧 Debug – niezmapowane nazwy", value=False)
+
+_CSV_CODE = LIGI[wybrana_liga]["csv_code"]
+
+# Odds API sekcja w sidebarze
+st.sidebar.divider()
+st.sidebar.markdown("### 💰 Kursy bukmacherskie")
+_oa_key = _oa_get_key()
+if not _oa_key:
+    _manual_key = st.sidebar.text_input(
+        "Klucz The Odds API", type="password",
+        placeholder="Wklej klucz (lub dodaj do Streamlit secrets)...",
+        help="Darmowy plan: 500 req/mies. Zarejestruj na the-odds-api.com"
+    )
+    if _manual_key:
+        st.session_state["_odds_key"] = _manual_key
+        _oa_key = _manual_key
+
+_OA_DB = "predykcje.db"
+_oa_cached = {}
+
+if _OA_OK and _oa_key:
+    # Statystyki uzycia
+    _stats = _oa.get_usage_stats(_OA_DB)
+    _rem   = _stats.get("requests_remaining")
+    _last  = _stats.get("last_per_liga", {}).get(_CSV_CODE)
+    if _rem is not None:
+        _bar_pct = min(int(_rem / 5), 100)  # 500 req = 100%
+        _bar_c   = "#4CAF50" if _rem > 200 else ("#FF9800" if _rem > 50 else "#F44336")
+        st.sidebar.markdown(
+            f"<div style='font-size:0.78em;color:#888;margin-bottom:2px'>"
+            f"Pozostało requestów: <b style='color:{_bar_c}'>{_rem}/500</b></div>"
+            f"<div style='background:#333;border-radius:3px;height:4px'>"
+            f"<div style='background:{_bar_c};width:{_bar_pct}%;height:4px;border-radius:3px'></div></div>",
+            unsafe_allow_html=True
+        )
+    if _last:
+        try:
+            _last_dt = datetime.fromisoformat(_last.replace("Z","+00:00"))
+            _age_h   = (datetime.now(_last_dt.tzinfo) - _last_dt).total_seconds()/3600
+            st.sidebar.caption(f"Ostatnia aktualizacja: {_age_h:.0f}h temu")
+        except Exception:
+            pass
+
+    _col_r, _col_f = st.sidebar.columns(2)
+    if _col_r.button("🔄 Odśwież kursy", use_container_width=True,
+                     help="Respektuje limit 56h między pobraniami"):
+        with st.spinner("Pobieranie kursów..."):
+            _res = _oa.fetch_odds(_CSV_CODE, _OA_DB, _oa_key)
+        if _res["ok"] and not _res.get("from_cache"):
+            st.sidebar.success(f"✅ {_res['n_events']} meczów | zostało: {_res['requests_remaining']}")
+        elif _res.get("from_cache"):
+            st.sidebar.info(f"Cache świeży ({_res['age_h']}h). Następne za {_res['next_refresh_h']}h.")
+        else:
+            st.sidebar.error(_res["error"])
+
+    if _col_f.button("⚡ Wymuś", use_container_width=True,
+                     help="Ignoruje cache – zużywa 1 request"):
+        with st.spinner("Pobieranie..."):
+            _res = _oa.fetch_odds(_CSV_CODE, _OA_DB, _oa_key, force=True)
+        if _res["ok"]:
+            st.sidebar.success(f"✅ {_res['n_events']} meczów | zostało: {_res['requests_remaining']}")
+        else:
+            st.sidebar.error(_res["error"])
+
+    # Zaladuj cache do pamieci (bez requestu)
+    _oa_cached = _oa.get_cached_odds(_CSV_CODE, _OA_DB)
+elif not _OA_OK:
+    st.sidebar.caption("ℹ️ Plik `odds_api.py` nie znaleziony – kursy live niedostępne.")
 
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
@@ -1279,8 +1383,7 @@ if not historical.empty:
                         continue
                     
                     lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    _csv = LIGI[wybrana_liga]["csv_code"]
-                    pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=_csv)
+                    pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=_CSV_CODE)
                     mecz_str = f"{h} – {a}"
 
                     def _ev(p_val, fo_val):
@@ -1515,7 +1618,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             continue
 
                         lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                        pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
+                        pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=_CSV_CODE)
                         data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
                         kolumna = kol_a if idx % 2 == 0 else kol_b
@@ -1624,6 +1727,55 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 elif sedzia not in ("Nieznany", "", None):
                                     st.caption(f"🟨 **Sędzia:** {sedzia}")
 
+
+                                # ── Kursy live z The Odds API ───────────────
+                                if _OA_OK and _oa_key and _oa_cached:
+                                    _o = _oa.znajdz_kursy(h, a, _oa_cached)
+                                    if _o:
+                                        _kdc, _idc, _ = _kurs_dc_live(
+                                            pred["typ"], _o["odds_h"], _o["odds_d"], _o["odds_a"])
+                                        if _kdc:
+                                            _ev_val = pred["p_typ"] * _kdc - 1
+                                            _edge   = pred["p_typ"] - _idc
+                                            _is_val = _ev_val >= 0.04
+                                            _ev_c   = "#4CAF50" if _is_val else ("#FF9800" if _ev_val > -0.02 else "#888")
+                                            _bk_label = _o.get("bookmaker","").replace("_"," ").title()
+                                            _val_badge = "&nbsp;🎯 <b>VALUE BET</b>" if _is_val else ""
+                                            # Kurs fair modelu vs kurs bukmachera
+                                            _fo_model = pred["fo_typ"]
+                                            _edge_str = f"{_edge:+.1%}"
+                                            st.markdown(
+                                                f"<div style='background:#0a1628;border:1px solid "
+                                                f"{'#4CAF50' if _is_val else '#2a2a3a'};"
+                                                f"border-radius:8px;padding:9px 14px;margin:6px 0'>"
+                                                f"<div style='font-size:0.74em;color:#555;margin-bottom:4px'>"
+                                                f"📊 {_bk_label} — kursy live</div>"
+                                                f"<div style='display:flex;justify-content:space-around;"
+                                                f"margin-bottom:5px'>"
+                                                f"<div style='text-align:center'>"
+                                                f"<div style='font-size:0.65em;color:#666'>1</div>"
+                                                f"<div style='font-weight:bold;color:#aaa'>{_o['odds_h']:.2f}</div></div>"
+                                                f"<div style='text-align:center'>"
+                                                f"<div style='font-size:0.65em;color:#666'>X</div>"
+                                                f"<div style='font-weight:bold;color:#aaa'>{_o['odds_d']:.2f}</div></div>"
+                                                f"<div style='text-align:center'>"
+                                                f"<div style='font-size:0.65em;color:#666'>2</div>"
+                                                f"<div style='font-weight:bold;color:#aaa'>{_o['odds_a']:.2f}</div></div>"
+                                                f"</div>"
+                                                f"<div style='border-top:1px solid #1e2a3a;padding-top:5px;"
+                                                f"font-size:0.82em'>"
+                                                f"Typ modelu: {badge_typ(pred['typ'])} &nbsp;"
+                                                f"Fair: <b>{_fo_model:.2f}</b> &nbsp;|&nbsp; "
+                                                f"Buk: <b>{_kdc:.2f}</b> &nbsp;|&nbsp; "
+                                                f"Edge: <span style='color:{_ev_c}'><b>{_edge_str}</b></span> &nbsp;|&nbsp; "
+                                                f"<span style='color:{_ev_c}'><b>EV {_ev_val:+.1%}</b></span>"
+                                                f"{_val_badge}</div>"
+                                                f"</div>",
+                                                unsafe_allow_html=True,
+                                            )
+                                elif _OA_OK and _oa_key and not _oa_cached:
+                                    st.caption("📊 Brak kursów – kliknij 'Odśwież kursy' w sidebarze.")
+
                                 with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
                                     alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
                                     if alt:
@@ -1674,7 +1826,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             if h_s not in srednie_df.index or a_s not in srednie_df.index:
                                 continue
                             lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
-                            pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
+                            pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=_CSV_CODE)
                             mecz_str_s = f"{h_s} – {a_s}"
                             zapisz_zdarzenia(wybrana_liga, int(aktualna_kolejka), mecz_str_s, h_s, a_s,
                                              "1X2", pred_s["typ"], 0.0, pred_s["p_typ"], pred_s["fo_typ"])
