@@ -203,63 +203,169 @@ def get_usage_stats(db_file):
     except Exception:
         return {}
 
-# ── Mapowanie nazw ─────────────────────────────────────────────────────────────
+# ===========================================================================
+# UZUPEŁNIONE MAPOWANIE NAZW DLA ODDS API
+# ===========================================================================
 TEAM_NAME_MAP = {
     # Premier League
-    "Manchester City": "Man City", "Manchester United": "Man United",
-    "Tottenham Hotspur": "Tottenham", "Nottingham Forest": "Nott'm Forest",
-    "Newcastle United": "Newcastle", "West Ham United": "West Ham",
-    "Wolverhampton Wanderers": "Wolves", "Brighton and Hove Albion": "Brighton",
-    "AFC Bournemouth": "Bournemouth", "Ipswich Town": "Ipswich", "Leicester City": "Leicester",
+    "Manchester City": "Man City", 
+    "Manchester United": "Man United",
+    "Tottenham Hotspur": "Tottenham", 
+    "Nottingham Forest": "Nott'm Forest",
+    "Newcastle United": "Newcastle", 
+    "West Ham United": "West Ham",
+    "Wolverhampton Wanderers": "Wolves", 
+    "Wolverhampton": "Wolves",
+    "Brighton and Hove Albion": "Brighton",
+    "Brighton & Hove Albion": "Brighton",
+    "AFC Bournemouth": "Bournemouth", 
+    "Ipswich Town": "Ipswich", 
+    "Leicester City": "Leicester",
+    "Leeds United": "Leeds",
+    "Sheffield United": "Sheffield Utd",
+    "Liverpool": "Liverpool",
+    "Chelsea": "Chelsea",
+    "Arsenal": "Arsenal",
+    "Aston Villa": "Aston Villa",
+    "Everton": "Everton",
+    "Crystal Palace": "Crystal Palace",
+    "Southampton": "Southampton",
+    "Fulham": "Fulham",
+    "Brentford": "Brentford",
+    "Bournemouth": "Bournemouth",
+    
     # La Liga
-    "Athletic Club": "Ath Bilbao", "Atletico Madrid": "Ath Madrid",
-    "Real Betis": "Betis", "Celta Vigo": "Celta", "Deportivo Alaves": "Alaves",
-    "Rayo Vallecano": "Vallecano", "Real Sociedad": "Sociedad", "UD Las Palmas": "Las Palmas",
-    "RCD Mallorca": "Mallorca", "RCD Espanyol": "Espanyol",
-    "Girona FC": "Girona", "Villarreal CF": "Villarreal", "CD Leganes": "Leganes",
+    "Athletic Club": "Ath Bilbao", 
+    "Atletico Madrid": "Ath Madrid",
+    "Real Betis": "Betis", 
+    "Celta Vigo": "Celta", 
+    "Deportivo Alaves": "Alaves",
+    "Rayo Vallecano": "Vallecano", 
+    "Real Sociedad": "Sociedad", 
+    "UD Las Palmas": "Las Palmas",
+    "RCD Mallorca": "Mallorca", 
+    "RCD Espanyol": "Espanyol",
+    "Girona FC": "Girona", 
+    "Villarreal CF": "Villarreal", 
+    "CD Leganes": "Leganes",
+    "FC Barcelona": "Barcelona",
+    "Barcelona": "Barcelona",
+    "Real Madrid": "Real Madrid",
+    "Sevilla FC": "Sevilla",
+    "Valencia CF": "Valencia",
+    "Osasuna": "Osasuna",
+    "Getafe": "Getafe",
+    "Valladolid": "Valladolid",
+    "Almeria": "Almeria",
+    "Granada": "Granada",
+    "Cadiz": "Cadiz",
+    
     # Bundesliga
-    "Bayer Leverkusen": "Leverkusen", "Borussia Dortmund": "Dortmund",
-    "Borussia Monchengladbach": "Gladbach", "Eintracht Frankfurt": "Ein Frankfurt",
-    "Werder Bremen": "Werder", "SC Freiburg": "Freiburg", "FC Augsburg": "Augsburg",
-    "FC Heidenheim 1846": "Heidenheim", "FC St. Pauli": "St Pauli",
-    "Holstein Kiel": "Kiel", "VfL Bochum": "Bochum", "VfL Wolfsburg": "Wolfsburg",
-    "VfB Stuttgart": "Stuttgart", "TSG Hoffenheim": "Hoffenheim", "RB Leipzig": "RB Leipzig",
-    "1. FC Union Berlin": "Union Berlin", "1. FC Koln": "Koln",
+    "Bayer Leverkusen": "Leverkusen", 
+    "Borussia Dortmund": "Dortmund",
+    "Borussia Monchengladbach": "M'gladbach", 
+    "Borussia Mönchengladbach": "M'gladbach",
+    "Borussia M'gladbach": "M'gladbach",
+    "Eintracht Frankfurt": "Ein Frankfurt",
+    "Werder Bremen": "Werder Bremen", 
+    "SC Freiburg": "Freiburg", 
+    "FC Augsburg": "Augsburg",
+    "FC Heidenheim 1846": "Heidenheim", 
+    "FC St. Pauli": "St Pauli",
+    "Holstein Kiel": "Kiel", 
+    "VfL Bochum": "Bochum", 
+    "VfL Wolfsburg": "Wolfsburg",
+    "VfB Stuttgart": "Stuttgart", 
+    "TSG Hoffenheim": "Hoffenheim", 
+    "RB Leipzig": "RB Leipzig",
+    "1. FC Union Berlin": "Union Berlin", 
+    "1. FC Koln": "FC Koln",
+    "FC Koln": "FC Koln",
+    "FC Bayern München": "Bayern Munich",
+    "Bayern Munich": "Bayern Munich",
+    "Mainz": "Mainz",
+    
     # Serie A
-    "Internazionale": "Inter", "AC Milan": "Milan", "AS Roma": "Roma",
-    "SS Lazio": "Lazio", "SSC Napoli": "Napoli", "Hellas Verona": "Verona",
-    "Udinese Calcio": "Udinese", "US Lecce": "Lecce", "Genoa CFC": "Genoa",
-    "Cagliari Calcio": "Cagliari", "Parma Calcio 1913": "Parma", "Venezia FC": "Venezia",
-    "Como 1907": "Como", "AC Monza": "Monza", "Empoli FC": "Empoli",
-    "Bologna FC 1909": "Bologna", "ACF Fiorentina": "Fiorentina",
-    "Torino FC": "Torino", "Atalanta BC": "Atalanta",
+    "Internazionale": "Inter", 
+    "AC Milan": "Milan", 
+    "AS Roma": "Roma",
+    "SS Lazio": "Lazio", 
+    "SSC Napoli": "Napoli", 
+    "Hellas Verona": "Verona",
+    "Udinese Calcio": "Udinese", 
+    "US Lecce": "Lecce", 
+    "Genoa CFC": "Genoa",
+    "Cagliari Calcio": "Cagliari", 
+    "Parma Calcio 1913": "Parma", 
+    "Venezia FC": "Venezia",
+    "Como 1907": "Como", 
+    "AC Monza": "Monza", 
+    "Empoli FC": "Empoli",
+    "Bologna FC 1909": "Bologna", 
+    "ACF Fiorentina": "Fiorentina",
+    "Torino FC": "Torino", 
+    "Atalanta BC": "Atalanta",
+    "Juventus": "Juventus",
+    
     # Ligue 1
-    "Paris Saint-Germain": "Paris SG", "Olympique de Marseille": "Marseille",
-    "Olympique Lyonnais": "Lyon", "AS Monaco": "Monaco", "OGC Nice": "Nice",
-    "RC Lens": "Lens", "Stade Rennais FC": "Rennes", "Stade Brestois 29": "Brest",
-    "Le Havre AC": "Le Havre", "Montpellier HSC": "Montpellier", "FC Nantes": "Nantes",
-    "Toulouse FC": "Toulouse", "RC Strasbourg Alsace": "Strasbourg", "Angers SCO": "Angers",
-    "AS Saint-Etienne": "St Etienne", "AJ Auxerre": "Auxerre",
-    "Stade de Reims": "Reims", "Lille OSC": "Lille",
+    "Paris Saint-Germain": "Paris SG", 
+    "Olympique de Marseille": "Marseille",
+    "Olympique Lyonnais": "Lyon", 
+    "AS Monaco": "Monaco", 
+    "OGC Nice": "Nice",
+    "RC Lens": "Lens", 
+    "Stade Rennais FC": "Rennes", 
+    "Stade Brestois 29": "Brest",
+    "Le Havre AC": "Le Havre", 
+    "Montpellier HSC": "Montpellier", 
+    "FC Nantes": "Nantes",
+    "Toulouse FC": "Toulouse", 
+    "RC Strasbourg Alsace": "Strasbourg", 
+    "Angers SCO": "Angers",
+    "AS Saint-Etienne": "St Etienne", 
+    "AJ Auxerre": "Auxerre",
+    "Stade de Reims": "Reims", 
+    "Lille OSC": "Lille",
 }
 _REV_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
 
-def map_api_to_model(api_name):
-    return TEAM_NAME_MAP.get(api_name, api_name)
-
+# Ulepszona funkcja mapowania
 def znajdz_kursy(home_model, away_model, cached):
+    """Inteligentne wyszukiwanie kursów z obsługą różnych wersji nazw"""
+    
+    # Próba 1: dokładne dopasowanie po mapowaniu odwrotnym
     home_api = _REV_MAP.get(home_model, home_model)
     away_api = _REV_MAP.get(away_model, away_model)
+    
     if (home_api, away_api) in cached:
         return cached[(home_api, away_api)]
+    
+    # Próba 2: oryginalne nazwy modelu
     if (home_model, away_model) in cached:
         return cached[(home_model, away_model)]
-    cl = {(h.lower(), a.lower()): v for (h, a), v in cached.items()}
-    for hk, ak in [(home_api.lower(), away_api.lower()),
-                   (home_model.lower(), away_model.lower())]:
-        if (hk, ak) in cl:
-            return cl[(hk, ak)]
+    
+    # Próba 3: ignorowanie wielkości liter
+    cached_lower = {(h.lower(), a.lower()): v for (h, a), v in cached.items()}
+    
+    for h_try, a_try in [
+        (home_api.lower(), away_api.lower()),
+        (home_model.lower(), away_model.lower()),
+        (home_model.lower().replace(" ", ""), away_model.lower().replace(" ", ""))
+    ]:
+        if (h_try, a_try) in cached_lower:
+            return cached_lower[(h_try, a_try)]
+    
+    # Próba 4: szukanie po zamianie stron (czasami API zwraca odwrotnie)
+    if (away_api, home_api) in cached:
+        return cached[(away_api, home_api)]
+    
+    # Próba 5: mapowanie przez TEAM_NAME_MAP
     for (h, a), v in cached.items():
-        if map_api_to_model(h) == home_model and map_api_to_model(a) == away_model:
+        h_mapped = TEAM_NAME_MAP.get(h, h)
+        a_mapped = TEAM_NAME_MAP.get(a, a)
+        if h_mapped == home_model and a_mapped == away_model:
             return v
+        if h_mapped == away_model and a_mapped == home_model:  # odwrotnie
+            return v
+    
     return None
