@@ -1,7 +1,11 @@
 # =============================================================================
 # odds_api.py  -  The Odds API v4 / free plan (500 req/mies.)
-# Strategia: cache w predykcje.db, max 3x tygodniowo per liga
-# Koszt: 5 lig x 3x/tydz x 4 tygodnie = ~60 req/mies. (zostaje 440 zapasu)
+# 
+# UWAGA: Darmowy plan The Odds API to 500 requestów miesięcznie.
+# - Jedno odświeżenie na ligę to 1 request
+# - Cache 56h = max 3 odświeżenia tygodniowo na ligę
+# - 5 lig x 3/tydz x 4 tyg = ~60 requestów/mies. (bezpieczny bufor)
+# - Przycisk "Wymuś" powinien być używany tylko w wyjątkowych sytuacjach!
 # =============================================================================
 
 import sqlite3
@@ -194,14 +198,19 @@ def get_usage_stats(db_file):
             (ms,)).fetchall()
         con.close()
         last_per_liga = {}
-        for liga, fat, _ in rows:
+        total_used = 0
+        for liga, fat, rem in rows:
             if liga not in last_per_liga:
                 last_per_liga[liga] = fat
+            # Przy pierwszym zapisie w miesiącu, requests_used = 500 - rem
+            if rem is not None:
+                total_used = 500 - rem
         return {"fetches_this_month": len(rows),
-                "requests_remaining": rows[0][2] if rows else None,
+                "requests_used": total_used,
+                "requests_remaining": rows[0][2] if rows else 500,
                 "last_per_liga": last_per_liga}
     except Exception:
-        return {}
+        return {"fetches_this_month": 0, "requests_remaining": 500, "last_per_liga": {}}
 
 # ===========================================================================
 # UZUPEŁNIONE MAPOWANIE NAZW DLA ODDS API
