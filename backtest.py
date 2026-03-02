@@ -357,9 +357,32 @@ def run_backtest(liga: str, sezon_test: str, sezon_prev: str,
             except Exception as e:
                 print(f"  [WARN] {h} vs {a}: {e}"); continue
 
-    if rows: _zapisz(db_file, rows)
+    if not rows:
+        return {"error": "Brak danych – sprawdz kody ligi i sezonu."}
+
+    _zapisz(db_file, rows)
     if progress_cb: progress_cb(1.0, f"Gotowe – {len(rows)} meczow")
-    return len(rows)
+
+    cols = ["liga","sezon","kolejka","data","home","away","fthg","ftag","wynik",
+            "typ","p_typ","p_home","p_draw","p_away","lam_h","lam_a",
+            "trafiony","brier","n_train"]
+    df_res = pd.DataFrame(rows, columns=cols)
+    n      = len(df_res)
+    hit    = float(df_res["trafiony"].mean())
+    brier  = float(df_res["brier"].mean())
+    bn     = ((1/3-1)**2 + (1/3)**2 + (1/3)**2) / 3
+    roi_s  = sum(
+        (round(1/r["p_typ"], 2) - 1 if r["trafiony"] == 1 else -1)
+        for _, r in df_res.iterrows()
+    )
+    return {
+        "n":        n,
+        "hit_rate": hit,
+        "brier":    brier,
+        "bss":      1 - brier / bn,
+        "roi_pct":  roi_s / n * 100,
+        "df":       df_res,
+    }
 
 
 def load_results(liga: str, sezon: str, db_file: str) -> pd.DataFrame:
