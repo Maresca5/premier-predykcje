@@ -323,19 +323,52 @@ def load_schedule(filename: str) -> pd.DataFrame:
 def get_current_round(schedule: pd.DataFrame) -> int:
     """
     Zwraca numer aktualnej kolejki.
-    Szuka pierwszej kolejki ktora ma conajmniej 1 mecz dzisiaj lub w przyszlosci.
-    Fix: nie bierze pierwszego meczu z przyszlosci (moze byc zalegly z bledna kolejka),
-    tylko iteruje po rundach w kolejnosci i bierze pierwsza z meczem >= dzisiaj.
+    Logika: szuka kolejki gdzie WIEKSZOSC meczow jest w przyszlosci.
+    Rozwiazuje problem Bundesligi: zalegly mecz z kolejki N nie blokuje
+    pokazania kolejki N+8 jesli ona ma wiecej meczow w przyszlosci.
     """
     if schedule.empty:
         return 0
     dzisiaj = datetime.now().date()
     sch = schedule.copy()
     sch["_d"] = sch["date"].dt.date
-    for runda in sorted(sch["round"].unique()):
-        if (sch.loc[sch["round"] == runda, "_d"] >= dzisiaj).any():
+
+    # Dla kazdej kolejki: ile meczow w przyszlosci vs ile juz bylo
+    rundy = sorted(sch["round"].unique())
+    for runda in rundy:
+        mecze_rundy  = sch[sch["round"] == runda]
+        n_total      = len(mecze_rundy)
+        n_przyszle   = (mecze_rundy["_d"] >= dzisiaj).sum()
+        n_przeszle   = n_total - n_przyszle
+        # Jesli wiekszosc meczow tej kolejki jest w przyszlosci/dzisiaj -> to aktualna kolejka
+        if n_przyszle >= n_przeszle and n_przyszle > 0:
             return int(runda)
+    # Wszystkie mecze w przeszlosci -> ostatnia kolejka
     return int(schedule["round"].max())
+
+def get_available_rounds(schedule: pd.DataFrame) -> list:
+    """Zwraca liste dostepnych kolejek z opisem (do selectboxa)."""
+    if schedule.empty:
+        return []
+    dzisiaj = datetime.now().date()
+    sch = schedule.copy()
+    sch["_d"] = sch["date"].dt.date
+    result = []
+    for runda in sorted(sch["round"].unique()):
+        mecze_r  = sch[sch["round"] == runda]
+        n_fut    = (mecze_r["_d"] >= dzisiaj).sum()
+        n_past   = len(mecze_r) - n_fut
+        min_date = mecze_r["_d"].min()
+        max_date = mecze_r["_d"].max()
+        if n_fut > 0 and n_past > 0:
+            tag = "⚠️ zalegly"
+        elif n_fut > 0:
+            tag = "🔜 nadchodzaca"
+        else:
+            tag = "✅ zakonczona"
+        label = f"Kolejka {int(runda)} · {min_date.strftime('%d.%m')}–{max_date.strftime('%d.%m')} · {tag}"
+        result.append((int(runda), label))
+    return result
 
 def get_round_status(schedule: pd.DataFrame, round_num: int) -> str:
     """Zwraca status kolejki (przeszła, dzisiejsza, przyszła)"""
@@ -1268,6 +1301,32 @@ elif not _OA_OK:
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
+# Auto-aktualizacja wynikow: przy kazdym wczytaniu sprawdz nowe wyniki w CSV
+# Uzywa session_state zeby nie robic pelnego skanu przy kazdym rerunie
+_auto_update_key = f"autoupd_{wybrana_liga}_{len(historical)}"
+if _auto_update_key not in st.session_state:
+    init_db()
+    _con_au = sqlite3.connect(DB_FILE)
+    _mecze_bez_wyniku = _con_au.execute(
+        "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
+        (wybrana_liga,)
+    ).fetchall()
+    _con_au.close()
+    _n_updated = 0
+    for _h_au, _a_au in _mecze_bez_wyniku:
+        _rows_before = sqlite3.connect(DB_FILE).execute(
+            "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+            (_h_au, _a_au)).fetchone()[0]
+        aktualizuj_wynik_zdarzenia(_h_au, _a_au, historical)
+        _rows_after = sqlite3.connect(DB_FILE).execute(
+            "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+            (_h_au, _a_au)).fetchone()[0]
+        if _rows_after > _rows_before:
+            _n_updated += 1
+    st.session_state[_auto_update_key] = _n_updated
+    if _n_updated > 0:
+        st.toast(f"✅ Auto-zaktualizowano wyniki {_n_updated} meczów z football-data.co.uk", icon="⚽")
+
 # ── Nagłówek główny ────────────────────────────────────────────────────────
 hcol1, hcol2 = st.columns([6, 2])
 with hcol1:
@@ -1538,9 +1597,25 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
         with tgl2: pokaz_macierz  = st.toggle("🔢 Macierz wyników", value=False)
 
         if not schedule.empty and not srednie_df.empty:
-            aktualna_kolejka = get_current_round(schedule)
+            _auto_kolejka = get_current_round(schedule)
+            _dostepne_rundy = get_available_rounds(schedule)
+            if _dostepne_rundy:
+                _rundy_labels = [lbl for _, lbl in _dostepne_rundy]
+                _rundy_vals   = [r   for r,  _   in _dostepne_rundy]
+                # Domyslny indeks = automatycznie wykryta kolejka
+                _def_idx = _rundy_vals.index(_auto_kolejka) if _auto_kolejka in _rundy_vals else 0
+                _sel_label = st.selectbox(
+                    "📅 Kolejka",
+                    _rundy_labels,
+                    index=_def_idx,
+                    key="tab1_kolejka_sel",
+                    help="Wybierz kolejkę ręcznie jeśli auto-wykrycie jest błędne (np. zaległe mecze Bundesligi)"
+                )
+                aktualna_kolejka = _rundy_vals[_rundy_labels.index(_sel_label)]
+            else:
+                aktualna_kolejka = _auto_kolejka
             mecze = schedule[schedule["round"] == aktualna_kolejka]
-            
+
             if not mecze.empty:
                 st.caption(f"Kolejka #{aktualna_kolejka} – {len(mecze)} meczów")
 
@@ -1931,6 +2006,53 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
     # =========================================================================
     with tab4:
         st.subheader("📈 Skuteczność modelu per rynek")
+
+        # Pokaz dane per kolejka – historia nie znika, grupuje sie automatycznie
+        init_db()
+        _con_t4 = sqlite3.connect(DB_FILE)
+        _hist_kolejki = pd.read_sql_query(
+            """SELECT kolejnosc, COUNT(*) as n_typow,
+               SUM(CASE WHEN trafione=1 THEN 1 ELSE 0 END) as n_traf,
+               AVG(CASE WHEN trafione IS NOT NULL THEN CAST(trafione AS FLOAT) END) as hit_rate,
+               MIN(created_at) as data_kolejki
+               FROM zdarzenia WHERE liga=? AND rynek='1X2'
+               GROUP BY kolejnosc ORDER BY kolejnosc""",
+            _con_t4, params=(wybrana_liga,)
+        )
+        _con_t4.close()
+
+        if not _hist_kolejki.empty:
+            _hist_kolejki = _hist_kolejki[_hist_kolejki["n_typow"] > 0]
+            n_z_wynikiem  = _hist_kolejki[_hist_kolejki["hit_rate"].notna()]
+            if not n_z_wynikiem.empty:
+                st.markdown("**📅 Historia wyników per kolejka (1X2)**")
+                _rows_hk = []
+                for _, rk in _hist_kolejki.iterrows():
+                    hr = rk["hit_rate"]
+                    hr_c = "#4CAF50" if hr and hr >= 0.62 else ("#FF9800" if hr and hr >= 0.55 else ("#888" if hr is None else "#F44336"))
+                    hr_str = f"{hr:.0%}" if hr is not None else "–"
+                    wyn_str = f"{int(rk['n_traf'])}/{int(rk['n_typow'])}" if hr is not None else f"–/{int(rk['n_typow'])}"
+                    status_ico = "✅" if hr and hr >= 0.62 else ("⚠️" if hr and hr >= 0.50 else ("⏳" if hr is None else "❌"))
+                    _rows_hk.append(
+                        f"<tr>"
+                        f"<td style='padding:5px 10px;font-weight:bold'>#{int(rk['kolejnosc'])}</td>"
+                        f"<td style='padding:5px 10px;text-align:center;color:#888'>{int(rk['n_typow'])}</td>"
+                        f"<td style='padding:5px 10px;text-align:center'>{wyn_str}</td>"
+                        f"<td style='padding:5px 10px;text-align:center;color:{hr_c};font-weight:bold'>{status_ico} {hr_str}</td>"
+                        f"</tr>"
+                    )
+                st.markdown(
+                    f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a2a;margin-bottom:12px'>"
+                    f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
+                    f"<thead><tr style='background:#1a1a2e;color:#666;font-size:0.72em;text-transform:uppercase'>"
+                    f"<th style='padding:5px 10px'>Kolejka</th>"
+                    f"<th style='padding:5px 10px;text-align:center'>Typów</th>"
+                    f"<th style='padding:5px 10px;text-align:center'>Trafione</th>"
+                    f"<th style='padding:5px 10px;text-align:center'>Hit Rate</th>"
+                    f"</tr></thead><tbody>{''.join(_rows_hk)}</tbody></table></div>",
+                    unsafe_allow_html=True
+                )
+                st.caption("⏳ = predykcje zapisane, wyniki jeszcze nie dostępne w football-data.co.uk")
 
         stats_df = statystyki_skutecznosci(wybrana_liga)
 
