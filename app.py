@@ -1503,16 +1503,34 @@ if not historical.empty:
                     def _ev(p_val, fo_val):
                         return round(p_val * fo_val - 1.0, 3)
 
-                    # Typ główny – tylko z fair odds ≥ 1.30
+                    # Kurs live 1X2 z The Odds API (jeśli dostępny)
+                    _kurs_live_1x2 = None
+                    if _OA_OK and _oa_key and _oa_cached:
+                        _o_r = _oa.znajdz_kursy(h, a, _oa_cached)
+                        if _o_r:
+                            _kurs_live_1x2 = _o_r
+
+                    # Typ główny – dopisz kurs live i kelly
                     if pred["p_typ"] >= 0.58 and pred["fo_typ"] >= 1.30:
                         ev = _ev(pred["p_typ"], pred["fo_typ"])
+                        # Pobierz kurs bukmachera jeśli dostępny
+                        _kbuk = None
+                        if _kurs_live_1x2:
+                            _kbuk, _ = _kurs_dc_live(pred["typ"],
+                                _kurs_live_1x2["odds_h"], _kurs_live_1x2["odds_d"], _kurs_live_1x2["odds_a"])
+                        _br_t2 = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
+                        _kel = kelly_stake(pred["p_typ"], _kbuk if _kbuk else pred["fo_typ"],
+                                           bankroll=_br_t2)
+                        wszystkie_zd[-1] if len(wszystkie_zd) > 0 else None  # guard
                         wszystkie_zd.append({
                             "Mecz": mecz_str,
                             "Rynek": "1X2",
                             "Typ": pred["typ"],
                             "P": pred["p_typ"],
                             "Fair": pred["fo_typ"],
+                            "KursBuk": _kbuk,
                             "EV": ev,
+                            "Kelly_stake": _kel["stake_pln"] if _kel["safe"] else None,
                             "Kategoria": "1X2"
                         })
 
@@ -1527,7 +1545,9 @@ if not historical.empty:
                                 "Typ": nazwa,
                                 "P": p,
                                 "Fair": fo,
+                                "KursBuk": None,
                                 "EV": ev,
+                                "Kelly_stake": None,
                                 "Kategoria": kat
                             })
                     
@@ -1545,14 +1565,37 @@ if not historical.empty:
 
             if wszystkie_zd:
                 df_rank = pd.DataFrame(wszystkie_zd)
-                
+
+                # ── Przełącznik widoku: Główne / Alternatywne / Wszystkie ──────
+                _t2c1, _t2c2 = st.columns([2, 3])
+                with _t2c1:
+                    _widok = st.radio(
+                        "Widok rynków",
+                        ["🎯 Główne (1X2)", "⚡ Alternatywne", "📋 Wszystkie"],
+                        horizontal=True, key="tab2_widok",
+                        help="Główne = tylko 1X2 | Alternatywne = gole, kartki, rożne, SOT"
+                    )
+                with _t2c2:
+                    _bankroll_t2 = st.session_state.get("bankroll", 1000.0)
+                    st.caption(f"💼 Bankroll: **{_bankroll_t2:.0f} zł** · Kelly 1/4 · ✦ = fair odds (brak live)")
+
+                if _widok == "🎯 Główne (1X2)":
+                    df_rank_view = df_rank[df_rank["Kategoria"] == "1X2"]
+                elif _widok == "⚡ Alternatywne":
+                    df_rank_view = df_rank[df_rank["Kategoria"] != "1X2"]
+                else:
+                    df_rank_view = df_rank
+
                 # VALUE BETS
                 st.markdown("### 🔥 Value Bets (EV > 0)")
+                df_rank = df_rank_view  # apply view filter
                 value_bets = df_rank[df_rank["EV"] > 0].sort_values("EV", ascending=False)
                 if not value_bets.empty:
                     for _, row in value_bets.head(10).iterrows():
                         ev_color = "#4CAF50" if row["EV"] > 0.05 else "#FF9800"
-                        cols = st.columns([3, 1, 1, 1, 1])
+                        _ks = row.get("Kelly_stake")
+                        _kb = row.get("KursBuk")
+                        cols = st.columns([3, 1, 1, 1, 1, 1])
                         with cols[0]:
                             st.markdown(f"**{row['Mecz']}**")
                             st.caption(f"{row['Typ']}")
@@ -1561,9 +1604,17 @@ if not historical.empty:
                         with cols[2]:
                             st.markdown(f"🎯 {row['P']:.0%}")
                         with cols[3]:
-                            st.markdown(f"💰 {row['Fair']:.2f}")
+                            kurs_disp = f"{_kb:.2f}" if _kb else f"{row['Fair']:.2f}✦"
+                            st.markdown(f"💰 {kurs_disp}")
                         with cols[4]:
-                            st.markdown(f"<span style='color:{ev_color};font-weight:bold'>+{row['EV']:.3f}</span>", unsafe_allow_html=True)
+                            st.markdown(f"<span style='color:{ev_color};font-weight:bold'>EV {row['EV']:+.3f}</span>",
+                                        unsafe_allow_html=True)
+                        with cols[5]:
+                            if _ks:
+                                st.markdown(f"<span style='color:#4CAF50;font-weight:bold'>🏦 {_ks:.0f} zł</span>",
+                                            unsafe_allow_html=True)
+                            else:
+                                st.markdown("<span style='color:#444'>–</span>", unsafe_allow_html=True)
                         st.divider()
                 else:
                     st.info("Brak value bets w tej kolejce")
@@ -2260,6 +2311,67 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                           delta=f"{_roi_total:+.1f}%",
                           delta_color="normal" if _roi_total >= 0 else "inverse")
                 st.caption(f"Na podstawie {len(_eq_df)} typów 1X2 z wynikami")
+
+        # ── Edge Distribution (EV histogram) ─────────────────────────────
+        _con_edge = sqlite3.connect(DB_FILE)
+        _edge_df  = pd.read_sql_query(
+            """SELECT p_model, fair_odds, trafione, rynek
+               FROM zdarzenia
+               WHERE liga=? AND trafione IS NOT NULL AND fair_odds IS NOT NULL AND fair_odds > 1""",
+            _con_edge, params=(wybrana_liga,))
+        _con_edge.close()
+
+        if len(_edge_df) >= 10:
+            _edge_df = _edge_df.copy()
+            # EV = p_model * fair_odds - 1
+            _edge_df["ev"] = _edge_df["p_model"] * _edge_df["fair_odds"] - 1
+            # Podziel na buckety
+            _ev_bins  = [-1.0, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20, 0.30, 2.0]
+            _ev_labs  = ["< -10%", "-10–5%", "-5–0%", "0–5%", "5–10%", "10–20%", "20–30%", "> 30%"]
+            _edge_df["bucket"] = pd.cut(_edge_df["ev"], bins=_ev_bins, labels=_ev_labs)
+            _bkt_grp  = _edge_df.groupby("bucket", observed=True).agg(
+                n=("ev", "count"),
+                hit_rate=("trafione", "mean"),
+                total_pnl=("ev", lambda x: (
+                    sum((_edge_df.loc[x.index, "fair_odds"] - 1)
+                        .where(_edge_df.loc[x.index, "trafione"] == 1, -1))
+                ))
+            ).reset_index()
+
+            st.divider()
+            st.markdown("**📊 Edge Distribution – skąd pochodzi zysk?**")
+            st.caption("Jeśli większość PnL pochodzi z bucketów EV 5-20% → stabilny system. Jeśli z > 30% → uważaj na małą próbkę.")
+
+            _ed_rows = []
+            for _, bk in _bkt_grp.iterrows():
+                if bk["n"] == 0: continue
+                pnl = bk["total_pnl"]
+                pnl_c = "#4CAF50" if pnl > 0 else "#F44336"
+                bar_w = min(int(abs(pnl) / max(_bkt_grp["total_pnl"].abs().max(), 0.01) * 80), 80)
+                bar_c = "#4CAF50" if pnl > 0 else "#F44336"
+                hr = bk["hit_rate"]
+                _ed_rows.append(
+                    f"<tr style='border-bottom:1px solid #1a1a2e'>"
+                    f"<td style='padding:5px 10px;color:#aaa;font-size:0.84em'>{bk['bucket']}</td>"
+                    f"<td style='padding:5px 8px;text-align:center;color:#666'>{int(bk['n'])}</td>"
+                    f"<td style='padding:5px 8px;text-align:center;color:#888'>{hr:.0%}</td>"
+                    f"<td style='padding:5px 8px'>"
+                    f"<div style='display:flex;align-items:center;gap:6px'>"
+                    f"<div style='background:{bar_c};width:{bar_w}px;height:8px;border-radius:2px'></div>"
+                    f"<span style='color:{pnl_c};font-weight:bold;font-size:0.84em'>{pnl:+.1f} j</span>"
+                    f"</div></td>"
+                    f"</tr>"
+                )
+            st.markdown(
+                f"<div style='border-radius:8px;border:1px solid #2a2a3a;overflow:hidden'>"
+                f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
+                f"<thead><tr style='background:#1e1e2e;color:#555;font-size:0.72em;text-transform:uppercase'>"
+                f"<th style='padding:6px 10px;text-align:left'>EV bucket</th>"
+                f"<th style='padding:6px 8px;text-align:center'>N typów</th>"
+                f"<th style='padding:6px 8px;text-align:center'>Hit Rate</th>"
+                f"<th style='padding:6px 8px;text-align:left'>PnL (j)</th>"
+                f"</tr></thead><tbody>{''.join(_ed_rows)}</tbody></table></div>",
+                unsafe_allow_html=True)
 
         stats_df = statystyki_skutecznosci(wybrana_liga)
 
