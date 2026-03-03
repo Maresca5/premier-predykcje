@@ -240,6 +240,7 @@ TEAM_NAME_MAP = {
     "Arsenal":                      "Arsenal",
     "Chelsea":                      "Chelsea",
     "Liverpool":                    "Liverpool",
+"Leeds United": "Leeds",
     "Everton":                      "Everton",
     "Aston Villa":                  "Aston Villa",
     "Crystal Palace":               "Crystal Palace",
