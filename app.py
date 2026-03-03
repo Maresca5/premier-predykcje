@@ -614,12 +614,22 @@ SHRINK_ALPHA  = 0.25
 PROG_PEWNY    = 0.55
 PROG_PODWOJNA = 0.55
 
-def _get_shrink(csv_code: str) -> float:
-    return KALIBRACJA_PER_LIGA.get(csv_code, SHRINK_ALPHA)
+def _get_shrink(csv_code: str, n_train: int = 200) -> float:
+    """
+    Dynamiczny shrinkage: przy malej liczbie meczow w bazie shrinkujemy mocniej.
+    Formula: shrink = base + bonus * (1 - min(n_train, N_FULL) / N_FULL)
+    Przy n_train=0  -> base + 0.20 (max ostroznosc)
+    Przy n_train=150 -> base + 0.00 (pelna kalibracja)
+    """
+    N_FULL   = 150   # po ilu meczach shrinkage osiaga wartosc docelowa
+    BONUS    = 0.20  # maksymalny dodatek na poczatku sezonu
+    base     = KALIBRACJA_PER_LIGA.get(csv_code, SHRINK_ALPHA)
+    dynamic  = BONUS * max(0.0, 1.0 - min(n_train, N_FULL) / N_FULL)
+    return float(np.clip(base + dynamic, 0.0, 0.85))
 
 def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float,
-                                csv_code: str = "E0") -> tuple:
-    a = _get_shrink(csv_code)
+                                csv_code: str = "E0", n_train: int = 200) -> tuple:
+    a = _get_shrink(csv_code, n_train)
     p_h = (1-a)*p_home + a/3
     p_d = (1-a)*p_draw + a/3
     p_a = (1-a)*p_away + a/3
@@ -627,8 +637,9 @@ def kalibruj_prawdopodobienstwa(p_home: float, p_draw: float, p_away: float,
     return p_h/s, p_d/s, p_a/s
 
 def wybierz_typ(p_home: float, p_draw: float, p_away: float,
-                csv_code: str = "E0") -> tuple:
-    p_home, p_draw, p_away = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away, csv_code)
+                csv_code: str = "E0", n_train: int = 200) -> tuple:
+    p_home, p_draw, p_away = kalibruj_prawdopodobienstwa(
+        p_home, p_draw, p_away, csv_code, n_train)
     p_1x = p_home + p_draw; p_x2 = p_away + p_draw
     if p_home >= PROG_PEWNY: return "1",  p_home
     if p_away >= PROG_PEWNY: return "2",  p_away
@@ -637,6 +648,59 @@ def wybierz_typ(p_home: float, p_draw: float, p_away: float,
     probs = {"1": p_home, "X": p_draw, "2": p_away}
     t = max(probs, key=probs.get)
     return t, probs[t]
+
+# ── Market Noise & Kelly helpers ──────────────────────────────────────
+MARKET_NOISE_MAX = 0.25
+KELLY_FRACTION   = 0.25
+KELLY_BANKROLL_DEFAULT = 1000.0
+
+def market_noise_check(p_model, p_impl):
+    diff = abs(p_model - p_impl)
+    noise = diff > MARKET_NOISE_MAX
+    kierunek = "Model wyzej niz rynek" if p_model > p_impl else "Rynek wyzej niz model"
+    kolor = "#F44336" if noise else ("#FF9800" if diff > 0.15 else "#4CAF50")
+    zgodnosc = max(0.0, 1.0 - diff / MARKET_NOISE_MAX)
+    return {"noise": noise, "diff": diff, "kierunek": kierunek,
+            "kolor": kolor, "zgodnosc_pct": zgodnosc}
+
+def kelly_stake(p_model, kurs_buk, bankroll=KELLY_BANKROLL_DEFAULT, fraction=KELLY_FRACTION):
+    try:
+        b = kurs_buk - 1.0
+        q = 1.0 - p_model
+        if b <= 0 or p_model <= 0 or p_model >= 1:
+            return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,"safe":False}
+        f_full = max(0.0, (p_model * b - q) / b)
+        f_frac = f_full * fraction
+        stake  = round(bankroll * f_frac, 2)
+        ev_puu = p_model * b - q
+        return {"f_full":round(f_full,4),"f_frac":round(f_frac,4),
+                "stake_pln":stake,"ev_per_unit":round(ev_puu,4),
+                "safe": f_frac > 0 and ev_puu > 0}
+    except Exception:
+        return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,"safe":False}
+
+def due_to_score_flag(team, srednie_df, historical):
+    try:
+        if "SOT (dom)" not in srednie_df.columns or team not in srednie_df.index:
+            return None
+        sot_d = float(srednie_df.loc[team, "SOT (dom)"])
+        sot_w = float(srednie_df.loc[team, "SOT (wyjazd)"])
+        sot_avg = (sot_d + sot_w) / 2
+        if np.isnan(sot_avg): return None
+        mecze_t = historical[(historical["HomeTeam"]==team)|(historical["AwayTeam"]==team)].tail(3)
+        if len(mecze_t) < 3: return None
+        gole = [int(m["FTHG"]) if m["HomeTeam"]==team else int(m["FTAG"])
+                for _, m in mecze_t.iterrows()]
+        avg_g = sum(gole)/len(gole)
+        exp_g = sot_avg * 0.30
+        if avg_g < exp_g * 0.60:
+            return {"active":True,"sot_avg":round(sot_avg,1),"gole_last3":gole,
+                    "avg_gole":round(avg_g,2),"expected":round(exp_g,2),
+                    "deficit":round(exp_g-avg_g,2),
+                    "msg":f"SOT avg {sot_avg:.1f} → tylko {avg_g:.1f} gola/mecz (ost.3). Oczekiwane odbicie."}
+    except Exception:
+        pass
+    return None
 
 def wybierz_wynik(M: np.ndarray, lam_h: float, lam_a: float) -> tuple:
     idx_max = np.unravel_index(M.argmax(), M.shape)
@@ -670,7 +734,7 @@ def confidence_score(p_home: float, p_draw: float, p_away: float) -> tuple:
 def fair_odds(p: float) -> float:
     return round(1 / p, 2) if 0 < p <= 1 else 999.0
 
-def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13, csv_code: str = "E0") -> dict:
+def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13, csv_code: str = "E0", n_train: int = 200) -> dict:
     max_gole = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
     M = dixon_coles_adj(
         np.outer(poisson.pmf(range(max_gole), lam_h),
@@ -681,8 +745,8 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13, csv_code: st
     p_draw = float(np.trace(M))
     p_away = float(np.triu(M, 1).sum())
     wynik_h, wynik_a, p_exact = wybierz_wynik(M, lam_h, lam_a)
-    p_home_cal, p_draw_cal, p_away_cal = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away, csv_code)
-    typ, p_typ = wybierz_typ(p_home, p_draw, p_away, csv_code)
+    p_home_cal, p_draw_cal, p_away_cal = kalibruj_prawdopodobienstwa(p_home, p_draw, p_away, csv_code, n_train)
+    typ, p_typ = wybierz_typ(p_home, p_draw, p_away, csv_code, n_train)
     conf_level, conf_emoji, conf_opis = confidence_score(p_home_cal, p_draw_cal, p_away_cal)
     ent = entropy_meczu(p_home_cal, p_draw_cal, p_away_cal)
     ch_label, ch_emoji, ch_pct = chaos_label(ent)
@@ -696,6 +760,8 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13, csv_code: st
         "conf_level": conf_level, "conf_emoji": conf_emoji, "conf_opis": conf_opis,
         "entropy": ent, "chaos_label": ch_label, "chaos_emoji": ch_emoji, "chaos_pct": ch_pct,
         "macierz": M,
+        "shrink_uzyte": _get_shrink(csv_code, n_train),
+        "n_train": n_train,
     }
 
 # ===========================================================================
@@ -1298,6 +1364,18 @@ if _OA_OK and _oa_key:
 elif not _OA_OK:
     st.sidebar.caption("ℹ️ Plik `odds_api.py` nie znaleziony.")
 
+# ── Kelly Bankroll input ───────────────────────────────────────────
+st.sidebar.divider()
+st.sidebar.markdown("### 💼 Bankroll (Kelly)")
+_br_input = st.sidebar.number_input(
+    "Twój bankroll (zł)", min_value=10.0, max_value=1_000_000.0,
+    value=float(st.session_state.get("bankroll", 1000.0)),
+    step=100.0, key="_br_widget",
+    help="Kwota używana do obliczenia stawki Kelly 1/4")
+st.session_state["bankroll"] = _br_input
+_kelly_info_val = _br_input * 0.005
+st.sidebar.caption(f"Typowa stawka (0.5% Kelly): **{_kelly_info_val:.0f} zł**")
+
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
@@ -1363,7 +1441,11 @@ if not historical.empty:
     # Sidebar: info o danych
     st.sidebar.divider()
     st.sidebar.caption(f"📅 Sezon 2025/26 · {n_biezacy} meczów w bazie")
-    st.sidebar.caption(f"ρ Dixon-Coles: `{rho:.4f}` · w_prev: `{w_prev:.2f}`")
+    _shrink_now = _get_shrink(LIGI[wybrana_liga]["csv_code"], n_biezacy)
+    _shrink_base = KALIBRACJA_PER_LIGA.get(LIGI[wybrana_liga]["csv_code"], SHRINK_ALPHA)
+    _shrink_bonus = _shrink_now - _shrink_base
+    _shrink_info = f"shrink {_shrink_now:.2f}" + (f" (+{_shrink_bonus:.2f} sezón)" if _shrink_bonus > 0.01 else "")
+    st.sidebar.caption(f"ρ Dixon-Coles: `{rho:.4f}` · w_prev: `{w_prev:.2f}` · {_shrink_info}")
     
     if not schedule.empty:
         aktualna_kolejka = get_current_round(schedule)
@@ -1410,7 +1492,7 @@ if not historical.empty:
                         continue
                     
                     lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                    pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
+                    pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                     mecz_str = f"{h} – {a}"
 
                     def _ev(p_val, fo_val):
@@ -1661,7 +1743,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             continue
 
                         lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
-                        pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
+                        pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                         data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
                         kolumna = kol_a if idx % 2 == 0 else kol_b
@@ -1771,6 +1853,17 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     st.caption(f"🟨 **Sędzia:** {sedzia}")
 
                                 # ── Kursy live z The Odds API ────────────
+                                # Due to Score flag
+                                for _dts_team_name, _dts_col in [(h,"dom"),(a,"wyjazd")]:
+                                    _dts = due_to_score_flag(_dts_team_name, srednie_df, historical)
+                                    if _dts and _dts.get("active"):
+                                        st.markdown(
+                                            f"<div style='background:#1a1200;border:1px solid #FF9800;"
+                                            f"border-radius:6px;padding:6px 12px;margin:3px 0;"
+                                            f"font-size:0.79em'>🎯 <b>Due to Score</b> – "
+                                            f"<b>{_dts_team_name}</b>: {_dts['msg']}</div>",
+                                            unsafe_allow_html=True)
+
                                 if _OA_OK and _oa_key and _oa_cached:
                                     _o = _oa.znajdz_kursy(h, a, _oa_cached)
                                     if _o:
@@ -1782,10 +1875,36 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                             _ev_c    = "#4CAF50" if _is_val else ("#FF9800" if _ev_val > -0.02 else "#888")
                                             _bk_lbl  = _o.get("bookmaker","").replace("_"," ").title()
                                             _vbadge  = "&nbsp;🎯 <b>VALUE BET</b>" if _is_val else ""
+
+                                            # Market Noise
+                                            _mn = market_noise_check(pred["p_typ"], _idc)
+                                            if _mn["noise"]:
+                                                st.markdown(
+                                                    f"<div style='background:#1a0000;border:1px solid #F44336;"
+                                                    f"border-radius:5px;padding:4px 10px;margin:3px 0;"
+                                                    f"font-size:0.76em;color:#F44336'>"
+                                                    f"⚠️ <b>Market Noise</b> – różnica modelu vs rynek: "
+                                                    f"<b>{_mn['diff']:.0%}</b> · {_mn['kierunek']}. "
+                                                    f"Sprawdź skład/kontuzje!</div>",
+                                                    unsafe_allow_html=True)
+                                            elif _mn["diff"] > 0.15:
+                                                st.markdown(
+                                                    f"<div style='font-size:0.74em;color:#FF9800;margin:2px 0'>"
+                                                    f"⚠️ Różnica {_mn['diff']:.0%} – sprawdź aktualności</div>",
+                                                    unsafe_allow_html=True)
+
+                                            # Zgodnosc z rynkiem pasek
+                                            _zgod_pct = int(_mn["zgodnosc_pct"] * 100)
+                                            _zgod_c   = _mn["kolor"]
+
+                                            # Kelly
+                                            _bankroll = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
+                                            _kelly = kelly_stake(pred["p_typ"], _kdc, bankroll=_bankroll)
+
                                             st.markdown(
                                                 f"<div style='background:#0a1628;border:1px solid "
                                                 f"{'#2a6b2a' if _is_val else '#1e2a3a'};"
-                                                f"border-radius:8px;padding:9px 14px;margin:6px 0'>"
+                                                f"border-radius:8px;padding:9px 14px;margin:4px 0'>"
                                                 f"<div style='font-size:0.74em;color:#555;margin-bottom:4px'>"
                                                 f"📊 {_bk_lbl} — kursy live</div>"
                                                 f"<div style='display:flex;justify-content:space-around;margin-bottom:5px'>"
@@ -1802,8 +1921,27 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                 f"Buk: <b>{_kdc:.2f}</b> | "
                                                 f"Edge: <span style='color:{_ev_c}'><b>{_edge:+.1%}</b></span> | "
                                                 f"<span style='color:{_ev_c}'><b>EV {_ev_val:+.1%}</b></span>"
-                                                f"{_vbadge}</div></div>",
+                                                f"{_vbadge}</div>"
+                                                f"<div style='margin-top:5px'>"
+                                                f"<div style='font-size:0.68em;color:#555;margin-bottom:2px'>Zgodność z rynkiem</div>"
+                                                f"<div style='background:#222;border-radius:3px;height:4px'>"
+                                                f"<div style='background:{_zgod_c};width:{_zgod_pct}%;"
+                                                f"height:4px;border-radius:3px'></div></div></div>"
+                                                f"</div>",
                                                 unsafe_allow_html=True)
+
+                                            if _is_val and _kelly["safe"]:
+                                                st.markdown(
+                                                    f"<div style='background:#001a0a;border:1px solid #2a6b2a;"
+                                                    f"border-radius:5px;padding:5px 10px;margin:3px 0;"
+                                                    f"font-size:0.82em'>"
+                                                    f"💰 <b>Kelly 1/4</b>: postaw "
+                                                    f"<b style='color:#4CAF50'>{_kelly['stake_pln']:.0f} zł</b>"
+                                                    f" ({_kelly['f_frac']:.1%} bankrollu) · "
+                                                    f"EV/jedn.: <b style='color:#4CAF50'>{_kelly['ev_per_unit']:+.3f}</b>"
+                                                    f"</div>",
+                                                    unsafe_allow_html=True)
+
                                 elif _OA_OK and _oa_key and not _oa_cached:
                                     st.caption("📊 Brak kursów — kliknij 'Odśwież kursy' w sidebarze.")
 
@@ -1857,7 +1995,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         if h_s not in srednie_df.index or a_s not in srednie_df.index:
                             continue
                         lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
-                        pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
+                        pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                         mecz_str_s = f"{h_s} – {a_s}"
                         zapisz_zdarzenia(wybrana_liga, int(aktualna_kolejka), mecz_str_s, h_s, a_s,
                                          "1X2", pred_s["typ"], 0.0, pred_s["p_typ"], pred_s["fo_typ"])
@@ -1879,7 +2017,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             if h_s not in srednie_df.index or a_s not in srednie_df.index:
                                 continue
                             lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
-                            pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"])
+                            pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                             mecz_str_s = f"{h_s} – {a_s}"
                             zapisz_zdarzenia(wybrana_liga, int(aktualna_kolejka), mecz_str_s, h_s, a_s,
                                              "1X2", pred_s["typ"], 0.0, pred_s["p_typ"], pred_s["fo_typ"])
@@ -2053,6 +2191,47 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     unsafe_allow_html=True
                 )
                 st.caption("⏳ = predykcje zapisane, wyniki jeszcze nie dostępne w football-data.co.uk")
+
+        # ── Equity Curve ──────────────────────────────────────────────────
+        _con_eq = sqlite3.connect(DB_FILE)
+        _eq_df  = pd.read_sql_query(
+            """SELECT kolejnosc, trafione, p_model, fair_odds
+               FROM zdarzenia
+               WHERE liga=? AND rynek='1X2' AND trafione IS NOT NULL
+               ORDER BY kolejnosc, id""",
+            _con_eq, params=(wybrana_liga,))
+        _con_eq.close()
+
+        if len(_eq_df) >= 3:
+            _eq_df = _eq_df.copy()
+            # PnL per typ: trafiony → zysk = fair_odds - 1, chybiony → -1
+            _eq_df["pnl"] = _eq_df.apply(
+                lambda r: r["fair_odds"] - 1 if r["trafione"] == 1 else -1, axis=1)
+            _eq_df["kapital"] = 1000 + _eq_df["pnl"].cumsum() * (1000 / len(_eq_df) * 0)
+            # Znormalizowana equity: startujemy od 1000, każdy typ = 1 jednostka (flat)
+            _eq_df["kapital"] = 1000.0
+            _running = 1000.0
+            _kap_vals = []
+            for _, _r in _eq_df.iterrows():
+                _running += _r["pnl"]
+                _kap_vals.append(round(_running, 2))
+            _eq_df["kapital"] = _kap_vals
+            _final_kap = _kap_vals[-1]
+            _roi_total = (_final_kap - 1000) / 1000 * 100
+            _kap_color = "#4CAF50" if _final_kap >= 1000 else "#F44336"
+
+            st.markdown("**📈 Equity Curve (flat 1 jednostka / typ)**")
+            _ec1, _ec2 = st.columns([3, 1])
+            with _ec1:
+                _chart_eq = _eq_df[["kapital"]].reset_index(drop=True)
+                _chart_eq.index.name = "Typ #"
+                st.line_chart(_chart_eq, height=200, color=_kap_color)
+            with _ec2:
+                st.metric("Start", "1 000 zł")
+                st.metric("Teraz", f"{_final_kap:.0f} zł",
+                          delta=f"{_roi_total:+.1f}%",
+                          delta_color="normal" if _roi_total >= 0 else "inverse")
+                st.caption(f"Na podstawie {len(_eq_df)} typów 1X2 z wynikami")
 
         stats_df = statystyki_skutecznosci(wybrana_liga)
 
