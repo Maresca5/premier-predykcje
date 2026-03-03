@@ -262,9 +262,14 @@ def _pobierz_csv(league_code: str, sezon: str) -> pd.DataFrame:
         df["total_gole"]   = df["FTHG"] + df["FTAG"]
         df["total_kartki"] = df["HY"] + df["AY"] + (df["HR"] + df["AR"]) * 2
         df["total_rozne"]  = df["HC"] + df["AC"]
-        # SOT dostępne tylko gdy obie kolumny mają dane
         df["HST"] = pd.to_numeric(df["HST"], errors="coerce")
         df["AST"] = pd.to_numeric(df["AST"], errors="coerce")
+        # Kursy bukmacherów – zachowaj B365 i Pinnacle do analizy ROI
+        for col in ["B365H","B365D","B365A","PSH","PSD","PSA","BbAvH","BbAvD","BbAvA"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            else:
+                df[col] = np.nan
         return df.sort_values("Date")
     except Exception:
         return pd.DataFrame()
@@ -2144,6 +2149,29 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
     # =========================================================================
     with tab4:
         st.subheader("📈 Skuteczność modelu per rynek")
+        # KPI bar – metryki globalne na samej górze
+        _mg_top = metryki_globalne(wybrana_liga)
+        if _mg_top:
+            _kpi1, _kpi2, _kpi3, _kpi4, _kpi5 = st.columns(5)
+            _con_kpi = sqlite3.connect(DB_FILE)
+            _kpi_row = _con_kpi.execute(
+                "SELECT COUNT(*), SUM(trafione) FROM zdarzenia WHERE liga=? AND trafione IS NOT NULL AND rynek='1X2'",
+                (wybrana_liga,)).fetchone()
+            _con_kpi.close()
+            _kpi_n    = int(_kpi_row[0]) if _kpi_row and _kpi_row[0] else 0
+            _kpi_traf = int(_kpi_row[1]) if _kpi_row and _kpi_row[1] else 0
+            _kpi_hit  = _kpi_traf/_kpi_n if _kpi_n else 0
+            _kpi1.metric("🏆 Typów 1X2", _kpi_n)
+            _kpi2.metric("✅ Trafione",  _kpi_traf)
+            _kpi3.metric("🎯 Hit Rate",  f"{_kpi_hit:.1%}",
+                         delta_color="normal" if _kpi_hit>=0.60 else "inverse")
+            _kpi4.metric("📐 Brier ↓",   f"{_mg_top['brier']:.4f}",
+                         delta=f"BSS {_mg_top['bss']:+.3f}",
+                         delta_color="normal" if _mg_top['bss']>0 else "inverse")
+            _kpi5.metric("🎯 ECE ↓",     f"{_mg_top['ece']:.4f}",
+                         delta="dobrze" if _mg_top['ece']<0.05 else "wymaga uwagi",
+                         delta_color="normal" if _mg_top['ece']<0.05 else "inverse")
+            st.divider()
 
         # Pokaz dane per kolejka – historia nie znika, grupuje sie automatycznie
         init_db()
@@ -2398,8 +2426,14 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
         st.caption("Kalibracja: czy model mówi 65% → trafia ~65%? Rolling: jak ewoluuje jakość modelu w czasie.")
 
         st.markdown("### 📈 Rolling Performance (okno 50 zdarzeń)")
-        okno_r = st.slider("Rozmiar okna rolling", 20, 100, 50, 10, key="roll_win")
-        roll_df = rolling_stats(wybrana_liga, okno=okno_r)
+        rk1, rk2 = st.columns(2)
+        with rk1:
+            okno_r = st.slider("Okno rolling (duże)", 20, 100, 50, 10, key="roll_win")
+        with rk2:
+            okno_short = st.slider("Okno rolling (krótkie)", 5, 25, 12, 1, key="roll_win_short",
+                                   help="Krótkie okno (10-15) pokazuje szybkie zmiany skuteczności")
+        roll_df       = rolling_stats(wybrana_liga, okno=okno_r)
+        roll_df_short = rolling_stats(wybrana_liga, okno=okno_short)
 
         if not roll_df.empty:
             rc1, rc2 = st.columns(2)
@@ -2428,6 +2462,26 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
         else:
             st.info(f"Rolling dostępny po min. {okno_r//2} zdarzeniach z wynikami.")
 
+        # Krótkie okno rolling – szybkie zmiany formy modelu
+        if not roll_df_short.empty:
+            st.divider()
+            st.markdown(f"**🔍 Hit Rate rolling krótkie (okno {okno_short})** – szybkie zmiany skuteczności")
+            _short1, _short2 = st.columns([3, 1])
+            with _short1:
+                _chart_short = roll_df_short[["idx","hit_roll","p_roll"]].rename(
+                    columns={"idx":"Zdarzenie","hit_roll":"Hit Rate","p_roll":"P model"}
+                ).set_index("Zdarzenie")
+                st.line_chart(_chart_short, height=160)
+            with _short2:
+                _last_hit_s = roll_df_short["hit_roll"].iloc[-1]
+                _last_p_s   = roll_df_short["p_roll"].iloc[-1]
+                _gap_s      = _last_hit_s - _last_p_s
+                _trend_dir  = "📈" if _gap_s > 0.03 else ("📉" if _gap_s < -0.03 else "➡️")
+                st.metric("Hit Rate", f"{_last_hit_s:.1%}",
+                          delta=f"{_gap_s:+.1%} vs model",
+                          delta_color="normal" if _gap_s >= 0 else "inverse")
+                st.caption(f"{_trend_dir} P model: {_last_p_s:.1%}")
+
         bpk_df = brier_per_kolejka(wybrana_liga)
         if not bpk_df.empty and len(bpk_df) >= 2:
             st.divider()
@@ -2442,8 +2496,30 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                        f"Najgorsza: **{int(worst_k)}** ({bpk_df['brier'].max():.4f})")
 
         st.divider()
-        st.markdown("### 🎯 Reliability Curve")
+        st.markdown("### 🎯 Confidence Calibration")
+        st.caption("Czy model mówi 65% → trafia ~65%? Każdy wiersz to 'bucket' zdarzeń o podobnym prawdopodobieństwie.")
         kal_df = kalibracja_modelu(wybrana_liga if wybrana_liga != "Wszystkie" else None)
+        # Minimalna próbka
+        _n_total_kal = 0
+        _con_kal_n = sqlite3.connect(DB_FILE)
+        _row_kal_n = _con_kal_n.execute(
+            "SELECT COUNT(*) FROM zdarzenia WHERE liga=? AND trafione IS NOT NULL",
+            (wybrana_liga,)).fetchone()
+        _con_kal_n.close()
+        _n_total_kal = _row_kal_n[0] if _row_kal_n else 0
+        _min_wiarygodne = 300
+        _prog_kal = min(_n_total_kal / _min_wiarygodne, 1.0)
+        _prog_c = "#4CAF50" if _prog_kal >= 1.0 else ("#FF9800" if _prog_kal >= 0.5 else "#F44336")
+        st.markdown(
+            f"<div style='margin-bottom:8px'>"
+            f"<div style='font-size:0.78em;color:#888;margin-bottom:3px'>"
+            f"Próbka do wiarygodnej kalibracji: "
+            f"<b style='color:{_prog_c}'>{_n_total_kal}/{_min_wiarygodne} zdarzeń "
+            f"({_prog_kal:.0%})</b></div>"
+            f"<div style='background:#333;border-radius:3px;height:5px'>"
+            f"<div style='background:{_prog_c};width:{int(_prog_kal*100)}%;height:5px;border-radius:3px'></div>"
+            f"</div></div>",
+            unsafe_allow_html=True)
         
         if not kal_df.empty:
             kal_df = kal_df.dropna(subset=["skutecznosc"])
@@ -2451,27 +2527,41 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             rows_k = []
             for _, rk in kal_df.iterrows():
                 diff = rk["rozbieznosc"]
-                diff_col = "#4CAF50" if abs(diff) < 0.05 else ("#FF9800" if abs(diff) < 0.12 else "#F44336")
+                p_m  = rk["p_srednia"]
+                hit  = rk["skutecznosc"]
+                n    = int(rk["liczba"])
+                diff_col  = "#4CAF50" if abs(diff) < 0.05 else ("#FF9800" if abs(diff) < 0.12 else "#F44336")
                 diff_icon = "✅" if abs(diff) < 0.05 else ("⚠️" if abs(diff) < 0.12 else "❌")
+                # Wizualny pasek: model (niebieski) vs hit rate (zielony)
+                bar_model = int(p_m * 100)
+                bar_hit   = int(hit * 100) if hit else 0
+                bar_html  = (
+                    f"<div style='position:relative;background:#1a1a2e;border-radius:3px;height:12px;width:120px;overflow:hidden'>"
+                    f"<div style='position:absolute;background:#2196F3;opacity:0.5;height:12px;width:{bar_model}%'></div>"
+                    f"<div style='position:absolute;background:#4CAF50;opacity:0.8;height:12px;width:{bar_hit}%'>"
+                    f"</div></div>"
+                )
                 rows_k.append(
-                    f"<tr>"
-                    f"<td style='padding:6px 10px;font-weight:bold'>{rk['przedzial']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{int(rk['liczba'])}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#2196F3'>{rk['p_srednia']:.1%}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#4CAF50'>{rk['skutecznosc']:.1%}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:{diff_col};font-weight:bold'>"
+                    f"<tr style='border-bottom:1px solid #1a1a2e'>"
+                    f"<td style='padding:7px 10px;font-weight:bold;color:#ddd'>{rk['przedzial']}</td>"
+                    f"<td style='padding:7px 10px;text-align:center;color:#666'>{n}</td>"
+                    f"<td style='padding:7px 6px'>{bar_html}</td>"
+                    f"<td style='padding:7px 8px;text-align:center;color:#2196F3;font-size:0.88em'>{p_m:.1%}</td>"
+                    f"<td style='padding:7px 8px;text-align:center;color:#4CAF50;font-size:0.88em'>{hit:.1%}</td>"
+                    f"<td style='padding:7px 10px;text-align:center;color:{diff_col};font-weight:bold'>"
                     f"{diff_icon} {diff:+.1%}</td>"
                     f"</tr>"
                 )
             st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.78em;text-transform:uppercase'>"
-                f"<th style='padding:8px 10px;text-align:left'>Przedział P</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Typów</th>"
-                f"<th style='padding:8px 10px;text-align:center'>P model</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Hit Rate</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Rozbieżność</th>"
+                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a3a'>"
+                f"<table style='width:100%;border-collapse:collapse;font-size:0.86em'>"
+                f"<thead><tr style='background:#1e1e2e;color:#666;font-size:0.74em;text-transform:uppercase'>"
+                f"<th style='padding:7px 10px;text-align:left'>Bucket P</th>"
+                f"<th style='padding:7px 10px;text-align:center'>N</th>"
+                f"<th style='padding:7px 10px;text-align:left'>Model 🔵 / Hit 🟢</th>"
+                f"<th style='padding:7px 8px;text-align:center'>P model</th>"
+                f"<th style='padding:7px 8px;text-align:center'>Hit Rate</th>"
+                f"<th style='padding:7px 10px;text-align:center'>Δ</th>"
                 f"</tr></thead><tbody>{''.join(rows_k)}</tbody></table></div>",
                 unsafe_allow_html=True,
             )
@@ -2703,6 +2793,19 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                               delta_color="normal" if summ["bss"]>0 else "inverse")
                     m4.metric("ROI (fair)",    f"{summ['roi_pct']:+.1f}%",
                               delta_color="normal" if summ["roi_pct"]>0 else "inverse")
+                    # ROI po realnych kursach (jeśli dostępne w DB)
+                    _roi_ps   = summ.get("roi_ps_pct")
+                    _roi_b365 = summ.get("roi_b365_pct")
+                    if _roi_ps is not None or _roi_b365 is not None:
+                        _rc1, _rc2 = st.columns(2)
+                        if _roi_ps is not None:
+                            _rc1.metric("ROI Pinnacle", f"{_roi_ps:+.1f}%",
+                                        help="ROI po kursach Pinnacle (DC-corrected, z marżą ~2%)",
+                                        delta_color="normal" if _roi_ps>0 else "inverse")
+                        if _roi_b365 is not None:
+                            _rc2.metric("ROI Bet365", f"{_roi_b365:+.1f}%",
+                                        help="ROI po kursach Bet365 (DC-corrected, z marżą ~5%)",
+                                        delta_color="normal" if _roi_b365>0 else "inverse")
                     m5.metric("Kolejek",       summ["per_kolejka"]["kolejka"].max()
                                                if not summ["per_kolejka"].empty else "–")
 
