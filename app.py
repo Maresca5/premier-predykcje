@@ -1521,7 +1521,6 @@ if not historical.empty:
                         _br_t2 = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
                         _kel = kelly_stake(pred["p_typ"], _kbuk if _kbuk else pred["fo_typ"],
                                            bankroll=_br_t2)
-                        wszystkie_zd[-1] if len(wszystkie_zd) > 0 else None  # guard
                         wszystkie_zd.append({
                             "Mecz": mecz_str,
                             "Rynek": "1X2",
@@ -1580,15 +1579,13 @@ if not historical.empty:
                     st.caption(f"💼 Bankroll: **{_bankroll_t2:.0f} zł** · Kelly 1/4 · ✦ = fair odds (brak live)")
 
                 if _widok == "🎯 Główne (1X2)":
-                    df_rank_view = df_rank[df_rank["Kategoria"] == "1X2"]
+                    df_rank = df_rank[df_rank["Kategoria"] == "1X2"]
                 elif _widok == "⚡ Alternatywne":
-                    df_rank_view = df_rank[df_rank["Kategoria"] != "1X2"]
-                else:
-                    df_rank_view = df_rank
+                    df_rank = df_rank[df_rank["Kategoria"] != "1X2"]
+                # else: Wszystkie - df_rank bez zmian
 
                 # VALUE BETS
                 st.markdown("### 🔥 Value Bets (EV > 0)")
-                df_rank = df_rank_view  # apply view filter
                 value_bets = df_rank[df_rank["EV"] > 0].sort_values("EV", ascending=False)
                 if not value_bets.empty:
                     for _, row in value_bets.head(10).iterrows():
@@ -3041,4 +3038,4 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             st.sidebar.success("Wszystkie zmapowane ✅")
 
 else:
-    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.") 
+    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
