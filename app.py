@@ -1438,31 +1438,6 @@ st.session_state["bankroll"] = _br_input
 _kelly_info_val = _br_input * 0.005
 st.sidebar.caption(f"Typowa stawka (0.5% Kelly): **{_kelly_info_val:.0f} zł**")
 
-# ── Model Sharpness vs Rynek (sidebar) ───────────────────────────────────
-if _OA_OK and _oa_key and _oa_cached and not historical.empty and not schedule.empty:
-    _ms = model_sharpness_vs_rynek(
-        wybrana_liga, _oa_cached, _oa,
-        schedule, srednie_df, srednie_lig, forma_dict,
-        rho, n_biezacy, LIGI[wybrana_liga]["csv_code"])
-    if _ms:
-        st.sidebar.divider()
-        st.sidebar.markdown("### 🎯 Model Sharpness")
-        _ad = _ms["avg_diff"]
-        _sc = "#4CAF50" if 0.05 <= _ad <= 0.15 else ("#FF9800" if _ad < 0.05 else "#F44336")
-        _label = "✅ Sweet Spot" if 0.05 <= _ad <= 0.15 else ("⚠️ Zbyt blisko rynku" if _ad < 0.05 else "⚠️ Zbyt daleko")
-        st.sidebar.markdown(
-            f"<div style='background:#0e1117;border:1px solid #2a2a3a;border-radius:8px;padding:10px'>"
-            f"<div style='font-size:1.3em;font-weight:bold;color:{_sc};text-align:center'>"
-            f"{_ad:.1%}</div>"
-            f"<div style='font-size:0.78em;color:{_sc};text-align:center;margin-bottom:6px'>"
-            f"{_label}</div>"
-            f"<div style='display:flex;justify-content:space-around;font-size:0.72em;color:#666'>"
-            f"<div>🔵 Zbieżne<br><b style='color:#888'>{_ms['aligned']}</b></div>"
-            f"<div>🟢 Sweet<br><b style='color:#4CAF50'>{_ms['sweet']}</b></div>"
-            f"<div>🔴 Noise<br><b style='color:#F44336'>{_ms['noise']}</b></div>"
-            f"</div></div>",
-            unsafe_allow_html=True)
-        st.sidebar.caption("Sweet spot: różnica 5–15% model vs rynek")
 
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
@@ -1542,6 +1517,32 @@ if not historical.empty:
         st.sidebar.progress(pozycja / len(wszystkie_kolejki), 
                            text=f"Kolejka {pozycja}/{len(wszystkie_kolejki)}")
         st.sidebar.info(f"⚽ Aktualna kolejka: **#{aktualna_kolejka}**")
+
+    # ── Model Sharpness vs Rynek (sidebar) – tu historical i srednie_df są dostępne
+    if _OA_OK and _oa_key and _oa_cached and not schedule.empty:
+        _ms = model_sharpness_vs_rynek(
+            wybrana_liga, _oa_cached, _oa,
+            schedule, srednie_df, srednie_lig, forma_dict,
+            rho, n_biezacy, LIGI[wybrana_liga]["csv_code"])
+        if _ms:
+            st.sidebar.divider()
+            st.sidebar.markdown("### 🎯 Model Sharpness")
+            _ad = _ms["avg_diff"]
+            _sc = "#4CAF50" if 0.05 <= _ad <= 0.15 else ("#FF9800" if _ad < 0.05 else "#F44336")
+            _label = "✅ Sweet Spot" if 0.05 <= _ad <= 0.15 else ("⚠️ Zbyt blisko rynku" if _ad < 0.05 else "⚠️ Zbyt daleko")
+            st.sidebar.markdown(
+                f"<div style='background:#0e1117;border:1px solid #2a2a3a;border-radius:8px;padding:10px'>"
+                f"<div style='font-size:1.3em;font-weight:bold;color:{_sc};text-align:center'>"
+                f"{_ad:.1%}</div>"
+                f"<div style='font-size:0.78em;color:{_sc};text-align:center;margin-bottom:6px'>"
+                f"{_label}</div>"
+                f"<div style='display:flex;justify-content:space-around;font-size:0.72em;color:#666'>"
+                f"<div>🔵 Zbieżne<br><b style='color:#888'>{_ms['aligned']}</b></div>"
+                f"<div>🟢 Sweet<br><b style='color:#4CAF50'>{_ms['sweet']}</b></div>"
+                f"<div>🔴 Noise<br><b style='color:#F44336'>{_ms['noise']}</b></div>"
+                f"</div></div>",
+                unsafe_allow_html=True)
+            st.sidebar.caption("Sweet spot: różnica 5–15% model vs rynek")
 
     # TABS
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
