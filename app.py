@@ -1043,6 +1043,63 @@ def metryki_globalne(liga: str = None) -> dict:
         "avg_p": round(float(p.mean()), 3), "hit_rate": round(float(y.mean()), 3),
     }
 
+def model_sharpness_vs_rynek(liga: str, oa_cached: dict, oa_module,
+                              schedule: pd.DataFrame, srednie_df,
+                              srednie_lig: dict, forma_dict: dict,
+                              rho: float, n_biezacy: int, csv_code: str) -> dict:
+    """
+    Liczy agregat rozbieżności model vs rynek dla bieżącej kolejki.
+    Sweet spot: srednia roznica 5-15% – tam leżą pieniądze.
+    """
+    if not oa_cached or schedule.empty or srednie_df.empty:
+        return {}
+    aktualna_k = get_current_round(schedule)
+    mecze_k = schedule[schedule["round"] == aktualna_k]
+    diffs = []
+    sweet = 0
+    noise = 0
+    aligned = 0
+    for _, mecz in mecze_k.iterrows():
+        h = map_nazwa(mecz["home_team"])
+        a = map_nazwa(mecz["away_team"])
+        if h not in srednie_df.index or a not in srednie_df.index:
+            continue
+        try:
+            lh, la, lr, lk, _, lsot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+            pred = predykcja_meczu(lh, la, rho=rho, csv_code=csv_code, n_train=n_biezacy)
+            o = oa_module.znajdz_kursy(h, a, oa_cached)
+            if not o:
+                continue
+            s = 1/o["odds_h"] + 1/o["odds_d"] + 1/o["odds_a"]
+            impl = {"1": (1/o["odds_h"])/s, "X": (1/o["odds_d"])/s, "2": (1/o["odds_a"])/s}
+            # DC implied dla double chances
+            impl["1X"] = impl["1"] + impl["X"]
+            impl["X2"] = impl["X"] + impl["2"]
+            p_impl = impl.get(pred["typ"], 0)
+            diff = abs(pred["p_typ"] - p_impl)
+            diffs.append({"mecz": f"{h}–{a}", "typ": pred["typ"],
+                          "p_model": pred["p_typ"], "p_impl": p_impl, "diff": diff})
+            if diff < 0.05:
+                aligned += 1
+            elif diff <= 0.15:
+                sweet += 1
+            else:
+                noise += 1
+        except Exception:
+            continue
+    if not diffs:
+        return {}
+    avg_diff = sum(d["diff"] for d in diffs) / len(diffs)
+    return {
+        "avg_diff": avg_diff,
+        "n_mecze": len(diffs),
+        "aligned": aligned,   # < 5% – model = rynek
+        "sweet": sweet,       # 5-15% – sweet spot
+        "noise": noise,       # > 15% – za duże różnice
+        "details": diffs,
+    }
+
+
 def rolling_stats(liga: str = None, okno: int = 50) -> pd.DataFrame:
     """Zwraca rolling Brier Score i skuteczność per zdarzenie (posortowane chronologicznie)."""
     init_db()
@@ -1380,6 +1437,32 @@ _br_input = st.sidebar.number_input(
 st.session_state["bankroll"] = _br_input
 _kelly_info_val = _br_input * 0.005
 st.sidebar.caption(f"Typowa stawka (0.5% Kelly): **{_kelly_info_val:.0f} zł**")
+
+# ── Model Sharpness vs Rynek (sidebar) ───────────────────────────────────
+if _OA_OK and _oa_key and _oa_cached and not historical.empty and not schedule.empty:
+    _ms = model_sharpness_vs_rynek(
+        wybrana_liga, _oa_cached, _oa,
+        schedule, srednie_df, srednie_lig, forma_dict,
+        rho, n_biezacy, LIGI[wybrana_liga]["csv_code"])
+    if _ms:
+        st.sidebar.divider()
+        st.sidebar.markdown("### 🎯 Model Sharpness")
+        _ad = _ms["avg_diff"]
+        _sc = "#4CAF50" if 0.05 <= _ad <= 0.15 else ("#FF9800" if _ad < 0.05 else "#F44336")
+        _label = "✅ Sweet Spot" if 0.05 <= _ad <= 0.15 else ("⚠️ Zbyt blisko rynku" if _ad < 0.05 else "⚠️ Zbyt daleko")
+        st.sidebar.markdown(
+            f"<div style='background:#0e1117;border:1px solid #2a2a3a;border-radius:8px;padding:10px'>"
+            f"<div style='font-size:1.3em;font-weight:bold;color:{_sc};text-align:center'>"
+            f"{_ad:.1%}</div>"
+            f"<div style='font-size:0.78em;color:{_sc};text-align:center;margin-bottom:6px'>"
+            f"{_label}</div>"
+            f"<div style='display:flex;justify-content:space-around;font-size:0.72em;color:#666'>"
+            f"<div>🔵 Zbieżne<br><b style='color:#888'>{_ms['aligned']}</b></div>"
+            f"<div>🟢 Sweet<br><b style='color:#4CAF50'>{_ms['sweet']}</b></div>"
+            f"<div>🔴 Noise<br><b style='color:#F44336'>{_ms['noise']}</b></div>"
+            f"</div></div>",
+            unsafe_allow_html=True)
+        st.sidebar.caption("Sweet spot: różnica 5–15% model vs rynek")
 
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
 schedule   = load_schedule(LIGI[wybrana_liga]["file"])
@@ -2604,6 +2687,48 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             st.caption(f"Najlepsza kolejka: **{int(best_k)}** ({bpk_df['brier'].min():.4f}) · "
                        f"Najgorsza: **{int(worst_k)}** ({bpk_df['brier'].max():.4f})")
 
+        # ── Sharpness vs Rynek detail w tab5 ─────────────────────────────────
+        if _OA_OK and _oa_key and _oa_cached and not schedule.empty:
+            _ms5 = model_sharpness_vs_rynek(
+                wybrana_liga, _oa_cached, _oa,
+                schedule, srednie_df, srednie_lig, forma_dict,
+                rho, n_biezacy, LIGI[wybrana_liga]["csv_code"])
+            if _ms5 and _ms5.get("details"):
+                st.divider()
+                st.markdown("### 🎯 Model vs Rynek – Sharpness per mecz")
+                st.caption("Szukasz meczu gdzie różnica 5-15% → tam jest potencjalna przewaga.")
+                _det = sorted(_ms5["details"], key=lambda x: x["diff"], reverse=True)
+                _sh_rows = []
+                for d in _det:
+                    _dc = "#4CAF50" if 0.05 <= d["diff"] <= 0.15 else ("#888" if d["diff"] < 0.05 else "#F44336")
+                    _di = "🟢" if 0.05 <= d["diff"] <= 0.15 else ("🔵" if d["diff"] < 0.05 else "🔴")
+                    _bar = int(min(d["diff"] / 0.25, 1.0) * 100)
+                    _sh_rows.append(
+                        f"<tr style='border-bottom:1px solid #1a1a2e'>"
+                        f"<td style='padding:6px 10px;color:#ccc;font-size:0.83em'>{d['mecz']}</td>"
+                        f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.82em'>{d['typ']}</td>"
+                        f"<td style='padding:6px 8px;text-align:center;color:#2196F3;font-size:0.82em'>{d['p_model']:.0%}</td>"
+                        f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.82em'>{d['p_impl']:.0%}</td>"
+                        f"<td style='padding:6px 8px'>"
+                        f"<div style='display:flex;align-items:center;gap:5px'>"
+                        f"<div style='background:{_dc};width:{_bar}px;height:6px;border-radius:2px;min-width:3px'></div>"
+                        f"<span style='color:{_dc};font-weight:bold;font-size:0.82em'>{_di} {d['diff']:.0%}</span>"
+                        f"</div></td>"
+                        f"</tr>"
+                    )
+                st.markdown(
+                    f"<div style='border-radius:8px;border:1px solid #2a2a3a;overflow:hidden'>"
+                    f"<table style='width:100%;border-collapse:collapse'>"
+                    f"<thead><tr style='background:#1e1e2e;color:#555;font-size:0.72em;text-transform:uppercase'>"
+                    f"<th style='padding:6px 10px;text-align:left'>Mecz</th>"
+                    f"<th style='padding:6px 8px;text-align:center'>Typ</th>"
+                    f"<th style='padding:6px 8px;text-align:center'>P model</th>"
+                    f"<th style='padding:6px 8px;text-align:center'>P rynek</th>"
+                    f"<th style='padding:6px 8px;text-align:left'>Różnica</th>"
+                    f"</tr></thead><tbody>{''.join(_sh_rows)}</tbody></table></div>",
+                    unsafe_allow_html=True)
+                st.caption("🟢 Sweet spot (5-15%) · 🔵 Zbieżne (<5%) · 🔴 Market Noise (>15%)")
+
         st.divider()
         st.markdown("### 🎯 Confidence Calibration")
         st.caption("Czy model mówi 65% → trafia ~65%? Każdy wiersz to 'bucket' zdarzeń o podobnym prawdopodobieństwie.")
@@ -2743,7 +2868,152 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
     # TAB 6 – LABORATORIUM (Bet Builder)
     # =========================================================================
     with tab6:
-        st.subheader("🎛️ Bet Builder – laboratorium modelu")
+        st.subheader("🎛️ Laboratorium modelu")
+
+        # ── Monte Carlo ────────────────────────────────────────────────────────
+        st.markdown("### 🎲 Symulacja Monte Carlo – wyniki kolejki")
+        st.caption("Symulacja 10 000 scenariuszy bieżącej kolejki na podstawie prawdopodobieństw modelu.")
+
+        if not schedule.empty and not srednie_df.empty:
+            _mc_kolejka = get_current_round(schedule)
+            _mc_mecze   = schedule[schedule["round"] == _mc_kolejka]
+
+            # Zbierz predykcje dla wszystkich meczów kolejki
+            _mc_preds = []
+            for _, _mc_m in _mc_mecze.iterrows():
+                _mh = map_nazwa(_mc_m["home_team"])
+                _ma = map_nazwa(_mc_m["away_team"])
+                if _mh not in srednie_df.index or _ma not in srednie_df.index:
+                    continue
+                try:
+                    _mlh, _mla, _mlr, _mlk, _, _mls = oblicz_lambdy(
+                        _mh, _ma, srednie_df, srednie_lig, forma_dict)
+                    _mp = predykcja_meczu(_mlh, _mla, rho=rho,
+                                          csv_code=LIGI[wybrana_liga]["csv_code"],
+                                          n_train=n_biezacy)
+                    _mc_preds.append({
+                        "mecz": f"{_mh}–{_ma}",
+                        "typ": _mp["typ"],
+                        "p_typ": _mp["p_typ"],
+                        "fo_typ": _mp["fo_typ"],
+                    })
+                except Exception:
+                    continue
+
+            _n_min_mc = 5
+            if len(_mc_preds) >= _n_min_mc:
+                N_SIM = 10_000
+                rng   = np.random.default_rng(42)
+
+                # Dla każdego scenariusza: ile typów trafia? jaki łączny PnL (flat)?
+                _mc_hits_all = np.zeros(N_SIM)
+                _mc_pnl_all  = np.zeros(N_SIM)
+                for _mcp in _mc_preds:
+                    _hits = rng.random(N_SIM) < _mcp["p_typ"]
+                    _mc_hits_all += _hits.astype(float)
+                    _mc_pnl_all  += np.where(_hits, _mcp["fo_typ"] - 1, -1)
+
+                _n_typow  = len(_mc_preds)
+                _p_plus   = float((_mc_pnl_all > 0).mean())
+                _p_breakeven = float((_mc_pnl_all >= 0).mean())
+                _exp_hits = float(_mc_hits_all.mean())
+                _exp_pnl  = float(_mc_pnl_all.mean())
+                _p10      = float(np.percentile(_mc_pnl_all, 10))
+                _p90      = float(np.percentile(_mc_pnl_all, 90))
+                _med_hits = float(np.median(_mc_hits_all))
+
+                # Disclaimer próbki
+                _n_hist = n_biezacy
+                _wiarygodne = _n_hist >= 50
+                if not _wiarygodne:
+                    st.warning(
+                        f"⚠️ Tylko {_n_hist} meczów w bazie – symulacja jest orientacyjna. "
+                        f"Wiarygodność rośnie po ~50+ meczach historycznych.")
+
+                # KPI
+                _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+                _plus_c = "normal" if _p_plus >= 0.55 else "inverse"
+                _mc1.metric("🎯 Szansa na plus",   f"{_p_plus:.0%}",
+                            delta_color=_plus_c)
+                _mc2.metric("📊 Oczek. trafione",  f"{_exp_hits:.1f}/{_n_typow}")
+                _mc3.metric("💹 Oczek. PnL (flat)", f"{_exp_pnl:+.2f} j")
+                _mc4.metric("📉 Zakres P10–P90",
+                            f"{_p10:+.1f} / {_p90:+.1f} j",
+                            help="10% najgorszych / 10% najlepszych scenariuszy")
+
+                # Histogram PnL
+                _hist_bins = np.arange(
+                    float(np.floor(_mc_pnl_all.min())),
+                    float(np.ceil(_mc_pnl_all.max())) + 1, 1)
+                _hist_counts, _hist_edges = np.histogram(_mc_pnl_all, bins=_hist_bins)
+                _max_count = _hist_counts.max() if _hist_counts.max() > 0 else 1
+                _bar_h = 60
+                _bar_w_total = 360
+                _n_bars = len(_hist_counts)
+                _bw = max(2, _bar_w_total // max(_n_bars, 1))
+                _svg_w = _n_bars * (_bw + 1) + 60
+                _svg_h = _bar_h + 30
+                _bar_svgs = []
+                for _bi, (_bc, _be) in enumerate(zip(_hist_counts, _hist_edges)):
+                    _bh = int(_bc / _max_count * _bar_h)
+                    _bx = 40 + _bi * (_bw + 1)
+                    _by = _bar_h - _bh + 5
+                    _bc_col = "#4CAF50" if _be >= 0 else "#F44336"
+                    _bar_svgs.append(
+                        f"<rect x='{_bx}' y='{_by}' width='{_bw}' height='{_bh}' "
+                        f"fill='{_bc_col}' fill-opacity='0.8' rx='1'/>"
+                    )
+                # Zero line
+                _zero_x = 40 + int((_n_bars * abs(_hist_edges[0]) /
+                                     (abs(_hist_edges[-1] - _hist_edges[0]) + 0.001)))
+                _zero_x = max(40, min(_zero_x, 40 + _n_bars * (_bw + 1)))
+                _bar_svgs.append(
+                    f"<line x1='{_zero_x}' y1='5' x2='{_zero_x}' y2='{_bar_h + 5}' "
+                    f"stroke='#fff' stroke-width='1.5' stroke-dasharray='3,2' opacity='0.4'/>"
+                    f"<text x='{_zero_x}' y='{_bar_h + 20}' text-anchor='middle' "
+                    f"font-size='9' fill='#555'>0</text>"
+                )
+                _bar_svgs.append(
+                    f"<text x='38' y='{_bar_h + 20}' text-anchor='end' "
+                    f"font-size='9' fill='#555'>{_hist_edges[0]:.0f}</text>"
+                    f"<text x='{40 + _n_bars*(_bw+1)}' y='{_bar_h + 20}' "
+                    f"text-anchor='start' font-size='9' fill='#555'>{_hist_edges[-1]:.0f}j</text>"
+                )
+                st.markdown(
+                    f"<div style='margin:8px 0'>"
+                    f"<div style='font-size:0.78em;color:#666;margin-bottom:4px'>"
+                    f"Rozkład PnL (10 000 scenariuszy) · 🟢 plus · 🔴 minus</div>"
+                    f"<svg width='{_svg_w}' height='{_svg_h}' "
+                    f"style='background:#0e1117;border-radius:6px;display:block'>"
+                    f"{''.join(_bar_svgs)}</svg>"
+                    f"<div style='font-size:0.74em;color:#555;margin-top:3px'>"
+                    f"Szansa na breakeven lub lepiej: <b style='color:#4CAF50'>{_p_breakeven:.0%}</b> · "
+                    f"N symulacji: 10 000 · N typów 1X2: {_n_typow}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True)
+
+                # Per mecz: p_typ i szansa trafienia w MC
+                with st.expander("📋 Szczegóły per mecz", expanded=False):
+                    for _mcp in sorted(_mc_preds, key=lambda x: -x["p_typ"]):
+                        _p_str = f"{_mcp['p_typ']:.0%}"
+                        _p_c = "#4CAF50" if _mcp["p_typ"] >= 0.65 else ("#FF9800" if _mcp["p_typ"] >= 0.58 else "#888")
+                        st.markdown(
+                            f"<div style='display:flex;justify-content:space-between;"
+                            f"padding:4px 0;border-bottom:1px solid #1a1a2e;font-size:0.84em'>"
+                            f"<span style='color:#ccc'>{_mcp['mecz']}</span>"
+                            f"<span style='color:#888'>{_mcp['typ']}</span>"
+                            f"<span style='color:{_p_c};font-weight:bold'>{_p_str}</span>"
+                            f"<span style='color:#555'>fair {_mcp['fo_typ']:.2f}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True)
+            else:
+                st.info(f"Monte Carlo wymaga min. {_n_min_mc} meczów z danymi. "
+                        f"Dostępne: {len(_mc_preds)}/{len(_mc_mecze)}.")
+        else:
+            st.warning("Brak danych harmonogramu.")
+
+        st.divider()
+        st.markdown("### 🔧 Bet Builder – kombinator zdarzeń")
         st.caption("Eksperymentuj z kombinacjami zdarzeń. Nie są to rekomendacje, tylko symulacje.")
 
         c1, c2, c3 = st.columns(3)
