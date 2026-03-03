@@ -2014,7 +2014,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             """SELECT kolejnosc, COUNT(*) as n_typow,
                SUM(CASE WHEN trafione=1 THEN 1 ELSE 0 END) as n_traf,
                AVG(CASE WHEN trafione IS NOT NULL THEN CAST(trafione AS FLOAT) END) as hit_rate,
-               MIN(created_at) as data_kolejki
+               MIN(data) as data_kolejki
                FROM zdarzenia WHERE liga=? AND rynek='1X2'
                GROUP BY kolejnosc ORDER BY kolejnosc""",
             _con_t4, params=(wybrana_liga,)
