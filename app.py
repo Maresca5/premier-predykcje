@@ -241,7 +241,22 @@ def init_db():
             data           TEXT
         )
     """)
-    
+
+    # Tabela bankroll – śledzenie realnego kapitału
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS bankroll (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            data        TEXT NOT NULL,
+            liga        TEXT,
+            kolejnosc   INTEGER,
+            opis        TEXT,
+            kwota       REAL NOT NULL,
+            typ         TEXT DEFAULT 'korekta',
+            kapital_po  REAL,
+            UNIQUE(data, liga, kolejnosc, opis)
+        )
+    """)
+
     con.commit()
     con.close()
 
@@ -707,6 +722,41 @@ def due_to_score_flag(team, srednie_df, historical):
         pass
     return None
 
+# ── Bankroll persistence helpers ─────────────────────────────────────────
+def zapisz_wynik_bankroll(liga: str, kolejnosc: int, opis: str,
+                           kwota: float, typ: str = "wynik") -> None:
+    """Zapisuje zmianę bankrollu (wygrana/przegrana/korekta) do DB."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    try:
+        # Oblicz aktualny kapitał
+        row = con.execute("SELECT kapital_po FROM bankroll ORDER BY id DESC LIMIT 1").fetchone()
+        kapital_przed = float(row[0]) if row else 1000.0
+        kapital_po    = kapital_przed + kwota
+        con.execute(
+            "INSERT OR IGNORE INTO bankroll (data,liga,kolejnosc,opis,kwota,typ,kapital_po) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (datetime.now().strftime("%Y-%m-%d %H:%M"), liga, kolejnosc, opis, kwota, typ, kapital_po)
+        )
+        con.commit()
+    except Exception:
+        pass
+    finally:
+        con.close()
+
+def pobierz_bankroll_history(liga: str = None) -> pd.DataFrame:
+    """Zwraca historię bankrollu z DB."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    q = "SELECT data, liga, kolejnosc, opis, kwota, typ, kapital_po FROM bankroll"
+    params = []
+    if liga:
+        q += " WHERE liga=?"; params.append(liga)
+    q += " ORDER BY id ASC"
+    df = pd.read_sql_query(q, con, params=params)
+    con.close()
+    return df
+
 def wybierz_wynik(M: np.ndarray, lam_h: float, lam_a: float) -> tuple:
     idx_max = np.unravel_index(M.argmax(), M.shape)
     p_max = float(M[idx_max])
@@ -767,6 +817,7 @@ def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13, csv_code: st
         "macierz": M,
         "shrink_uzyte": _get_shrink(csv_code, n_train),
         "n_train": n_train,
+        "ci_half": _get_shrink(csv_code, n_train) * 0.5,
     }
 
 # ===========================================================================
@@ -1544,6 +1595,60 @@ if not historical.empty:
                 unsafe_allow_html=True)
             st.sidebar.caption("Sweet spot: różnica 5–15% model vs rynek")
 
+    # ── Ekran startowy: Najważniejsze okazje kolejki ─────────────────────
+    if not schedule.empty and not srednie_df.empty and _oa_cached:
+        _start_kolejka = get_current_round(schedule)
+        _start_mecze   = schedule[schedule["round"] == _start_kolejka]
+        _start_top = []
+        for _, _sm in _start_mecze.iterrows():
+            _sh = map_nazwa(_sm["home_team"]); _sa = map_nazwa(_sm["away_team"])
+            if _sh not in srednie_df.index or _sa not in srednie_df.index: continue
+            try:
+                _slh, _sla, _slr, _slk, _, _slsot = oblicz_lambdy(
+                    _sh, _sa, srednie_df, srednie_lig, forma_dict)
+                _sp = predykcja_meczu(_slh, _sla, rho=rho,
+                                       csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
+                _so = _oa.znajdz_kursy(_sh, _sa, _oa_cached) if _OA_OK and _oa_key else None
+                _skdc = None
+                if _so:
+                    _skdc, _sidc = _kurs_dc_live(_sp["typ"], _so["odds_h"], _so["odds_d"], _so["odds_a"])
+                _sev = _sp["p_typ"] * (_skdc or _sp["fo_typ"]) - 1
+                _smn = market_noise_check(_sp["p_typ"], _sidc) if _so and _skdc else None
+                _start_top.append({
+                    "mecz": f"{_sh} – {_sa}",
+                    "typ": _sp["typ"], "p": _sp["p_typ"],
+                    "fo": _sp["fo_typ"], "kurs_buk": _skdc,
+                    "ev": _sev, "is_val": _sev >= 0.04,
+                    "noise": _smn["noise"] if _smn else False,
+                    "data": _sm.get("date",""),
+                })
+            except Exception: continue
+        _top_val = sorted([x for x in _start_top if x["is_val"] and not x["noise"]],
+                          key=lambda x: -x["ev"])[:4]
+        if _top_val:
+            st.markdown("---")
+            st.markdown("### 🏆 Najlepsze okazje tej kolejki")
+            _tv_cols = st.columns(len(_top_val))
+            for _tvi, (_tvc, _tv) in enumerate(zip(_tv_cols, _top_val)):
+                _kb = st.session_state.get("bankroll", 1000.0)
+                _kl = kelly_stake(_tv["p"], _tv["kurs_buk"] or _tv["fo"], bankroll=_kb)
+                _kurs_str = f"{_tv['kurs_buk']:.2f}" if _tv["kurs_buk"] else f"{_tv['fo']:.2f}✦"
+                _tvc.markdown(
+                    f"<div style='background:#0a1628;border:2px solid #2a6b2a;"
+                    f"border-radius:10px;padding:12px;text-align:center'>"
+                    f"<div style='font-size:0.74em;color:#888;margin-bottom:4px'>"
+                    f"{str(_tv['data'])[:10] if _tv['data'] else ''}</div>"
+                    f"<div style='font-weight:bold;color:#fff;font-size:0.88em;margin-bottom:6px'>"
+                    f"{_tv['mecz']}</div>"
+                    f"<div style='font-size:1.1em;font-weight:bold;color:#4CAF50'>"
+                    f"{_tv['typ']} @ {_kurs_str}</div>"
+                    f"<div style='font-size:0.82em;color:#aaa;margin-top:4px'>"
+                    f"P model: {_tv['p']:.0%} · EV: <b style='color:#4CAF50'>{_tv['ev']:+.1%}</b></div>"
+                    f"{'<div style="font-size:0.78em;color:#4CAF50;margin-top:3px">💰 Kelly: ' + str(int(_kl['stake_pln'])) + ' zł</div>' if _kl['safe'] else ''}"
+                    f"</div>",
+                    unsafe_allow_html=True)
+            st.markdown("---")
+
     # TABS
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "⚽ Analiza Meczu",
@@ -1915,7 +2020,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 st.markdown(
                                     f"<div style='text-align:center;margin-bottom:4px'>"
                                     f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
-                                    f"<span style='font-size:0.88em;color:#888'>Fair Odds: <b>{pred['fo_typ']:.2f}</b> ({pred['p_typ']:.1%})</span>"
+                                    f"<span style='font-size:0.88em;color:#888'>Fair Odds: <b>{pred['fo_typ']:.2f}</b> "
+                                    f"({pred['p_typ']:.1%}"
+                                    f"{'±' + f"{pred['ci_half']:.0%}" if pred.get('ci_half',0)>0.01 else ''})"
+                                    f"</span>"
                                     f"</div>"
                                     f"<div style='text-align:center;font-size:0.80em;color:{conf_c};margin-bottom:6px'>"
                                     f"{pred['conf_emoji']} <b>{pred['conf_level']}</b> · {pred['conf_opis']}"
@@ -1988,6 +2096,50 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
                                 elif sedzia not in ("Nieznany", "", None):
                                     st.caption(f"🟨 **Sędzia:** {sedzia}")
+
+                                # ── Head-to-Head ─────────────────────────
+                                _h2h = historical[
+                                    ((historical["HomeTeam"]==h) & (historical["AwayTeam"]==a)) |
+                                    ((historical["HomeTeam"]==a) & (historical["AwayTeam"]==h))
+                                ].sort_values("Date", ascending=False).head(5)
+                                if not _h2h.empty:
+                                    with st.expander(f"📜 H2H – ostatnie {len(_h2h)} spotkania", expanded=False):
+                                        _h2h_rows = []
+                                        for _, _hm in _h2h.iterrows():
+                                            _hg = int(_hm["FTHG"]); _ag = int(_hm["FTAG"])
+                                            _hw = _hm["HomeTeam"]; _aw = _hm["AwayTeam"]
+                                            _dt = _hm["Date"].strftime("%d.%m.%Y") if pd.notna(_hm["Date"]) else "?"
+                                            if _hg > _ag:
+                                                _res_c, _res = "#4CAF50", f"{_hg}:{_ag}"
+                                            elif _hg < _ag:
+                                                _res_c, _res = "#F44336", f"{_hg}:{_ag}"
+                                            else:
+                                                _res_c, _res = "#FF9800", f"{_hg}:{_ag}"
+                                            _bold_h = "font-weight:bold" if _hw == h else ""
+                                            _bold_a = "font-weight:bold" if _aw == h else ""
+                                            _h2h_rows.append(
+                                                f"<tr style='border-bottom:1px solid #1a1a2e'>"
+                                                f"<td style='padding:4px 8px;color:#666;font-size:0.78em'>{_dt}</td>"
+                                                f"<td style='padding:4px 8px;color:#ccc;font-size:0.82em;{_bold_h}'>{_hw}</td>"
+                                                f"<td style='padding:4px 8px;text-align:center;color:{_res_c};"
+                                                f"font-weight:bold;font-size:0.88em'>{_res}</td>"
+                                                f"<td style='padding:4px 8px;color:#ccc;font-size:0.82em;{_bold_a}'>{_aw}</td>"
+                                                f"</tr>"
+                                            )
+                                        # Bilans
+                                        _h_wins = sum(1 for _, m in _h2h.iterrows()
+                                                      if (m["HomeTeam"]==h and m["FTHG"]>m["FTAG"]) or
+                                                         (m["AwayTeam"]==h and m["FTAG"]>m["FTHG"]))
+                                        _draws  = sum(1 for _, m in _h2h.iterrows() if m["FTHG"]==m["FTAG"])
+                                        _a_wins = len(_h2h) - _h_wins - _draws
+                                        st.markdown(
+                                            f"<div style='font-size:0.76em;color:#888;margin-bottom:4px'>"
+                                            f"Bilans: <b style='color:#4CAF50'>{h} {_h_wins}W</b> · "
+                                            f"<b style='color:#FF9800'>{_draws}D</b> · "
+                                            f"<b style='color:#F44336'>{_a_wins}W {a}</b></div>"
+                                            f"<table style='width:100%;border-collapse:collapse'>"
+                                            f"{''.join(_h2h_rows)}</table>",
+                                            unsafe_allow_html=True)
 
                                 # ── Kursy live z The Odds API ────────────
                                 # Due to Score flag
@@ -2352,7 +2504,40 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 )
                 st.caption("⏳ = predykcje zapisane, wyniki jeszcze nie dostępne w football-data.co.uk")
 
-        # ── Equity Curve ──────────────────────────────────────────────────
+        # ── Bankroll Tracking – realny kapitał ────────────────────────────
+        _br_hist = pobierz_bankroll_history(wybrana_liga)
+        if not _br_hist.empty and "kapital_po" in _br_hist.columns:
+            st.markdown("**💼 Realny Bankroll**")
+            _br_cur = float(_br_hist["kapital_po"].iloc[-1])
+            _br_start = 1000.0
+            _br_roi = (_br_cur - _br_start) / _br_start * 100
+            _brc1, _brc2, _brc3 = st.columns(3)
+            _brc1.metric("💰 Aktualny kapital", f"{_br_cur:.0f} zł",
+                         delta=f"{_br_roi:+.1f}%",
+                         delta_color="normal" if _br_roi >= 0 else "inverse")
+            _brc2.metric("📅 Wpisów", len(_br_hist))
+            _brc3.metric("📊 Zmian", len(_br_hist[_br_hist["typ"]=="wynik"]))
+            _br_chart = _br_hist[["kapital_po"]].rename(columns={"kapital_po":"Kapitał"})
+            st.line_chart(_br_chart, height=160, color="#4CAF50" if _br_roi>=0 else "#F44336")
+
+        # Formularz dodawania wpisu
+        with st.expander("➕ Dodaj wpis bankrollu", expanded=False):
+            _brf1, _brf2, _brf3 = st.columns(3)
+            _br_kwota = _brf1.number_input("Kwota (+ zysk / - strata)", value=0.0, step=10.0, key="_br_kwota")
+            _br_opis  = _brf2.text_input("Opis (np. 'Chelsea X2 kolejka 29')", key="_br_opis")
+            _br_typ   = _brf3.selectbox("Typ", ["wynik","korekta","depozyt","wypłata"], key="_br_typ")
+            if st.button("💾 Zapisz wpis", key="_br_save"):
+                if _br_kwota != 0 or _br_typ in ("depozyt","wypłata"):
+                    zapisz_wynik_bankroll(wybrana_liga,
+                                         int(get_current_round(schedule)) if not schedule.empty else 0,
+                                         _br_opis, _br_kwota, _br_typ)
+                    st.success(f"Zapisano: {_br_kwota:+.0f} zł · {_br_opis}")
+                    st.rerun()
+                else:
+                    st.warning("Podaj kwotę != 0")
+        st.divider()
+
+        # ── Equity Curve (teoretyczna z DB) ───────────────────────────────
         _con_eq = sqlite3.connect(DB_FILE)
         _eq_df  = pd.read_sql_query(
             """SELECT kolejnosc, trafione, p_model, fair_odds
@@ -3186,6 +3371,60 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                             _rc2.metric("ROI Bet365", f"{_roi_b365:+.1f}%",
                                         help="ROI po kursach Bet365 (DC-corrected, z marżą ~5%)",
                                         delta_color="normal" if _roi_b365>0 else "inverse")
+
+                # ── Porównanie sezonów side-by-side ────────────────────────
+                st.divider()
+                st.markdown("### 📊 Porównanie sezonów")
+                _all_seasons = SEZONY.get(BT_LIGA, [])
+                _comp_data = []
+                for _cs_test, _cs_prev in _all_seasons:
+                    _cs_df = _bt.load_results(BT_LIGA, _cs_test, BT_DB)
+                    if _cs_df.empty: continue
+                    _cs_summ = _bt.summary(BT_LIGA, _cs_test, BT_DB)
+                    _cs_n    = _cs_summ.get("n", 0)
+                    if _cs_n == 0: continue
+                    _comp_data.append({
+                        "Sezon": LABELS.get(_cs_test, _cs_test),
+                        "Meczów": _cs_n,
+                        "Hit Rate": f"{_cs_summ.get('hit_rate', 0):.1%}",
+                        "Brier ↓": f"{_cs_summ.get('brier', 0):.4f}",
+                        "BSS": f"{_cs_summ.get('bss', 0):+.3f}",
+                        "ROI fair": f"{_cs_summ.get('roi_pct', 0):+.1f}%",
+                        "ROI PS": f"{_cs_summ.get('roi_ps_pct', 0):+.1f}%" if _cs_summ.get('roi_ps_pct') is not None else "–",
+                    })
+                if len(_comp_data) >= 2:
+                    _cdf = pd.DataFrame(_comp_data)
+                    # Highlight best season per metric
+                    st.dataframe(
+                        _cdf.set_index("Sezon"),
+                        use_container_width=True,
+                    )
+                    # Equity curves overlay
+                    _eq_overlay = {}
+                    for _cs_test, _ in _all_seasons:
+                        _cs_df2 = _bt.load_results(BT_LIGA, _cs_test, BT_DB)
+                        if _cs_df2.empty: continue
+                        _cs_df2 = _cs_df2.sort_values(["kolejka","id"] if "id" in _cs_df2.columns else ["kolejka"])
+                        _fo_col = [round(1/r["p_typ"],2) if r["p_typ"]>0 else 1.0
+                                   for _,r in _cs_df2.iterrows()]
+                        _pnl = [(fo-1) if tr==1 else -1
+                                for fo, tr in zip(_fo_col, _cs_df2["trafiony"])]
+                        _kap = 1000.0
+                        _kap_vals = []
+                        for _pv in _pnl:
+                            _kap += _pv; _kap_vals.append(round(_kap,2))
+                        _eq_overlay[LABELS.get(_cs_test,_cs_test)] = _kap_vals[:len(_cs_df2)]
+                    if _eq_overlay:
+                        st.markdown("**📈 Equity Curve – porównanie sezonów (flat 1j)**")
+                        _max_len = max(len(v) for v in _eq_overlay.values())
+                        _eq_comp_df = pd.DataFrame({
+                            k: pd.Series(v) for k, v in _eq_overlay.items()
+                        })
+                        st.line_chart(_eq_comp_df, height=220)
+                elif len(_comp_data) == 1:
+                    st.info("Uruchom backtest dla drugiego sezonu aby zobaczyć porównanie.")
+                else:
+                    st.info("Brak danych backtestów. Uruchom backtest dla co najmniej jednego sezonu.")
                     m5.metric("Kolejek",       summ["per_kolejka"]["kolejka"].max()
                                                if not summ["per_kolejka"].empty else "–")
 
