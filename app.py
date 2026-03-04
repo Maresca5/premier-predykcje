@@ -2186,94 +2186,44 @@ if not historical.empty:
                     df_rank = df_rank[df_rank["Kategoria"] != "1X2"]
                 # else: Wszystkie - df_rank bez zmian
 
-                st.markdown("### 🥇 Best Bet per mecz")
-                st.caption(f"Najwyższe EV×P per spotkanie · limit {MAX_EXPOSURE_PCT:.0%} bankrollu per mecz")
-                _vb_all = df_rank[df_rank["EV"] > 0].copy()
-                if not _vb_all.empty:
-                    _vb_all["ev_risk"] = _vb_all["EV"] * _vb_all["P"]
-                    _best = _vb_all.sort_values("ev_risk", ascending=False).drop_duplicates("Mecz")
-                    for _, _brow in _best.head(6).iterrows():
-                        _bks = _brow.get("Kelly_stake"); _bkb = _brow.get("KursBuk")
-                        _bec = "#4CAF50" if _brow["EV"] > 0.05 else "#FF9800"
-                        _bkd = f"{_bkb:.2f}" if _bkb else f"{_brow['Fair']:.2f}❆"
-                        _bcap = _brow.get("Kelly_capped", False)
-                        _bunv = _brow.get("Kelly_unverified", False)
-                        _bfrac = _brow.get("Kelly_frac_used", 0.25)
-                        _bkhtml = ""
-                        try:
-                            _bks = float(_bks) if _bks is not None else None
-                            if _bks is not None and (_bks != _bks or _bks <= 0): _bks = None
-                        except (TypeError, ValueError): _bks = None
-                        if _bks:
-                            _bkc = "#FF9800" if (_bcap or _bunv) else "#4CAF50"
-                            _bki = "🔒" if _bcap else ("⚠️" if _bunv else "🏦")
-                            _bkhtml = (f"<br><span style='color:{_bkc};font-size:0.85em'>"
-                                      f"{_bki} {_bks:.0f} zł · f={_bfrac:.2f}</span>")
-                        st.markdown(
-                            f"<div style='background:#0a1628;border-left:3px solid {_bec};"
-                            f"border-radius:6px;padding:8px 12px;margin:3px 0'>"
-                            f"<div style='display:flex;justify-content:space-between'>"
-                            f"<div><b style='color:#fff;font-size:0.88em'>{_brow['Mecz']}</b> "
-                            f"<span style='color:#666;font-size:0.78em'>· {_brow['Typ']} "
-                            f"<code>{_brow['Rynek']}</code></span></div>"
-                            f"<div style='text-align:right'>"
-                            f"<span style='color:#aaa;font-size:0.82em'>{_brow['P']:.0%} @ {_bkd} "
-                            f"· <b style='color:{_bec}'>EV {_brow['EV']:+.3f}</b></span>"
-                            f"{_bkhtml}</div></div></div>",
-                            unsafe_allow_html=True)
-                else:
-                    st.info("Brak best bets w tej kolejce.")
-
-                st.markdown("### 🔥 Wszystkie Value Bets")
+                st.markdown("### 🔥 Value Bets kolejki")
+                st.caption(f"Wszystkie zdarzenia z EV > 0 · posortowane wg EV · limit {MAX_EXPOSURE_PCT:.0%}/mecz")
                 value_bets = df_rank[df_rank["EV"] > 0].sort_values("EV", ascending=False)
                 if not value_bets.empty:
-                    for _, row in value_bets.head(10).iterrows():
-                        ev_color = "#4CAF50" if row["EV"] > 0.05 else "#FF9800"
-                        _ks = row.get("Kelly_stake")
-                        _kb = row.get("KursBuk")
-                        cols = st.columns([3, 1, 1, 1, 1, 1])
-                        with cols[0]:
-                            st.markdown(f"**{row['Mecz']}**")
-                            st.caption(f"{row['Typ']}")
-                        with cols[1]:
-                            st.markdown(f"`{row['Rynek']}`")
-                        with cols[2]:
-                            st.markdown(f"🎯 {row['P']:.0%}")
-                        with cols[3]:
-                            kurs_disp = f"{_kb:.2f}" if _kb else f"{row['Fair']:.2f}✦"
-                            st.markdown(f"💰 {kurs_disp}")
-                        with cols[4]:
-                            st.markdown(f"<span style='color:{ev_color};font-weight:bold'>EV {row['EV']:+.3f}</span>",
-                                        unsafe_allow_html=True)
-                        with cols[5]:
-                            _is_unverif = row.get("Kelly_unverified", False)
-                            _is_capped  = row.get("Kelly_capped", False)
-                            _frac_used  = row.get("Kelly_frac_used", 0.25)
-                            try:
-                                _ks = float(_ks) if _ks is not None else None
-                                if _ks is not None and (_ks != _ks or _ks <= 0): _ks = None
-                            except (TypeError, ValueError): _ks = None
-                            if _ks:
-                                if _is_capped:
-                                    _disc, _col = "🔒", "#FF9800"
-                                    _tip = " CAP"
-                                elif _is_unverif:
-                                    _disc, _col = "⚠️", "#FF9800"
-                                    _tip = " ?"
-                                else:
-                                    _disc, _col = "🏦", "#4CAF50"
-                                    _tip = ""
-                                _pkelly = row.get("p_kelly_used")
-                                _pk_str = (f" · p_adj={_pkelly:.0%}" if _pkelly else "")
-                                st.markdown(
-                                    f"<span style='color:{_col};font-weight:bold'>"
-                                    f"{_disc} {_ks:.0f} zł{_tip}</span>"
-                                    f"<br><span style='color:#555;font-size:0.72em'>"
-                                    f"f={_frac_used:.2f}{_pk_str}</span>",
-                                    unsafe_allow_html=True)
-                            else:
-                                st.markdown("<span style='color:#444'>–</span>", unsafe_allow_html=True)
-                        st.divider()
+                    for _, row in value_bets.iterrows():
+                        _ks  = row.get("Kelly_stake")
+                        _kb  = row.get("KursBuk")
+                        _cap = row.get("Kelly_capped", False)
+                        _unv = row.get("Kelly_unverified", False)
+                        _frac = row.get("Kelly_frac_used", 0.125)
+                        _ec  = "#4CAF50" if row["EV"] > 0.05 else "#FF9800"
+                        _kd  = f"{_kb:.2f}" if _kb else f"{row['Fair']:.2f}✦"
+                        try:
+                            _ks = float(_ks) if _ks is not None else None
+                            if _ks is not None and (_ks != _ks or _ks <= 0): _ks = None
+                        except (TypeError, ValueError):
+                            _ks = None
+                        if _ks:
+                            _ki  = "🔒" if _cap else ("⚠️" if _unv else "🏦")
+                            _kc  = "#FF9800" if (_cap or _unv) else "#4CAF50"
+                            _kelly_html = (
+                                f"<br><span style='color:{_kc};font-size:0.84em'>"
+                                f"{_ki} {_ks:.0f} zł · f={_frac:.3f}</span>")
+                        else:
+                            _kelly_html = ""
+                        st.markdown(
+                            f"<div style='background:#0a1628;border-left:3px solid {_ec};"
+                            f"border-radius:6px;padding:8px 12px;margin:3px 0'>"
+                            f"<div style='display:flex;justify-content:space-between;align-items:flex-start'>"
+                            f"<div><b style='color:#fff;font-size:0.88em'>{row['Mecz']}</b>"
+                            f"<span style='color:#666;font-size:0.78em'> · {row['Typ']} "
+                            f"<code>{row['Rynek']}</code></span></div>"
+                            f"<div style='text-align:right;flex-shrink:0;margin-left:12px'>"
+                            f"<span style='color:#aaa;font-size:0.82em'>"
+                            f"{row['P']:.0%} @ {_kd} · "
+                            f"<b style='color:{_ec}'>EV {row['EV']:+.3f}</b></span>"
+                            f"{_kelly_html}</div></div></div>",
+                            unsafe_allow_html=True)
                 else:
                     st.info("Brak value bets w tej kolejce")
 
@@ -2751,60 +2701,30 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
                                     if alt:
                                         cat_colors = {"Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336","1X2":"#4CAF50","SOT":"#00BCD4"}
-                                        _alt_kelly = kelly_stake  # shorthand
-                                        _alt_bk    = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
-                                        _alt_exp   = 0.0  # exposure alt per mecz
-                                        for emoji, nazwa, p, fo, kat, linia_z in alt[:10]:
+                                        rows_alt = []
+                                        for emoji, nazwa, p, fo, kat, linia_z in alt[:8]:
                                             kc = cat_colors.get(kat, "#888")
+                                            bw = int(p * 100)
                                             fc = "#4CAF50" if fo <= 1.60 else ("#FF9800" if fo <= 2.00 else "#aaa")
-                                            _kel_alt = kelly_stake(p, fo, bankroll=_alt_bk,
-                                                                   rynek=kat, already_exposed=_alt_exp)
-                                            _has_kelly = _kel_alt.get("safe") and _kel_alt["stake_pln"] > 0
-                                            if _has_kelly:
-                                                _alt_exp += _kel_alt["stake_pln"]
-                                            _ac1, _ac2, _ac3, _ac4 = st.columns([3, 1, 1, 1])
-                                            _ac1.markdown(
-                                                f"<span style='font-size:0.88em'>{emoji} {nazwa}</span>",
-                                                unsafe_allow_html=True)
-                                            _ac2.markdown(
-                                                f"<span style='color:{kc};font-size:0.84em'>{p:.0%}</span>",
-                                                unsafe_allow_html=True)
-                                            _ac3.markdown(
-                                                f"<span style='color:{fc};font-weight:bold;font-size:0.84em'>{fo:.2f}</span>",
-                                                unsafe_allow_html=True)
-                                            if _has_kelly:
-                                                _alt_key = f"pt_added_{wybrana_liga}_{aktualna_kolejka}_{h}_{a}_{kat}_{nazwa[:12]}"
-                                                if st.session_state.get(_alt_key):
-                                                    _ac4.markdown(
-                                                        "<span style='color:#4CAF50;font-size:0.75em'>✅</span>",
-                                                        unsafe_allow_html=True)
-                                                else:
-                                                    if _ac4.button("➕", key=f"pt_alt_{h}_{a}_{kat}_{nazwa[:10]}",
-                                                                   help=f"Dodaj {nazwa} do trackera · Kelly {_kel_alt['stake_pln']:.0f} zł"):
-                                                        _pt_bk2 = pobierz_aktualny_bankroll(
-                                                            wybrana_liga, _alt_bk)
-                                                        _n2 = zapisz_paper_trades(
-                                                            wybrana_liga, int(aktualna_kolejka),
-                                                            [{
-                                                                "mecz": f"{h} – {a}",
-                                                                "home": h, "away": a,
-                                                                "rynek": kat,
-                                                                "typ": nazwa,
-                                                                "p_model": round(p, 4),
-                                                                "fair_odds": round(fo, 3),
-                                                                "kelly_frac": _kel_alt.get("fraction_used", 0.075),
-                                                                "stawka": round(_kel_alt["stake_pln"], 2),
-                                                            }], _pt_bk2)
-                                                        if _n2:
-                                                            st.session_state[_alt_key] = True
-                                                            st.toast(f"✅ {nazwa} · {_kel_alt['stake_pln']:.0f} zł", icon="💰")
-                                                            st.rerun()
-                                            else:
-                                                _ac4.markdown(
-                                                    f"<span style='color:#444;font-size:0.72em'>"
-                                                    f"{'⛔' if KELLY_FRACTIONS.get(kat,0)==0 else '–'}</span>",
-                                                    unsafe_allow_html=True)
-                                        st.caption("⚠️ Rożne/kartki – ⛔ Kelly wyłączony (orientacyjnie).")
+                                            rows_alt.append(
+                                                f"<tr><td style='padding:4px 8px;font-size:0.88em'>{emoji} {nazwa}</td>"
+                                                f"<td style='padding:4px 8px;width:110px'>"
+                                                f"<div style='display:flex;align-items:center;gap:5px'>"
+                                                f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                                                f"<div style='background:{kc};width:{bw}%;height:5px;border-radius:3px'></div></div>"
+                                                f"<span style='color:{kc};font-size:0.82em;min-width:30px'>{p:.0%}</span></div></td>"
+                                                f"<td style='padding:4px 8px;text-align:right;color:{fc};font-weight:bold;font-size:0.88em'>{fo:.2f}</td></tr>"
+                                            )
+                                        st.markdown(
+                                            f"<table style='width:100%;border-collapse:collapse'>"
+                                            f"<thead><tr style='color:#555;font-size:0.75em;text-transform:uppercase'>"
+                                            f"<th style='padding:4px 8px;text-align:left'>Rynek</th>"
+                                            f"<th style='padding:4px 8px;text-align:left'>P</th>"
+                                            f"<th style='padding:4px 8px;text-align:right'>Fair</th></tr></thead>"
+                                            f"<tbody>{''.join(rows_alt)}</tbody></table>"
+                                            f"<p style='color:#444;font-size:0.72em;margin:4px 0 0'>⚠️ Rożne/kartki – Poisson bez korelacji. Orientacyjnie.</p>",
+                                            unsafe_allow_html=True,
+                                        )
                                     else:
                                         st.caption("Brak zdarzeń powyżej progu 55%.")
 
@@ -3471,40 +3391,33 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 sk_c = "#4CAF50" if skill_v > 0.05 else ("#888" if skill_v > -0.05 else "#F44336")
                 rows_s4.append(
                     f"<tr style='background:{roi_bg}'>"
-                    f"<td style='padding:6px 10px;font-weight:bold;font-size:0.88em'>{rynek_n}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Typów']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Trafione']}</td>"
-                    f"<td style='padding:6px 10px;width:110px'>"
-                    f"<div style='display:flex;align-items:center;gap:5px'>"
-                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                    f"<div style='background:{kc4};width:{bw_s}%;height:5px;border-radius:3px'></div></div>"
-                    f"<span style='color:{kc4};font-size:0.82em;min-width:34px'>{row['Skuteczność']}</span></div></td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:{bc4};font-weight:bold'>{brier_v:.3f}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:{sk_c};font-size:0.85em'>{skill_v:+.2f}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#888'>{row['Śr. P model']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center;color:#aaa'>{row['Śr. Fair']}</td>"
-                    f"<td style='padding:6px 10px;text-align:right;font-weight:bold;color:{roi_col}'>{row['ROI']}</td>"
-                    f"<td style='padding:6px 10px;text-align:center'>{row['Kolor']}</td>"
+                    f"<td style='padding:6px 8px;font-weight:bold;font-size:0.86em;white-space:nowrap'>{rynek_n}</td>"
+                    f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.84em'>{row['Typów']}</td>"
+                    f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.84em'>{row['Trafione']}</td>"
+                    f"<td style='padding:6px 8px;width:90px'>"
+                    f"<div style='display:flex;align-items:center;gap:4px'>"
+                    f"<div style='flex:1;background:#333;border-radius:3px;height:4px'>"
+                    f"<div style='background:{kc4};width:{bw_s}%;height:4px;border-radius:3px'></div></div>"
+                    f"<span style='color:{kc4};font-size:0.8em;min-width:30px'>{row['Skuteczność']}</span></div></td>"
+                    f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.82em'>{row['Śr. P model']}</td>"
+                    f"<td style='padding:6px 8px;text-align:center;color:#aaa;font-size:0.82em'>{row['Śr. Fair']}</td>"
+                    f"<td style='padding:6px 8px;text-align:right;font-weight:bold;font-size:0.9em;color:{roi_col}'>{row['ROI']}</td>"
+                    f"<td style='padding:6px 8px;text-align:center;font-size:0.84em'>{row['Kolor']}</td>"
                     f"</tr>"
                 )
             st.markdown(
                 f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
                 f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#aaa;font-size:0.75em;text-transform:uppercase'>"
-                f"<th style='padding:8px 10px;text-align:left'>Rynek</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Typów</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Trafione</th>"
-                f"<th style='padding:8px 10px;text-align:left'>Skuteczność</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Brier ↓</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Skill</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Śr. P</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Śr. Fair</th>"
-                f"<th style='padding:8px 10px;text-align:right'>ROI</th>"
-                f"<th style='padding:8px 10px;text-align:center'>Status</th>"
-                f"</tr></thead><tbody>{''.join(rows_s4)}</tbody></table></div>"
-                f"<p style='color:#444;font-size:0.73em;margin-top:4px'>"
-                f"Brier ↓: niższy = lepszy (0=idealny, 0.25=losowy). "
-                f"Skill: >0 = model bije baseline (naive predictor).</p>",
+                f"<thead><tr style='background:#1e1e2e;color:#666;font-size:0.72em;text-transform:uppercase'>"
+                f"<th style='padding:6px 8px;text-align:left'>Rynek</th>"
+                f"<th style='padding:6px 8px;text-align:center'>N</th>"
+                f"<th style='padding:6px 8px;text-align:center'>Traf.</th>"
+                f"<th style='padding:6px 8px;text-align:left'>Hit%</th>"
+                f"<th style='padding:6px 8px;text-align:center'>P mod.</th>"
+                f"<th style='padding:6px 8px;text-align:center'>Fair</th>"
+                f"<th style='padding:6px 8px;text-align:right'>ROI</th>"
+                f"<th style='padding:6px 8px;text-align:center'>OK?</th>"
+                f"</tr></thead><tbody>{''.join(rows_s4)}</tbody></table></div>",
                 unsafe_allow_html=True,
             )
 
