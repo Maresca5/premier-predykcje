@@ -709,8 +709,8 @@ KELLY_FRACTIONS = {
     "AH":     0.125,
     "Gole":   0.075,  # niezweryfikowane historycznie + losowość bramkowa
     "BTTS":   0.075,
-    "Rożne":  0.050,  # najsłabiej skalibrowane
-    "Kartki": 0.050,
+    "Rożne":  0.000,  # WYŁĄCZONE – lambda bramkowa ≠ rozkład rożnych (neg. dwumianowy)
+    "Kartki": 0.000,  # WYŁĄCZONE – brak kalibracji statystyk kartkowych
     "SOT":    0.050,
 }
 MAX_EXPOSURE_PCT = 0.05   # max 5% bankrollu per mecz (suma wszystkich rynków)
@@ -746,6 +746,12 @@ def kelly_stake(p_model, kurs_buk, bankroll=KELLY_BANKROLL_DEFAULT,
         CALIB_INTERCEPT = 0.06
         p_kelly = float(p_model) * CALIB_SLOPE + CALIB_INTERCEPT
         p_kelly = max(0.01, min(0.99, p_kelly))
+
+        # Rynki z fraction=0 są wyłączone z Kelly (tylko informacyjne)
+        if fraction == 0.0:
+            return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,
+                    "safe":False,"rynek":rynek,"capped":False,
+                    "disabled":True,"fraction_used":0}
 
         b = kurs_buk - 1.0
         q = 1.0 - p_kelly
@@ -889,6 +895,33 @@ def zapisz_paper_trades(liga: str, kolejnosc: int, trades: list, bankroll_przed:
     con.close()
     return saved
 
+def zapisz_real_odds(trade_id: int, real_odds: float) -> bool:
+    """Zapisuje rzeczywisty kurs osiągnięty u bukmachera dla paper trade."""
+    con = sqlite3.connect(DB_FILE)
+    _ensure_paper_trades_table(con)
+    try:
+        # Pobierz dane do przeliczenia pnl_real
+        row = con.execute(
+            "SELECT stawka, trafiony, pnl, fair_odds FROM paper_trades WHERE id=?",
+            (trade_id,)).fetchone()
+        if row:
+            stawka, trafiony, pnl_fair, fair_o = row
+            if trafiony is not None:  # już rozliczone – przelicz pnl_real
+                pnl_real = round(stawka * (real_odds - 1), 2) if trafiony else round(-stawka, 2)
+            else:
+                pnl_real = None
+            con.execute(
+                "UPDATE paper_trades SET real_odds=?, pnl_real=? WHERE id=?",
+                (real_odds, pnl_real, trade_id))
+            con.commit()
+            return True
+        return False
+    except Exception:
+        return False
+    finally:
+        con.close()
+
+
 def usun_paper_trade(trade_id: int) -> bool:
     """Usuwa pojedynczy paper trade (tylko ze statusem oczekuje)."""
     con = sqlite3.connect(DB_FILE)
@@ -964,6 +997,8 @@ def _ensure_paper_trades_table(con) -> None:
         ("kelly_frac",     "REAL"),
         ("p_model",        "REAL"),
         ("fair_odds",      "REAL"),
+        ("real_odds",      "REAL"),   # kurs rzeczywisty u bukmachera (slippage)
+        ("pnl_real",       "REAL"),   # PnL liczony z real_odds
     ]:
         if col not in existing:
             try:
@@ -1035,11 +1070,15 @@ def rozlicz_paper_trades(liga: str, hist: pd.DataFrame) -> dict:
         bk_aktualny = float(last_bk[0]) if last_bk else float(bk_przed or 1000.0)
         bk_nowy = round(bk_aktualny + pnl, 2)
 
+        # Sprawdź real_odds – jeśli podane, przelicz pnl_real
+        real_o = con.execute("SELECT real_odds FROM paper_trades WHERE id=?", (tid,)).fetchone()
+        real_o = float(real_o[0]) if real_o and real_o[0] else None
+        pnl_real = round(stawka * (real_o - 1), 2) if (traf and real_o) else (round(-stawka, 2) if real_o else None)
         con.execute(
             """UPDATE paper_trades SET status='rozliczony', trafiony=?, wynik_meczu=?,
-               pnl=?, bankroll_po=?, data_wyniku=? WHERE id=?""",
+               pnl=?, bankroll_po=?, data_wyniku=?, pnl_real=? WHERE id=?""",
             (int(traf), wynik_str, pnl, bk_nowy,
-             datetime.now().strftime("%Y-%m-%d %H:%M"), tid))
+             datetime.now().strftime("%Y-%m-%d %H:%M"), pnl_real, tid))
 
         rozliczone += 1
         if traf: trafione_cnt += 1
@@ -1944,7 +1983,7 @@ if not historical.empty:
             st.markdown("---")
 
     # TABS
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "⚽ Analiza Meczu",
         "📊 Ranking Zdarzeń",
         "🔬 Deep Data",
@@ -1952,6 +1991,7 @@ if not historical.empty:
         "📉 Kalibracja",
         "🎛️ Laboratorium",
         "🧪 Backtest",
+        "🎯 Kalibracja Alt",
     ])
 
     # =========================================================================
@@ -2083,6 +2123,11 @@ if not historical.empty:
 
                 # VALUE BETS
                 if _widok == "⚡ Alternatywne":
+                    st.warning(
+                        "⛔ **Kartki/Rożne – Kelly wyłączony**: Dixon-Coles to model bramkowy. "
+                        "Lambda nie modeluje rożnych/kartkowych (różne rozkłady). "
+                        "Traktuj te rynki **wyłącznie informacyjnie** – bez stawek Kelly, "
+                        "dopóki nie będzie dedykowanego modelu corners/cards.")
                     st.info(
                         f"⚠️ **Disclaimer Kelly alt**: niezweryfikowane historycznie. "
                         f"🔒 = stawka ograniczona limitem {MAX_EXPOSURE_PCT:.0%}/mecz. "
@@ -2988,13 +3033,13 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             # ── Oczekujące paper trades ────────────────────────────────────
             if not _pt_ocz.empty:
                 st.markdown(f"**⏳ Oczekujące typy (kolejka {_pt_kolejka})**")
-                _pt_col_h = st.columns([3,2,1,1,1,0.7])
-                for lbl in ["Mecz","Typ","P model","Kurs","Stawka",""]:
-                    _pt_col_h[["Mecz","Typ","P model","Kurs","Stawka",""].index(lbl)].markdown(
+                _pt_col_h = st.columns([3,2,1,1,1,1,0.7])
+                for lbl in ["Mecz","Typ","P model","Fair","Stawka","Real Odds",""]:
+                    _pt_col_h[["Mecz","Typ","P model","Fair","Stawka","Real Odds",""].index(lbl)].markdown(
                         f"<span style='color:#555;font-size:0.74em'>{lbl}</span>",
                         unsafe_allow_html=True)
                 for _, _pt_row in _pt_ocz.iterrows():
-                    _ptc = st.columns([3,2,1,1,1,0.7])
+                    _ptc = st.columns([3,2,1,1,1,1,0.7])
                     _ptc[0].markdown(
                         f"<span style='font-size:0.84em;color:#ccc'>{_pt_row['mecz']}</span>"
                         f"<br><span style='font-size:0.74em;color:#555'>{_pt_row['rynek']}</span>",
@@ -3012,7 +3057,19 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         f"<span style='font-size:0.9em;font-weight:bold;color:#4CAF50'>"
                         f"{float(_pt_row['stawka']):.0f} zł</span>",
                         unsafe_allow_html=True)
-                    if _ptc[5].button("🗑️", key=f"del_pt_{_pt_row['id']}",
+                    # Real Odds – edytowalne pole dla slippage
+                    _cur_real = _pt_row.get("real_odds")
+                    _real_val = float(_cur_real) if _cur_real and not (isinstance(_cur_real, float) and _cur_real != _cur_real) else float(_pt_row['fair_odds'])
+                    _new_real = _ptc[5].number_input(
+                        "", value=_real_val, min_value=1.01, max_value=20.0,
+                        step=0.05, format="%.2f",
+                        key=f"real_odds_{_pt_row['id']}",
+                        label_visibility="collapsed")
+                    # Zapisz jeśli zmienione
+                    if abs(_new_real - _real_val) > 0.001:
+                        zapisz_real_odds(int(_pt_row["id"]), _new_real)
+                        st.rerun()
+                    if _ptc[6].button("🗑️", key=f"del_pt_{_pt_row['id']}",
                                       help="Usuń ten typ"):
                         if usun_paper_trade(int(_pt_row["id"])):
                             st.rerun()
@@ -3038,18 +3095,29 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             with st.expander(f"Pokaż {len(_pt_rozl)} rozliczonych typów", expanded=False):
                 for _, _pr in _pt_rozl.sort_values("id", ascending=False).iterrows():
                     _traf_i  = int(_pr.get("trafiony", 0) or 0)
-                    _pnl_v   = float(_pr.get("pnl", 0) or 0)
+                    _pnl_v    = float(_pr.get("pnl", 0) or 0)
+                    _pnl_real = _pr.get("pnl_real")
+                    _real_o   = _pr.get("real_odds")
                     _bk_v    = float(_pr.get("bankroll_po", 0) or 0)
                     _ico = "✅" if _traf_i else "❌"
                     _pnl_c = "#4CAF50" if _pnl_v >= 0 else "#F44336"
+                    _real_str = ""
+                    if _real_o and not (isinstance(_real_o, float) and _real_o != _real_o):
+                        _pnl_r_v = float(_pnl_real) if _pnl_real else _pnl_v
+                        _diff = _pnl_r_v - _pnl_v
+                        _real_str = (f" <span style='color:#888;font-size:0.88em'>"
+                                     f"(real @{float(_real_o):.2f}: {_pnl_r_v:+.2f} "
+                                     f"<span style='color:{"#F44336" if _diff<0 else "#888"}'>"
+                                     f"slippage {_diff:+.2f}</span>)</span>")
                     st.markdown(
-                        f"<div style='display:flex;justify-content:space-between;"
+                        f"<div style='display:flex;flex-wrap:wrap;justify-content:space-between;"
                         f"padding:4px 0;border-bottom:1px solid #1a1a2e;font-size:0.82em'>"
                         f"<span style='color:#888'>K{int(_pr['kolejnosc'])}</span>"
                         f"<span style='color:#ccc'>{_pr['mecz']}</span>"
                         f"<span style='color:#888'>{_pr['typ']} @ {float(_pr['fair_odds']):.2f}</span>"
                         f"<span style='color:#888'>{float(_pr['stawka']):.0f} zł</span>"
-                        f"<span style='color:{_pnl_c};font-weight:bold'>{_ico} {_pnl_v:+.2f} zł</span>"
+                        f"<span style='color:{_pnl_c};font-weight:bold'>{_ico} {_pnl_v:+.2f} zł"
+                        f"{_real_str}</span>"
                         f"<span style='color:#555'>{_bk_v:.0f} zł</span>"
                         f"</div>",
                         unsafe_allow_html=True)
@@ -4115,6 +4183,168 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                             file_name=f"backtest_{BT_LIGA}_{BT_SEZON_TEST}.csv",
                             mime="text/csv", key="bt_saved"
                         )
+
+    # =========================================================================
+    # TAB 8 – KALIBRACJA ALT MARKETS (Reliability Diagram z Paper Tradingu)
+    # =========================================================================
+    with tab8:
+        st.subheader("🎯 Kalibracja rynków alternatywnych")
+        st.caption(
+            "Reliability diagram budowany z danych Paper Trading Trackera. "
+            "Każdy koszyk pokazuje: ile razy model mówił p∈[X,Y%] vs ile razy faktycznie trafił. "
+            "Idealna linia kalibracji = przekątna. Rożne/Kartki bez Kelly – tylko obserwacja.")
+
+        _cal_all = pobierz_paper_trades(wybrana_liga)
+        _cal_rozl = _cal_all[_cal_all["status"] == "rozliczony"] if not _cal_all.empty else pd.DataFrame()
+
+        if _cal_rozl.empty or "trafiony" not in _cal_rozl.columns:
+            st.info(
+                "📭 Brak rozliczonych paper trades. "
+                "Po zakończeniu pierwszej kolejki z Trackerem dane pojawią się automatycznie.")
+        else:
+            _cal_rozl = _cal_rozl.copy()
+            _cal_rozl["p_model"] = pd.to_numeric(_cal_rozl["p_model"], errors="coerce")
+            _cal_rozl["trafiony"] = pd.to_numeric(_cal_rozl["trafiony"], errors="coerce")
+            _cal_rozl = _cal_rozl.dropna(subset=["p_model","trafiony"])
+
+            rynki_kolejnosc = ["1X2","Gole","BTTS","SOT","Rożne","Kartki"]
+            rynki_dostepne  = [r for r in rynki_kolejnosc if r in _cal_rozl["rynek"].values]
+
+            if not rynki_dostepne:
+                st.warning("Brak danych dla znanych rynków.")
+            else:
+                # ── Global summary ────────────────────────────────────────
+                _c_sum = _cal_rozl.groupby("rynek").agg(
+                    n=("trafiony","count"),
+                    traf=("trafiony","sum"),
+                    p_avg=("p_model","mean"),
+                ).reset_index()
+                _c_sum["hit_rate"]  = _c_sum["traf"] / _c_sum["n"]
+                _c_sum["bias"]      = _c_sum["hit_rate"] - _c_sum["p_avg"]
+                _c_sum["kelly_on"]  = _c_sum["rynek"].map(
+                    lambda r: "✅" if KELLY_FRACTIONS.get(r, 0) > 0 else "⛔ wyłączony")
+
+                st.markdown("**📊 Podsumowanie per rynek**")
+                _sum_rows = []
+                for _, sr in _c_sum.iterrows():
+                    _bc = "#4CAF50" if abs(sr["bias"]) < 0.05 else ("#FF9800" if abs(sr["bias"]) < 0.12 else "#F44336")
+                    _sig = "✅ OK" if abs(sr["bias"]) < 0.05 else ("⚠️ słabo" if abs(sr["bias"]) < 0.12 else "❌ źle")
+                    _sum_rows.append(
+                        f"<tr>"
+                        f"<td style='padding:6px 10px;font-weight:bold'>{sr['rynek']}</td>"
+                        f"<td style='padding:6px 10px;text-align:center'>{int(sr['n'])}</td>"
+                        f"<td style='padding:6px 10px;text-align:center;color:#2196F3'>{sr['p_avg']:.0%}</td>"
+                        f"<td style='padding:6px 10px;text-align:center;color:#aaa'>{sr['hit_rate']:.0%}</td>"
+                        f"<td style='padding:6px 10px;text-align:center;color:{_bc};font-weight:bold'>"
+                        f"{sr['bias']:+.0%}</td>"
+                        f"<td style='padding:6px 10px;text-align:center;color:{_bc}'>{_sig}</td>"
+                        f"<td style='padding:6px 10px;text-align:center'>{sr['kelly_on']}</td>"
+                        f"</tr>")
+                st.markdown(
+                    "<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a2a;margin-bottom:16px'>"
+                    "<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
+                    "<thead><tr style='background:#1a1a2e;color:#666;font-size:0.72em;text-transform:uppercase'>"
+                    "<th style='padding:6px 10px'>Rynek</th>"
+                    "<th style='padding:6px 10px;text-align:center'>N</th>"
+                    "<th style='padding:6px 10px;text-align:center'>P model avg</th>"
+                    "<th style='padding:6px 10px;text-align:center'>Hit rate</th>"
+                    "<th style='padding:6px 10px;text-align:center'>Bias</th>"
+                    "<th style='padding:6px 10px;text-align:center'>Kalibracja</th>"
+                    "<th style='padding:6px 10px;text-align:center'>Kelly</th>"
+                    f"</tr></thead><tbody>{''.join(_sum_rows)}</tbody></table></div>",
+                    unsafe_allow_html=True)
+
+                # ── Reliability diagram per rynek ─────────────────────────
+                st.markdown("**📈 Reliability diagram – koszyki prawdopodobieństwa**")
+                st.caption("Zielona linia = idealna kalibracja. Pomarańczowe punkty = dane z Trackera. "
+                           "Im bliżej linii, tym model lepiej szacuje prawdopodobieństwo.")
+
+                BINS = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.01]
+                BIN_LABELS = ["50-55%","55-60%","60-65%","65-70%","70-75%","75-80%","80-85%","85-90%","90%+"]
+
+                for _rynek_cal in rynki_dostepne:
+                    _rd = _cal_rozl[_cal_rozl["rynek"] == _rynek_cal].copy()
+                    _kelly_f = KELLY_FRACTIONS.get(_rynek_cal, 0)
+                    _kelly_str = f"Kelly f={_kelly_f:.3f}" if _kelly_f > 0 else "⛔ bez Kelly"
+                    st.markdown(f"**{_rynek_cal}** · {len(_rd)} typów · {_kelly_str}")
+
+                    _rd["bin"] = pd.cut(_rd["p_model"], bins=BINS, labels=BIN_LABELS, right=False)
+                    _binned = _rd.groupby("bin", observed=True).agg(
+                        n=("trafiony","count"),
+                        hit=("trafiony","sum"),
+                        p_mid=("p_model","mean"),
+                    ).reset_index()
+                    _binned = _binned[_binned["n"] >= 2]  # min 2 obs
+
+                    if _binned.empty:
+                        st.caption(f"  Za mało danych (min 2 obs per koszyk)")
+                        continue
+
+                    _binned["hit_rate"] = _binned["hit"] / _binned["n"]
+                    _binned["bias"]     = _binned["hit_rate"] - _binned["p_mid"]
+
+                    # Text reliability table
+                    _rel_rows = []
+                    for _, rb in _binned.iterrows():
+                        _bc2 = "#4CAF50" if abs(rb["bias"]) < 0.05 else ("#FF9800" if abs(rb["bias"]) < 0.12 else "#F44336")
+                        _bar_hit = int(rb["hit_rate"] * 100)
+                        _bar_mod = int(rb["p_mid"] * 100)
+                        _rel_rows.append(
+                            f"<tr>"
+                            f"<td style='padding:4px 8px;font-size:0.82em;color:#888'>{rb['bin']}</td>"
+                            f"<td style='padding:4px 8px;text-align:center;font-size:0.82em'>{int(rb['n'])}</td>"
+                            f"<td style='padding:4px 8px;width:130px'>"
+                            f"<div style='position:relative;height:14px;background:#1a1a2e;border-radius:3px'>"
+                            f"<div style='position:absolute;width:{_bar_mod}%;height:100%;"
+                            f"background:#2196F3;opacity:0.4;border-radius:3px'></div>"
+                            f"<div style='position:absolute;width:{_bar_hit}%;height:100%;"
+                            f"background:#4CAF50;border-radius:3px'></div>"
+                            f"</div>"
+                            f"<div style='font-size:0.72em;color:#555;margin-top:1px'>"
+                            f"model {rb['p_mid']:.0%} → hit {rb['hit_rate']:.0%}</div></td>"
+                            f"<td style='padding:4px 8px;text-align:center;color:{_bc2};"
+                            f"font-weight:bold;font-size:0.88em'>{rb['bias']:+.0%}</td>"
+                            f"</tr>")
+                    st.markdown(
+                        "<div style='overflow-x:auto;margin-bottom:8px'>"
+                        "<table style='width:100%;border-collapse:collapse'>"
+                        "<thead><tr style='color:#555;font-size:0.7em;text-transform:uppercase'>"
+                        "<th style='padding:4px 8px'>Koszyk</th>"
+                        "<th style='padding:4px 8px;text-align:center'>N</th>"
+                        "<th style='padding:4px 8px'>Model vs Hit</th>"
+                        "<th style='padding:4px 8px;text-align:center'>Bias</th>"
+                        f"</tr></thead><tbody>{''.join(_rel_rows)}</tbody></table></div>",
+                        unsafe_allow_html=True)
+
+                    # Kiedy włączyć Kelly na alt?
+                    if _kelly_f == 0 and len(_rd) >= 20:
+                        _avg_bias = abs((_binned["hit_rate"] - _binned["p_mid"]).mean())
+                        if _avg_bias < 0.05:
+                            st.success(
+                                f"🟢 **{_rynek_cal}: model dobrze skalibrowany** (bias {_avg_bias:.1%}) "
+                                f"przy {len(_rd)} typach. Rozważ włączenie Kelly f=0.05 dla tego rynku.")
+                        else:
+                            st.warning(
+                                f"🔴 **{_rynek_cal}: jeszcze za mało danych lub błąd kalibracji** "
+                                f"(bias {_avg_bias:.1%}). Kelly pozostaje wyłączony.")
+                    st.divider()
+
+                # ── PnL porównanie: fair vs real odds ─────────────────────
+                if "pnl_real" in _cal_rozl.columns:
+                    _pnl_comp = _cal_rozl.dropna(subset=["pnl","pnl_real"])
+                    if not _pnl_comp.empty:
+                        st.markdown("**💸 Wpływ slippage (fair vs real odds)**")
+                        _total_fair = _pnl_comp["pnl"].sum()
+                        _total_real = _pnl_comp["pnl_real"].sum()
+                        _slip = _total_real - _total_fair
+                        _sc1, _sc2, _sc3 = st.columns(3)
+                        _sc1.metric("PnL na fair odds", f"{_total_fair:+.2f} zł")
+                        _sc2.metric("PnL na real odds", f"{_total_real:+.2f} zł")
+                        _sc3.metric("Slippage total",   f"{_slip:+.2f} zł",
+                                    delta_color="inverse" if _slip < 0 else "normal")
+                        st.caption(
+                            f"Dla {len(_pnl_comp)} typów z podanym Real Odds. "
+                            "Wpisz Real Odds w Trackerze po każdym zakładzie.")
                     with st.expander("📋 Wszystkie predykcje", expanded=False):
                         disp=bt_df[["kolejka","data","home","away","fthg","ftag",
                                     "wynik","typ","p_typ","trafiony","brier"]].copy()
