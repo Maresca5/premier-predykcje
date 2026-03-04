@@ -17,10 +17,14 @@ SOT_BLEND_W   = 0.30
 PROG_PEWNY    = 0.42
 PROG_PODWOJNA = 0.62
 TAU_DAYS      = 30.0
+# Kelly fractions po analizie backtestów – obniżone o 50%
 KELLY_FRACTIONS_BT = {
-    "Gole": 0.15, "BTTS": 0.15,
-    "Rożne": 0.10, "Kartki": 0.10, "SOT": 0.10,
+    "Gole": 0.075, "BTTS": 0.075,
+    "Rożne": 0.050, "Kartki": 0.050, "SOT": 0.050,
 }
+# Kalibracja liniowa p_model przed Kelly (wynik analizy E0 2425)
+CALIB_SLOPE_BT     = 0.88
+CALIB_INTERCEPT_BT = 0.06
 MAX_EXPOSURE_BT = 0.05
 
 # ── Nazwa tabeli w SQLite ──────────────────────────────────────────────────
@@ -335,13 +339,17 @@ def _alt_zdarzenia(lh: float, la: float, lam_r: float, lam_k: float,
     def _fair(p):
         return round(1 / p, 3) if p > 0.01 else 999.0
 
-    _rynek_fracs = {"Gole":0.15,"BTTS":0.15,"Rożne":0.10,"Kartki":0.10,"SOT":0.10}
+    _rynek_fracs = {"Gole":0.075,"BTTS":0.075,"Rożne":0.050,"Kartki":0.050,"SOT":0.050}
 
     def _kelly_pnl(p, fo, traf, rynek="Gole"):
         b = fo - 1.0
         if b <= 0 or p <= 0 or p >= 1: return 0.0, 0.0, 0.0
+        # Kalibracja liniowa (analiza E0 2425: model zawyża p przy faworytach)
+        p_adj = max(0.01, min(0.99, p * CALIB_SLOPE_BT + CALIB_INTERCEPT_BT))
+        ev = p_adj * b - (1 - p_adj)
+        if ev < 0.05: return 0.0, 0.0, 0.0   # EV < 5% filter
         frac = _rynek_fracs.get(rynek, kelly_fraction)
-        f_full = max(0.0, (p * b - (1 - p)) / b)
+        f_full = max(0.0, (p_adj * b - (1 - p_adj)) / b)
         f_frac = f_full * frac
         pnl = (fo - 1) * f_frac if traf else -f_frac
         return round(f_full, 4), round(f_frac, 4), round(pnl, 4)
