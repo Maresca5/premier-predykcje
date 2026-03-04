@@ -226,7 +226,7 @@ def _forma(df: pd.DataFrame, team: str) -> str:
 def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
     """Zwraca (lam_h, lam_a, rho) lub (None, None, rho) gdy brak danych."""
     if st.empty or h not in st.index or a not in st.index:
-        return None, None, sl["rho"]
+        return None, None, sl["rho"], 0.0, 0.0, None
     try:
         avg_h = max(sl["avg_home"], 0.5)
         avg_a = max(sl["avg_away"], 0.5)
@@ -255,9 +255,31 @@ def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
                     lh = (1 - SOT_BLEND_W) * lh + SOT_BLEND_W * lsot_h
                     la = (1 - SOT_BLEND_W) * la + SOT_BLEND_W * lsot_a
 
-        return float(np.clip(lh, 0.3, 4.5)), float(np.clip(la, 0.3, 4.5)), sl["rho"]
+        lh = float(np.clip(lh, 0.3, 4.5))
+        la = float(np.clip(la, 0.3, 4.5))
+
+        # Alt market lambdy
+        lam_r = 0.0; lam_k = 0.0; lam_sot_ret = None
+        try:
+            if "Rozne (dom)" in st.columns:
+                lam_r = (float(st.loc[h, "Rozne (dom)"]) + float(st.loc[a, "Rozne (wyjazd)"])) / 2
+            if "Kartki (dom)" in st.columns:
+                lam_k = (float(st.loc[h, "Kartki (dom)"]) + float(st.loc[a, "Kartki (wyjazd)"])) / 2
+            sot_h2 = st.loc[h, "SOT (dom)"]   if "SOT (dom)"    in st.columns else None
+            sot_a2 = st.loc[a, "SOT (wyjazd)"] if "SOT (wyjazd)" in st.columns else None
+            ash2   = sl.get("avg_sot_home"); asa2 = sl.get("avg_sot_away")
+            if sot_h2 and sot_a2 and ash2 and asa2:
+                _sh2, _sa2 = float(sot_h2), float(sot_a2)
+                if not (np.isnan(_sh2) or np.isnan(_sa2)):
+                    lam_sot_ret = float(np.clip(
+                        (_sh2*(avg_h/ash2)*obrona_a + _sa2*(avg_a/asa2)*obrona_h) / 2,
+                        0.5, 12.0))
+        except Exception:
+            pass
+
+        return lh, la, sl["rho"], lam_r, lam_k, lam_sot_ret
     except Exception:
-        return None, None, sl["rho"]
+        return None, None, sl["rho"], 0.0, 0.0, None
 
 
 # =============================================================================
@@ -291,6 +313,137 @@ def _pred(lh: float, la: float, rho: float) -> dict:
             d = {"1": ph, "X": pd_, "2": pa}
             typ = max(d, key=d.get); pt = d[typ]
     return {"ph": ph, "pd": pd_, "pa": pa, "typ": typ, "pt": float(pt), "lh": lh, "la": la}
+
+
+def _alt_zdarzenia(lh: float, la: float, lam_r: float, lam_k: float,
+                    lam_sot, rho: float, fthg: int, ftag: int,
+                    hc: int, ac: int, hy: int, ay: int, hr: int, ar: int,
+                    hst, ast_val, kelly_fraction: float = 0.25) -> list:
+    """
+    Generuje alt market predictions z wynikami i Kelly PnL.
+    Zwraca listę dict per zdarzenie.
+    """
+    from scipy.stats import poisson as _poi
+    rows = []
+    mg = int(min(max(int(lh + la) + 4, 6), 10))
+
+    def _fair(p):
+        return round(1 / p, 3) if p > 0.01 else 999.0
+
+    def _kelly_pnl(p, fo, traf):
+        b = fo - 1.0
+        if b <= 0 or p <= 0 or p >= 1: return 0.0, 0.0, 0.0
+        f_full = max(0.0, (p * b - (1 - p)) / b)
+        f_frac = f_full * kelly_fraction
+        pnl = (fo - 1) * f_frac if traf else -f_frac
+        return round(f_full, 4), round(f_frac, 4), round(pnl, 4)
+
+    def _brier(p, traf):
+        return round((p - float(traf)) ** 2, 6)
+
+    try:
+        M = None
+        from scipy.stats import poisson as _poi2
+        import numpy as np
+        M_raw = np.outer(_poi2.pmf(range(mg), lh), _poi2.pmf(range(mg), la))
+        # Simple DC adjustment (inline)
+        tau = lambda x, y, l, m, r: (
+            1 - l*m*r if x==0 and y==0 else
+            1 + l*r    if x==0 and y==1 else
+            1 + m*r    if x==1 and y==0 else
+            1 - r      if x==1 and y==1 else 1.0)
+        for i in range(min(2, mg)):
+            for j in range(min(2, mg)):
+                M_raw[i,j] *= tau(i, j, lh, la, rho)
+        M = M_raw / M_raw.sum()
+    except Exception:
+        M = None
+
+    total_gole = fthg + ftag
+    total_rozne = hc + ac
+    total_kartki = hy + ay + (hr + ar) * 2
+
+    # Gole Over/Under
+    if M is not None:
+        for linia in [1.5, 2.5, 3.5]:
+            p_over = float(sum(M[i,j] for i in range(mg) for j in range(mg) if i+j > linia))
+            p_under = 1 - p_over
+            for p, typ, traf in [
+                (p_over,  f"Over {linia} goli",  total_gole > linia),
+                (p_under, f"Under {linia} goli", total_gole < linia),
+            ]:
+                fo = _fair(p)
+                kf, kfrac, kpnl = _kelly_pnl(p, fo, traf)
+                rows.append({"rynek":"Gole","linia":linia,"typ":typ,
+                             "p_model":round(p,4),"fair_odds":fo,"trafiony":int(traf),
+                             "brier_bin":_brier(p,traf),"kelly_full":kf,
+                             "kelly_frac":kfrac,"kelly_pnl":kpnl})
+
+    # BTTS
+    if M is not None:
+        p_btts = float(1 - M[0,:].sum() - M[:,0].sum() + M[0,0])
+        p_nobtts = 1 - p_btts
+        for p, typ, traf in [
+            (p_btts,   "BTTS – Tak", fthg > 0 and ftag > 0),
+            (p_nobtts, "BTTS – Nie", fthg == 0 or ftag == 0),
+        ]:
+            fo = _fair(p)
+            kf, kfrac, kpnl = _kelly_pnl(p, fo, traf)
+            rows.append({"rynek":"BTTS","linia":0,"typ":typ,
+                         "p_model":round(p,4),"fair_odds":fo,"trafiony":int(traf),
+                         "brier_bin":_brier(p,traf),"kelly_full":kf,
+                         "kelly_frac":kfrac,"kelly_pnl":kpnl})
+
+    # Rożne
+    if lam_r and lam_r > 0:
+        for linia in [7.5, 8.5, 9.5, 10.5]:
+            try:
+                p_over = float(1 - _poi.cdf(int(linia), lam_r))
+                traf = total_rozne > linia
+                fo = _fair(p_over)
+                kf, kfrac, kpnl = _kelly_pnl(p_over, fo, traf)
+                rows.append({"rynek":"Rożne","linia":linia,
+                             "typ":f"Over {linia} rożnych",
+                             "p_model":round(p_over,4),"fair_odds":fo,"trafiony":int(traf),
+                             "brier_bin":_brier(p_over,traf),"kelly_full":kf,
+                             "kelly_frac":kfrac,"kelly_pnl":kpnl})
+            except Exception: pass
+
+    # Kartki
+    if lam_k and lam_k > 0:
+        for linia in [2.5, 3.5, 4.5]:
+            try:
+                p_over = float(1 - _poi.cdf(int(linia), lam_k))
+                traf = total_kartki > linia
+                fo = _fair(p_over)
+                kf, kfrac, kpnl = _kelly_pnl(p_over, fo, traf)
+                rows.append({"rynek":"Kartki","linia":linia,
+                             "typ":f"Over {linia} kartek",
+                             "p_model":round(p_over,4),"fair_odds":fo,"trafiony":int(traf),
+                             "brier_bin":_brier(p_over,traf),"kelly_full":kf,
+                             "kelly_frac":kfrac,"kelly_pnl":kpnl})
+            except Exception: pass
+
+    # SOT
+    if lam_sot and lam_sot > 0:
+        hst_v = int(hst) if hst is not None and str(hst) not in ('','nan','None') else None
+        ast_v = int(ast_val) if ast_val is not None and str(ast_val) not in ('','nan','None') else None
+        if hst_v is not None and ast_v is not None:
+            total_sot = hst_v + ast_v
+            for linia in [3.5, 4.5, 5.5]:
+                try:
+                    p_over = float(1 - _poi.cdf(int(linia), lam_sot))
+                    traf = total_sot > linia
+                    fo = _fair(p_over)
+                    kf, kfrac, kpnl = _kelly_pnl(p_over, fo, traf)
+                    rows.append({"rynek":"SOT","linia":linia,
+                                 "typ":f"Over {linia} celnych",
+                                 "p_model":round(p_over,4),"fair_odds":fo,"trafiony":int(traf),
+                                 "brier_bin":_brier(p_over,traf),"kelly_full":kf,
+                                 "kelly_frac":kfrac,"kelly_pnl":kpnl})
+                except Exception: pass
+
+    return rows
 
 
 def _wynik(fthg: int, ftag: int) -> str:
@@ -335,6 +488,28 @@ def _init_db(db: str):
             b365h      REAL, b365d REAL, b365a REAL,
             psh        REAL, psd  REAL, psa  REAL,
             UNIQUE(liga, sezon, kolejka, home, away)
+        )
+    """)
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS {_TABLE}_alt (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            liga        TEXT NOT NULL,
+            sezon       TEXT NOT NULL,
+            kolejka     INTEGER,
+            data        TEXT,
+            home        TEXT,
+            away        TEXT,
+            rynek       TEXT,
+            linia       REAL,
+            typ         TEXT,
+            p_model     REAL,
+            fair_odds   REAL,
+            trafiony    INTEGER,
+            brier_bin   REAL,
+            kelly_full  REAL,
+            kelly_frac  REAL,
+            kelly_pnl   REAL,
+            UNIQUE(liga, sezon, kolejka, home, away, rynek, linia, typ)
         )
     """)
     con.commit()
@@ -424,6 +599,7 @@ def run_backtest(
 
     rows_db  = []
     rows_csv = []
+    rows_alt = []
     skipped  = 0
 
     for k_idx, k_df in enumerate(kolejki):
@@ -475,7 +651,11 @@ def run_backtest(
 
                 fh = _forma(df_train, h)
                 fa = _forma(df_train, a)
-                lh, la, rho = _lambdy(h, a, st, sl, fh, fa)
+                _lret = _lambdy(h, a, st, sl, fh, fa)
+                lh, la, rho = _lret[0], _lret[1], _lret[2]
+                lam_r = _lret[3] if len(_lret) > 3 else 0.0
+                lam_k = _lret[4] if len(_lret) > 4 else 0.0
+                lam_sot_bt = _lret[5] if len(_lret) > 5 else None
 
                 if lh is None:
                     skipped += 1
@@ -531,12 +711,53 @@ def run_backtest(
                     except: return None
                 rows_csv[-1]["kurs_ps"]   = _kdc(p["typ"], _psh, _psd, _psa)
                 rows_csv[-1]["kurs_b365"] = _kdc(p["typ"], _b3h, _b3d, _b3a)
+
+                # Alt markets – gole, BTTS, rożne, kartki, SOT
+                try:
+                    _hc  = int(mecz.get("HC",  0) or 0)
+                    _ac  = int(mecz.get("AC",  0) or 0)
+                    _hy  = int(mecz.get("HY",  0) or 0)
+                    _ay  = int(mecz.get("AY",  0) or 0)
+                    _hr  = int(mecz.get("HR",  0) or 0)
+                    _ar  = int(mecz.get("AR",  0) or 0)
+                    _hst = mecz.get("HST"); _ast = mecz.get("AST")
+                    _alt_rows = _alt_zdarzenia(
+                        lh, la, lam_r, lam_k, lam_sot_bt, rho,
+                        fthg, ftag, _hc, _ac, _hy, _ay, _hr, _ar, _hst, _ast)
+                    for _ar_row in _alt_rows:
+                        rows_alt.append({
+                            "liga": liga_code, "sezon": sezon_test,
+                            "kolejka": k_nr, "data": data,
+                            "home": h, "away": a,
+                            **_ar_row,
+                        })
+                except Exception:
+                    pass
+
             except Exception:
                 skipped += 1
                 continue
 
-    cb(0.95, f"Zapisuję {len(rows_db)} rekordów do bazy...")
+    cb(0.95, f"Zapisuję {len(rows_db)} + {len(rows_alt)} alt rekordów do bazy...")
     _insert_bulk(rows_db, db_path)
+    # Save alt market rows
+    if rows_alt:
+        _alt_tbl = f"{_TABLE}_alt"
+        _con_alt = sqlite3.connect(db_path)
+        _con_alt.execute(f"DELETE FROM {_alt_tbl} WHERE liga=? AND sezon=?",
+                         (liga_code, sezon_test))
+        _con_alt.executemany(
+            f"INSERT OR REPLACE INTO {_alt_tbl} "
+            f"(liga,sezon,kolejka,data,home,away,rynek,linia,typ,"
+            f"p_model,fair_odds,trafiony,brier_bin,kelly_full,kelly_frac,kelly_pnl) "
+            f"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(r["liga"],r["sezon"],r["kolejka"],r["data"],r["home"],r["away"],
+              r["rynek"],r["linia"],r["typ"],r["p_model"],r["fair_odds"],
+              r["trafiony"],r["brier_bin"],r["kelly_full"],r["kelly_frac"],r["kelly_pnl"])
+             for r in rows_alt]
+        )
+        _con_alt.commit()
+        _con_alt.close()
 
     if not rows_csv:
         return {"error": "Brak wyników – za mało danych treningowych lub błędy pobierania."}
@@ -559,6 +780,25 @@ def run_backtest(
     roi_b365_pct = _real_roi("kurs_b365")
     ps_info = f" · PS {roi_ps_pct:+.1f}%" if roi_ps_pct is not None else ""
     cb(1.0, f"Gotowe! {n} meczów · hit {traf/n:.1%} · Brier {brier:.4f} · ROI fair {roi_pct:+.1f}%{ps_info}")
+    # Alt markets summary
+    _alt_df = pd.DataFrame(rows_alt) if rows_alt else pd.DataFrame()
+    _alt_summary = {}
+    if not _alt_df.empty:
+        for _rynek in _alt_df["rynek"].unique():
+            _rdf = _alt_df[_alt_df["rynek"] == _rynek]
+            _rn = len(_rdf)
+            _rhit = int(_rdf["trafiony"].sum())
+            _rroi_flat = float(sum(
+                (r["fair_odds"]-1) if r["trafiony"] else -1
+                for _, r in _rdf.iterrows())) / _rn * 100
+            _rroi_kelly = float(_rdf["kelly_pnl"].sum())
+            _alt_summary[_rynek] = {
+                "n": _rn, "hit": _rhit,
+                "hit_rate": _rhit/_rn,
+                "roi_flat": round(_rroi_flat, 2),
+                "roi_kelly": round(_rroi_kelly, 4),
+            }
+
     return {
         "ok": True,
         "liga": liga_code, "sezon": sezon_test,
@@ -570,6 +810,8 @@ def run_backtest(
         "roi_b365_pct": roi_b365_pct,
         "n_kolejek": n_k,
         "df": pd.DataFrame(rows_csv),
+        "alt_df": _alt_df,
+        "alt_summary": _alt_summary,
     }
 
 
@@ -589,6 +831,19 @@ def load_results(liga: str, sezon: str, db: str) -> pd.DataFrame:
 
 def has_results(liga: str, sezon: str, db: str) -> bool:
     return not load_results(liga, sezon, db).empty
+
+
+def load_alt_results(liga: str, sezon: str, db: str) -> pd.DataFrame:
+    """Ładuje wyniki alt markets z DB."""
+    try:
+        con = sqlite3.connect(db)
+        df = pd.read_sql_query(
+            f"SELECT * FROM {_TABLE}_alt WHERE liga=? AND sezon=? ORDER BY kolejka,id",
+            con, params=(liga, sezon))
+        con.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def summary(liga: str, sezon: str, db: str) -> dict:
