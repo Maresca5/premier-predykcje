@@ -439,9 +439,12 @@ def get_round_status(schedule: pd.DataFrame, round_num: int) -> str:
 # ===========================================================================
 # STATYSTYKI
 # ===========================================================================
+TIME_DECAY_TAU = 21.0  # dni; poprzednio 30 – szybsza reakcja na formę
+
 def weighted_mean(values: pd.Series, dates: pd.Series = None,
-                  tau_days: float = 30.0) -> float:
-    """Ważona średnia z wykładniczym decay względem czasu (tau=30 dni).
+                  tau_days: float = TIME_DECAY_TAU) -> float:
+    """Ważona średnia z wykładniczym decay (tau=21 dni).
+    Mecz sprzed 3 tyg. ma wagę ~37% meczu z dziś. Szybsza reakcja na formę.
     Jeśli dates niedostępne – fallback do liniowego linspace."""
     if len(values) == 0:
         return 0.0
@@ -552,7 +555,7 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
     def form_weight(team: str) -> float:
         f = forma_dict.get(team, "")
         w = f.count("W"); l = f.count("L")
-        return float(np.clip(1.0 + (w - l) * 0.03, 0.85, 1.15))
+        return float(np.clip(1.0 + (w - l) * 0.05, 0.80, 1.20))  # wzmocniony: ±0.05 vs poprz. ±0.03
 
     lam_h_goals = avg_h * atak_h * obrona_a * form_weight(h)
     lam_a_goals = avg_a * atak_a * obrona_h * form_weight(a)
@@ -1313,10 +1316,17 @@ def statystyki_skutecznosci(liga: str = None) -> pd.DataFrame:
     # Grupuj po rynku
     stats = []
     for (rynek, typ, linia), group in df.groupby(['rynek', 'typ', 'linia']):
+        # Buduj czytelną nazwę: "Gole Over 2.5", "Gole Under 2.5", "BTTS Tak" etc.
         nazwa = f"{rynek}"
-        if linia and linia > 0:
-            nazwa += f" {linia}"
-        if typ and typ not in ["Tak", "Nie"] and "Over" not in typ and "Under" not in typ:
+        if typ in ("Tak", "Nie"):
+            nazwa += f" {typ}"
+        elif typ in ("Over", "Under") and linia and linia > 0:
+            nazwa += f" {typ} {float(linia):.1f}"
+        elif linia and linia > 0:
+            nazwa += f" {float(linia):.1f}"
+            if typ and "Over" not in typ and "Under" not in typ:
+                nazwa += f" {typ}"
+        elif typ:
             nazwa += f" {typ}"
         
         trafione = group['trafione'].sum()
@@ -1532,52 +1542,101 @@ def _ocen_forme(f: str) -> str:
     if l >= 3: return "słaba forma"
     return "nieregularna forma"
 
-def generuj_komentarz(home: str, away: str, pred: dict, forma_dict: dict) -> str:
+def generuj_komentarz(home: str, away: str, pred: dict, forma_dict: dict,
+                      odds_buk: dict = None) -> str:
+    """Analityczny komentarz: wyjaśnia predykcję modelu, wykrywa deep value
+    i konflikt formy z modelem. Nie opisuje naiwnie ciągu W/L jako przyczyny."""
     fh = forma_dict.get(home, "?")
     fa = forma_dict.get(away, "?")
+    lh = float(pred.get("lam_h", 1.2))
+    la = float(pred.get("lam_a", 1.0))
+    ph = float(pred.get("p_home", 0.33))
+    pd_ = float(pred.get("p_draw", 0.33))
+    pa = float(pred.get("p_away", 0.33))
+    typ = pred.get("typ", "?")
+
+    # ── Deep Value: rozbieżność model vs kurs bukmachera ─────────
+    deep_value_msg = ""
+    if odds_buk:
+        try:
+            kurs_typ = None
+            if typ == "1":   kurs_typ = float(odds_buk.get("odds_h", 0) or 0)
+            elif typ == "2": kurs_typ = float(odds_buk.get("odds_a", 0) or 0)
+            elif typ == "X": kurs_typ = float(odds_buk.get("odds_d", 0) or 0)
+            fair = float(pred.get("fo_typ", 0) or 0)
+            if kurs_typ and kurs_typ > 1 and fair > 1:
+                rozb = (kurs_typ - fair) / fair
+                if rozb > 0.35:
+                    deep_value_msg = (
+                        f"⚡ Deep Value: rynek {kurs_typ:.2f} vs model {fair:.2f} "
+                        f"({rozb:.0%} rozb.). Rynek może reagować na tabelę/formę, "
+                        f"ignorując siłę statystyczną.")
+                elif rozb > 0.12:
+                    deep_value_msg = (
+                        f"Model widzi edge: fair {fair:.2f} vs buk {kurs_typ:.2f} ({rozb:+.0%}).")
+        except Exception:
+            pass
+
+    # ── Konflikt forma vs model ───────────────────────────────────
+    forma_ok = True
+    konflikt_opis = ""
+    if ph > 0.45 and fh.count("L") >= 3:
+        forma_ok = False
+        konflikt_opis = (f"⚠️ {home} ma formę [{fh}], ale λ={lh:.2f} sugeruje siłę statystyczną "
+                         f"(model patrzy na SOT/jakość sytuacji, nie ciąg W/L).")
+    elif pa > 0.45 and fa.count("L") >= 3:
+        forma_ok = False
+        konflikt_opis = (f"⚠️ {away} ma formę [{fa}], ale λ={la:.2f} sugeruje siłę statystyczną "
+                         f"(model patrzy na SOT/jakość sytuacji, nie ciąg W/L).")
+
+    # ── Linia 1: siły i szanse ────────────────────────────────────
+    if lh > la + 0.35:   dom = f"ofensywna przewaga gospod. (λ {lh:.2f} vs {la:.2f})"
+    elif la > lh + 0.35: dom = f"ofensywna przewaga gości (λ {la:.2f} vs {lh:.2f})"
+    else:                 dom = f"wyrównane siły (λ {lh:.2f} vs {la:.2f})"
+    linia1 = f"Model: {ph:.0%}/{pd_:.0%}/{pa:.0%} (1/X/2) · {dom} · śr. {lh+la:.1f} gola."
+
+    # ── Linia 2: forma lub konflikt ───────────────────────────────
+    if not forma_ok:
+        linia2 = konflikt_opis
+    else:
+        linia2 = f"Forma 5M: {home} [{fh}], {away} [{fa}] – spójna z predykcją modelu."
+
+    parts = [linia1, linia2]
+    if deep_value_msg:
+        parts.append(deep_value_msg)
+
+    # ── Fallback: Anthropic API ───────────────────────────────────
     try:
         import anthropic
         key = st.secrets.get("ANTHROPIC_API_KEY", None)
         if key:
             client = anthropic.Anthropic(api_key=key)
-            roznica_sil = abs(pred["lam_h"] - pred["lam_a"])
-            forma_vs_mod = (
-                "forma kłóci się z modelem"
-                if (pred["p_home"] > 0.5 and fh.count("L") >= 2)
-                   or (pred["p_away"] > 0.5 and fa.count("L") >= 2)
-                else "forma spójna z modelem"
-            )
-            upset_risk = pred["p_draw"] > 0.28 and roznica_sil > 0.4
-            trap_game  = pred["conf_level"] == "High" and (fh.count("W") <= 1 or fa.count("W") >= 3)
+            odds_ctx = ""
+            if odds_buk:
+                odds_ctx = (f"Kursy buka: 1={odds_buk.get('odds_h','?')} "
+                            f"X={odds_buk.get('odds_d','?')} 2={odds_buk.get('odds_a','?')}. ")
             prompt = (
-                f"Jesteś analitykiem piłkarskim piszącym w stylu 'Narrative Mode'.\n"
+                f"Jesteś chłodnym analitykiem statystycznym. "
+                f"NIE piszesz naiwnie o formie. Wyjaśniasz CO widzi model i DLACZEGO "
+                f"może różnić się od kursu bukmachera.\n"
                 f"Mecz: {home} vs {away}\n"
-                f"λ gosp: {pred['lam_h']:.2f} | λ gości: {pred['lam_a']:.2f}\n"
-                f"Szanse 1X2: {pred['p_home']:.1%}/{pred['p_draw']:.1%}/{pred['p_away']:.1%}\n"
-                f"Typ: {pred['typ']} | Pewność: {pred['conf_level']}\n"
-                f"Forma {home}: {fh} | {away}: {fa}\n"
-                f"Sygnały: {forma_vs_mod}"
-                f"{', ⚠️ ryzyko niespodzianki' if upset_risk else ''}"
-                f"{', 🪤 trap game?' if trap_game else ''}\n\n"
-                f"Napisz 2-3 zdania po polsku. Narracyjny styl, konkretny i analityczny."
+                f"lambda: {lh:.2f}/{la:.2f} | P: {ph:.1%}/{pd_:.1%}/{pa:.1%}\n"
+                f"Forma: {home}=[{fh}] {away}=[{fa}]\n"
+                f"{odds_ctx}"
+                f"Sygnały: konflikt_formy={not forma_ok}, deep_value={bool(deep_value_msg)}\n"
+                f"2-3 zdania po polsku. Jeśli forma kłóci się z modelem – wyjaśnij "
+                f"(model patrzy na SOT/xG-proxy, nie ciąg W/L). "
+                f"Jeśli deep value – nazwij wprost."
             )
             msg = client.messages.create(
-                model="claude-3-5-sonnet-20241022", max_tokens=200,
+                model="claude-3-5-sonnet-20241022", max_tokens=250,
                 messages=[{"role": "user", "content": prompt}],
             )
             return msg.content[0].text.strip()
     except Exception:
         pass
-    roznica = pred["p_home"] - pred["p_away"]
-    if   roznica >  0.20: faw = f"{home} jest wyraźnym faworytem ({pred['p_home']:.0%})."
-    elif roznica >  0.08: faw = f"{home} jest lekkim faworytem ({pred['p_home']:.0%} vs {pred['p_away']:.0%})."
-    elif roznica < -0.20: faw = f"{away} jest wyraźnym faworytem ({pred['p_away']:.0%})."
-    elif roznica < -0.08: faw = f"{away} jest lekkim faworytem ({pred['p_away']:.0%} vs {pred['p_home']:.0%})."
-    else:                 faw = f"Mecz wyrównany – remis ma {pred['p_draw']:.0%} szans."
-    gole = pred["lam_h"] + pred["lam_a"]
-    gole_opis = (f"Model spodziewa się bramkostrzelnego meczu (śr. {gole:.1f} goli)."
-                 if gole >= 2.8 else f"Model przewiduje defensywny mecz (śr. {gole:.1f} goli).")
-    return f"{faw} Forma: {home} [{_ocen_forme(fh)}: {fh}], {away} [{_ocen_forme(fa)}: {fa}]. {gole_opis}"
+
+    return " ".join(parts)
 
 # ===========================================================================
 # HELPERS UI
@@ -2212,13 +2271,13 @@ if not historical.empty:
                 else:
                     st.info("Brak value bets w tej kolejce")
 
-                # Legenda (footnota)
-                with st.expander("ℹ️ Legenda & Kelly", expanded=False):
+                # Legenda Kelly - na dole pod rankingiem
+                with st.expander("ℹ️ Legenda Kelly", expanded=False):
                     st.caption(
-                        "**Kelly 1/8** · max 5% bankrollu/mecz · EV≥5% wymagane\n"
-                        "🏦 normalny · ⚠️ niezweryfikowany · 🔒 limit · ✦ fair odds (brak live)\n"
-                        "**Frakcje**: 1X2 f=0.125 · Gole/BTTS f=0.075 · SOT f=0.05\n"
-                        "⛔ Kartki/Rożne: Kelly wyłączony – model bramkowy, tylko informacyjnie"
+                        "**Kelly 1/8** · max 5% bankrollu/mecz · EV≥5%  \n"
+                        "🏦 normalny · ⚠️ niezweryfikowany · 🔒 limit · ✦ fair odds  \n"
+                        "**Frakcje**: 1X2/AH f=0.125 · Gole/BTTS f=0.075 · SOT f=0.05  \n"
+                        "⛔ Kartki/Różne: Kelly wyłączony - model bramkowy. Tylko informacyjnie."
                     )
 
                 # SAFE HAVEN + SHOT KINGS → zwijana lista na dole
@@ -2682,7 +2741,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                         st.caption("Brak zdarzeń powyżej progu 55%.")
 
                                 if pokaz_komentarz:
-                                    st.info(generuj_komentarz(h, a, pred, forma_dict))
+                                    _odds_buk_kom = _kurs_live_1x2 if '_kurs_live_1x2' in dir() else None
+                                    st.info(generuj_komentarz(h, a, pred, forma_dict,
+                                                              odds_buk=_odds_buk_kom))
 
                                 if pokaz_macierz:
                                     st.markdown("**Macierz wyników**")
