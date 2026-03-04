@@ -921,7 +921,10 @@ def pobierz_paper_trades(liga: str, kolejnosc: int = None,
     return df
 
 def _ensure_paper_trades_table(con) -> None:
-    """Tworzy tabelę paper_trades jeśli nie istnieje (migracja starej bazy)."""
+    """
+    Tworzy tabelę paper_trades jeśli nie istnieje.
+    Jeśli istnieje – dodaje brakujące kolumny (migracja starych baz).
+    """
     con.execute("""
         CREATE TABLE IF NOT EXISTS paper_trades (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -944,9 +947,29 @@ def _ensure_paper_trades_table(con) -> None:
             bankroll_po REAL,
             data_zapisu TEXT,
             data_wyniku TEXT,
-            UNIQUE(liga, kolejnosc, mecz, rynek, typ)
+            linia       REAL
         )
     """)
+    # Migracja: dodaj kolumny których może brakować w starych bazach
+    existing = {row[1] for row in con.execute("PRAGMA table_info(paper_trades)").fetchall()}
+    for col, definition in [
+        ("linia",          "REAL"),
+        ("bankroll_przed", "REAL"),
+        ("bankroll_po",    "REAL"),
+        ("data_zapisu",    "TEXT"),
+        ("data_wyniku",    "TEXT"),
+        ("wynik_meczu",    "TEXT"),
+        ("pnl",            "REAL"),
+        ("trafiony",       "INTEGER"),
+        ("kelly_frac",     "REAL"),
+        ("p_model",        "REAL"),
+        ("fair_odds",      "REAL"),
+    ]:
+        if col not in existing:
+            try:
+                con.execute(f"ALTER TABLE paper_trades ADD COLUMN {col} {definition}")
+            except Exception:
+                pass
     con.commit()
 
 
