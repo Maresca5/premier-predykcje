@@ -1727,6 +1727,9 @@ if not historical.empty:
                     for emoji, nazwa, p, fo, kat, linia in alt:
                         if fo >= 1.30:
                             ev = _ev(p, fo)
+                            # Kelly dla alt markets – niezweryfikowany, disclaimer w UI
+                            _br_alt = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
+                            _kel_alt = kelly_stake(p, fo, bankroll=_br_alt)
                             wszystkie_zd.append({
                                 "Mecz": mecz_str,
                                 "Rynek": kat,
@@ -1735,7 +1738,8 @@ if not historical.empty:
                                 "Fair": fo,
                                 "KursBuk": None,
                                 "EV": ev,
-                                "Kelly_stake": None,
+                                "Kelly_stake": _kel_alt["stake_pln"] if _kel_alt["safe"] else None,
+                                "Kelly_unverified": True,
                                 "Kategoria": kat
                             })
                     
@@ -1774,6 +1778,13 @@ if not historical.empty:
                 # else: Wszystkie - df_rank bez zmian
 
                 # VALUE BETS
+                if _widok == "⚡ Alternatywne":
+                    st.info(
+                        "⚠️ **Disclaimer Kelly dla rynków alternatywnych**: "
+                        "Stawki Kelly obliczone z prawdopodobieństw modelu, które **nie były "
+                        "jeszcze historycznie zweryfikowane** dla tych rynków. "
+                        "Traktuj je orientacyjnie – użyj ułamka sugerowanej stawki. "
+                        "Weryfikacja dostępna po uruchomieniu backtestów w zakładce 🧪 Backtest.")
                 st.markdown("### 🔥 Value Bets (EV > 0)")
                 value_bets = df_rank[df_rank["EV"] > 0].sort_values("EV", ascending=False)
                 if not value_bets.empty:
@@ -1796,9 +1807,15 @@ if not historical.empty:
                             st.markdown(f"<span style='color:{ev_color};font-weight:bold'>EV {row['EV']:+.3f}</span>",
                                         unsafe_allow_html=True)
                         with cols[5]:
+                            _is_unverif = row.get("Kelly_unverified", False)
                             if _ks:
-                                st.markdown(f"<span style='color:#4CAF50;font-weight:bold'>🏦 {_ks:.0f} zł</span>",
-                                            unsafe_allow_html=True)
+                                _disc = "⚠️" if _is_unverif else "🏦"
+                                _col  = "#FF9800" if _is_unverif else "#4CAF50"
+                                _tip  = " (niezwer.)" if _is_unverif else ""
+                                st.markdown(
+                                    f"<span style='color:{_col};font-weight:bold'>"
+                                    f"{_disc} {_ks:.0f} zł{_tip}</span>",
+                                    unsafe_allow_html=True)
                             else:
                                 st.markdown("<span style='color:#444'>–</span>", unsafe_allow_html=True)
                         st.divider()
@@ -3427,6 +3444,53 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                     st.info("Brak danych backtestów. Uruchom backtest dla co najmniej jednego sezonu.")
                     m5.metric("Kolejek",       summ["per_kolejka"]["kolejka"].max()
                                                if not summ["per_kolejka"].empty else "–")
+
+                    # ── Alt markets results ───────────────────────────────
+                    if hasattr(_bt, "load_alt_results"):
+                        _alt_df_bt = _bt.load_alt_results(BT_LIGA, BT_SEZON_TEST, BT_DB)
+                        if not _alt_df_bt.empty:
+                            st.divider()
+                            st.markdown("### ⚡ Rynki Alternatywne – wyniki backtestów")
+                            st.caption("Kelly 1/4 na fair odds. ⚠️ Brak marży – real ROI będzie niższy o ~3-8%.")
+                            _alt_rynki = _alt_df_bt["rynek"].unique()
+                            _alt_cols_bt = st.columns(min(len(_alt_rynki), 4))
+                            for _ai, _ark in enumerate(_alt_rynki):
+                                _ardf = _alt_df_bt[_alt_df_bt["rynek"] == _ark]
+                                _arn  = len(_ardf)
+                                _arhit = int(_ardf["trafiony"].sum())
+                                _arroi_flat = float(sum(
+                                    (r["fair_odds"]-1) if r["trafiony"] else -1
+                                    for _, r in _ardf.iterrows())) / _arn * 100
+                                _arroi_kelly = float(_ardf["kelly_pnl"].sum())
+                                _arc = _alt_cols_bt[_ai % len(_alt_cols_bt)]
+                                _kc = "#4CAF50" if _arroi_kelly > 0 else "#F44336"
+                                _arc.markdown(
+                                    f"<div style='background:#0e1117;border:1px solid {_kc}33;"
+                                    f"border-radius:8px;padding:10px;text-align:center'>"
+                                    f"<div style='font-size:0.82em;color:#888;margin-bottom:4px'>{_ark}</div>"
+                                    f"<div style='font-size:0.88em;color:#ccc'>N={_arn} · HR {_arhit/_arn:.0%}</div>"
+                                    f"<div style='font-size:0.82em;color:#888;margin-top:3px'>"
+                                    f"ROI flat: <b style='color:{'#4CAF50' if _arroi_flat>0 else '#F44336'}'>"
+                                    f"{_arroi_flat:+.1f}%</b></div>"
+                                    f"<div style='font-size:1.0em;font-weight:bold;margin-top:4px;color:{_kc}'>"
+                                    f"Kelly PnL: {_arroi_kelly:+.3f} j</div></div>",
+                                    unsafe_allow_html=True)
+                            with st.expander("📋 Szczegóły per linia", expanded=False):
+                                _agg = _alt_df_bt.groupby(["rynek","typ"]).agg(
+                                    n=("trafiony","count"), hit=("trafiony","sum"),
+                                    p_avg=("p_model","mean"),
+                                    kelly_pnl=("kelly_pnl","sum"),
+                                    brier=("brier_bin","mean"),
+                                ).reset_index()
+                                _agg["HR"]       = (_agg["hit"] / _agg["n"]).map("{:.0%}".format)
+                                _agg["P model"]  = _agg["p_avg"].map("{:.0%}".format)
+                                _agg["Kelly PnL"]= _agg["kelly_pnl"].map("{:+.3f}j".format)
+                                _agg["Brier"]    = _agg["brier"].map("{:.4f}".format)
+                                st.dataframe(
+                                    _agg[["rynek","typ","n","hit","HR","P model","Brier","Kelly PnL"]]
+                                    .rename(columns={"rynek":"Rynek","typ":"Typ","n":"N","hit":"Traf."}),
+                                    use_container_width=True, hide_index=True)
+                                st.caption("Rynki niezweryfikowane na live kursach – Kelly na fair odds (bez marży).")
 
                     st.divider()
                     ec1, ec2 = st.columns(2)
