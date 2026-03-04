@@ -257,6 +257,35 @@ def init_db():
         )
     """)
 
+    # Paper trading – zakłady sugerowane przez Kelly
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trades (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            liga        TEXT NOT NULL,
+            kolejnosc   INTEGER NOT NULL,
+            mecz        TEXT NOT NULL,
+            home        TEXT NOT NULL,
+            away        TEXT NOT NULL,
+            rynek       TEXT NOT NULL,
+            typ         TEXT NOT NULL,
+            p_model     REAL,
+            fair_odds   REAL,
+            kelly_frac  REAL,
+            stawka      REAL NOT NULL,
+            bankroll_przed REAL,
+            status      TEXT DEFAULT 'oczekuje',
+            trafiony    INTEGER,
+            wynik_meczu TEXT,
+            pnl         REAL,
+            bankroll_po REAL,
+            data_zapisu TEXT,
+            data_wyniku TEXT,
+            UNIQUE(liga, kolejnosc, mecz, rynek, typ)
+        )
+    """)
+    con.commit()
+    con.close()
+
     con.commit()
     con.close()
 
@@ -813,6 +842,165 @@ def pobierz_bankroll_history(liga: str = None) -> pd.DataFrame:
     df = pd.read_sql_query(q, con, params=params)
     con.close()
     return df
+
+def pobierz_aktualny_bankroll(liga: str, start: float = 1000.0) -> float:
+    """Zwraca aktualny stan bankrollu (po paper trades i korektach)."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    # Sprawdź paper trades które mają wynik
+    row = con.execute(
+        "SELECT bankroll_po FROM paper_trades WHERE liga=? AND bankroll_po IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1", (liga,)).fetchone()
+    if row:
+        cap = float(row[0])
+    else:
+        # Fallback: bankroll z tabeli bankroll
+        row2 = con.execute(
+            "SELECT kapital_po FROM bankroll WHERE liga=? ORDER BY id DESC LIMIT 1",
+            (liga,)).fetchone()
+        cap = float(row2[0]) if row2 else start
+    con.close()
+    return cap
+
+def zapisz_paper_trades(liga: str, kolejnosc: int, trades: list, bankroll_przed: float) -> int:
+    """
+    Zapisuje listę zakładów Kelly do paper_trades.
+    trades = [{"mecz", "home", "away", "rynek", "typ", "p_model",
+               "fair_odds", "kelly_frac", "stawka"}, ...]
+    Zwraca liczbę zapisanych rekordów.
+    """
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    saved = 0
+    for t in trades:
+        try:
+            con.execute(
+                """INSERT OR IGNORE INTO paper_trades
+                   (liga, kolejnosc, mecz, home, away, rynek, typ,
+                    p_model, fair_odds, kelly_frac, stawka, bankroll_przed,
+                    status, data_zapisu)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'oczekuje',?)""",
+                (liga, kolejnosc, t["mecz"], t["home"], t["away"],
+                 t["rynek"], t["typ"], t["p_model"], t["fair_odds"],
+                 t["kelly_frac"], t["stawka"], bankroll_przed,
+                 datetime.now().strftime("%Y-%m-%d %H:%M"))
+            )
+            saved += con.execute("SELECT changes()").fetchone()[0]
+        except Exception:
+            pass
+    con.commit()
+    con.close()
+    return saved
+
+def usun_paper_trade(trade_id: int) -> bool:
+    """Usuwa pojedynczy paper trade (tylko ze statusem oczekuje)."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    try:
+        con.execute(
+            "DELETE FROM paper_trades WHERE id=? AND status='oczekuje'", (trade_id,))
+        con.commit()
+        deleted = con.execute("SELECT changes()").fetchone()[0]
+        return deleted > 0
+    except Exception:
+        return False
+    finally:
+        con.close()
+
+def pobierz_paper_trades(liga: str, kolejnosc: int = None,
+                          status: str = None) -> pd.DataFrame:
+    """Pobiera paper trades z DB."""
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    q = "SELECT * FROM paper_trades WHERE liga=?"
+    params = [liga]
+    if kolejnosc:
+        q += " AND kolejnosc=?"; params.append(kolejnosc)
+    if status:
+        q += " AND status=?"; params.append(status)
+    q += " ORDER BY id DESC"
+    df = pd.read_sql_query(q, con, params=params)
+    con.close()
+    return df
+
+def rozlicz_paper_trades(liga: str, hist: pd.DataFrame) -> dict:
+    """
+    Po aktualizacji wyników sprawdza oczekujące paper trades i rozlicza je.
+    Aktualizuje pnl, bankroll_po, status.
+    Zwraca {"rozliczone": N, "trafione": M, "pnl_total": X, "bankroll_po": Y}
+    """
+    if "SeasonCode" in hist.columns or hist.empty:
+        hist_biezacy = hist[hist["_sezon"] == "biezacy"] if "_sezon" in hist.columns else hist
+    else:
+        hist_biezacy = hist
+
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    oczekujace = con.execute(
+        "SELECT id, home, away, rynek, typ, linia, stawka, fair_odds, bankroll_przed "
+        "FROM paper_trades WHERE liga=? AND status='oczekuje'",
+        (liga,)).fetchall()
+
+    if not oczekujace:
+        con.close()
+        return {"rozliczone": 0, "trafione": 0, "pnl_total": 0.0, "bankroll_po": None}
+
+    rozliczone = 0; trafione_cnt = 0; pnl_total = 0.0
+    bk_po = None
+
+    for row in oczekujace:
+        tid, home, away, rynek, typ, linia, stawka, fair_odds, bk_przed = row
+        # Znajdź wynik meczu
+        match = hist_biezacy[
+            (hist_biezacy["HomeTeam"] == home) &
+            (hist_biezacy["AwayTeam"] == away)]
+        if match.empty:
+            continue
+
+        m = match.iloc[-1]
+        hg = int(m["FTHG"]); ag = int(m["FTAG"])
+        wynik_str = f"{hg}:{ag}"
+        wynik_1x2 = "1" if hg > ag else ("2" if ag > hg else "X")
+        rzuty = int(m.get("HC", 0) or 0) + int(m.get("AC", 0) or 0)
+        kartki = (int(m.get("HY", 0) or 0) + int(m.get("AY", 0) or 0) +
+                  (int(m.get("HR", 0) or 0) + int(m.get("AR", 0) or 0)) * 2)
+
+        traf = False
+        if rynek == "1X2":
+            traf = typ in (wynik_1x2,) or (typ == "1X" and wynik_1x2 in ("1","X")) or (typ == "X2" and wynik_1x2 in ("X","2"))
+        elif rynek == "Gole":
+            lin = float(linia) if linia else 2.5
+            traf = (hg + ag) > lin if "Over" in typ else (hg + ag) < lin
+        elif rynek == "BTTS":
+            traf = (hg > 0 and ag > 0) if "Tak" in typ else (hg == 0 or ag == 0)
+        elif rynek == "Rożne":
+            traf = rzuty > float(linia or 8.5)
+        elif rynek == "Kartki":
+            traf = kartki > float(linia or 3.5)
+
+        pnl = round(stawka * (fair_odds - 1), 2) if traf else round(-stawka, 2)
+        # Pobierz bieżący bankroll przed tym trade
+        last_bk = con.execute(
+            "SELECT bankroll_po FROM paper_trades WHERE liga=? AND bankroll_po IS NOT NULL "
+            "AND id < ? ORDER BY id DESC LIMIT 1", (liga, tid)).fetchone()
+        bk_aktualny = float(last_bk[0]) if last_bk else float(bk_przed or 1000.0)
+        bk_nowy = round(bk_aktualny + pnl, 2)
+
+        con.execute(
+            """UPDATE paper_trades SET status='rozliczony', trafiony=?, wynik_meczu=?,
+               pnl=?, bankroll_po=?, data_wyniku=? WHERE id=?""",
+            (int(traf), wynik_str, pnl, bk_nowy,
+             datetime.now().strftime("%Y-%m-%d %H:%M"), tid))
+
+        rozliczone += 1
+        if traf: trafione_cnt += 1
+        pnl_total += pnl
+        bk_po = bk_nowy
+
+    con.commit()
+    con.close()
+    return {"rozliczone": rozliczone, "trafione": trafione_cnt,
+            "pnl_total": round(pnl_total, 2), "bankroll_po": bk_po}
 
 def wybierz_wynik(M: np.ndarray, lam_h: float, lam_a: float) -> tuple:
     idx_max = np.unravel_index(M.argmax(), M.shape)
@@ -2450,6 +2638,15 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         con_u.close()
                         for h_db, a_db in mecze_db:
                             aktualizuj_wynik_zdarzenia(h_db, a_db, historical)
+                        # Auto-rozlicz paper trades po aktualizacji wyników
+                        _rozl = rozlicz_paper_trades(wybrana_liga, historical)
+                        if _rozl["rozliczone"] > 0:
+                            _pnl_c = "#4CAF50" if _rozl["pnl_total"] >= 0 else "#F44336"
+                            st.success(
+                                f"📊 Rozliczono {_rozl['rozliczone']} paper trades: "
+                                f"{_rozl['trafione']} trafione · "
+                                f"PnL: **{_rozl['pnl_total']:+.2f} zł** · "
+                                f"Bankroll: {_rozl['bankroll_po']:.0f} zł")
                             n_updated += 1
                         st.success(f"✅ Zaktualizowano wyniki dla {n_updated} meczów.")
             else:
@@ -2626,37 +2823,199 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 )
                 st.caption("⏳ = predykcje zapisane, wyniki jeszcze nie dostępne w football-data.co.uk")
 
-        # ── Bankroll Tracking – realny kapitał ────────────────────────────
-        _br_hist = pobierz_bankroll_history(wybrana_liga)
-        if not _br_hist.empty and "kapital_po" in _br_hist.columns:
-            st.markdown("**💼 Realny Bankroll**")
-            _br_cur = float(_br_hist["kapital_po"].iloc[-1])
-            _br_start = 1000.0
-            _br_roi = (_br_cur - _br_start) / _br_start * 100
-            _brc1, _brc2, _brc3 = st.columns(3)
-            _brc1.metric("💰 Aktualny kapital", f"{_br_cur:.0f} zł",
-                         delta=f"{_br_roi:+.1f}%",
-                         delta_color="normal" if _br_roi >= 0 else "inverse")
-            _brc2.metric("📅 Wpisów", len(_br_hist))
-            _brc3.metric("📊 Zmian", len(_br_hist[_br_hist["typ"]=="wynik"]))
-            _br_chart = _br_hist[["kapital_po"]].rename(columns={"kapital_po":"Kapitał"})
-            st.line_chart(_br_chart, height=160, color="#4CAF50" if _br_roi>=0 else "#F44336")
+        # ══════════════════════════════════════════════════════════════════
+        # PAPER TRADING TRACKER
+        # ══════════════════════════════════════════════════════════════════
+        st.markdown("### 💼 Paper Trading Tracker")
+        st.caption("Kelly 1/8 · EV≥5% · auto-zapis typów kolejki · auto-rozliczanie po wynikach")
 
-        # Formularz dodawania wpisu
-        with st.expander("➕ Dodaj wpis bankrollu", expanded=False):
-            _brf1, _brf2, _brf3 = st.columns(3)
-            _br_kwota = _brf1.number_input("Kwota (+ zysk / - strata)", value=0.0, step=10.0, key="_br_kwota")
-            _br_opis  = _brf2.text_input("Opis (np. 'Chelsea X2 kolejka 29')", key="_br_opis")
-            _br_typ   = _brf3.selectbox("Typ", ["wynik","korekta","depozyt","wypłata"], key="_br_typ")
-            if st.button("💾 Zapisz wpis", key="_br_save"):
-                if _br_kwota != 0 or _br_typ in ("depozyt","wypłata"):
-                    zapisz_wynik_bankroll(wybrana_liga,
-                                         int(get_current_round(schedule)) if not schedule.empty else 0,
-                                         _br_opis, _br_kwota, _br_typ)
-                    st.success(f"Zapisano: {_br_kwota:+.0f} zł · {_br_opis}")
-                    st.rerun()
-                else:
-                    st.warning("Podaj kwotę != 0")
+        _pt_bankroll_start = 1000.0
+        _pt_bankroll_cur   = pobierz_aktualny_bankroll(wybrana_liga, _pt_bankroll_start)
+        _pt_roi            = (_pt_bankroll_cur - _pt_bankroll_start) / _pt_bankroll_start * 100
+
+        # KPI row
+        _ptk1, _ptk2, _ptk3, _ptk4 = st.columns(4)
+        _ptk1.metric("💰 Bankroll", f"{_pt_bankroll_cur:.0f} zł",
+                     delta=f"{_pt_roi:+.1f}%",
+                     delta_color="normal" if _pt_roi >= 0 else "inverse")
+        _pt_all = pobierz_paper_trades(wybrana_liga)
+        _pt_rozl = _pt_all[_pt_all["status"]=="rozliczony"] if not _pt_all.empty else pd.DataFrame()
+        _pt_ocz  = _pt_all[_pt_all["status"]=="oczekuje"]   if not _pt_all.empty else pd.DataFrame()
+        _ptk2.metric("📋 Wszystkich typów", len(_pt_all))
+        _ptk3.metric("✅ Rozliczonych",
+                     f"{len(_pt_rozl)} ({int(_pt_rozl['trafiony'].sum()) if not _pt_rozl.empty else 0} traf.)")
+        _ptk4.metric("⏳ Oczekuje", len(_pt_ocz))
+
+        # Equity curve paper tradingu
+        if not _pt_rozl.empty and "bankroll_po" in _pt_rozl.columns:
+            _eq_pt = _pt_rozl.dropna(subset=["bankroll_po"]).reset_index(drop=True)
+            if not _eq_pt.empty:
+                _eq_chart = pd.DataFrame({
+                    "Bankroll": [_pt_bankroll_start] + _eq_pt["bankroll_po"].tolist()
+                })
+                st.line_chart(_eq_chart, height=160,
+                              color="#4CAF50" if _pt_roi >= 0 else "#F44336")
+
+        st.divider()
+
+        # ── Auto-zapis typów bieżącej kolejki ─────────────────────────────
+        if not schedule.empty and not srednie_df.empty:
+            _pt_kolejka = int(get_current_round(schedule))
+            _pt_existing = pobierz_paper_trades(wybrana_liga, _pt_kolejka)
+            _pt_mecze_k  = schedule[schedule["round"] == _pt_kolejka]
+
+            if _pt_existing.empty:
+                st.info(f"📥 Kolejka {_pt_kolejka} – brak zapisanych typów. Kliknij aby auto-załadować Kelly bets.")
+                if st.button(f"⚡ Załaduj Kelly bets kolejki {_pt_kolejka}", key="_pt_load",
+                             type="primary"):
+                    _pt_trades_to_save = []
+                    _pt_bk_teraz = pobierz_aktualny_bankroll(wybrana_liga, _pt_bankroll_start)
+
+                    for _, _pt_m in _pt_mecze_k.iterrows():
+                        _ph = map_nazwa(_pt_m["home_team"])
+                        _pa = map_nazwa(_pt_m["away_team"])
+                        if _ph not in srednie_df.index or _pa not in srednie_df.index:
+                            continue
+                        try:
+                            _plh, _pla, _plr, _plk, _, _plsot = oblicz_lambdy(
+                                _ph, _pa, srednie_df, srednie_lig, forma_dict)
+                            _pp = predykcja_meczu(_plh, _pla, rho=rho,
+                                                  csv_code=LIGI[wybrana_liga]["csv_code"],
+                                                  n_train=n_biezacy)
+                            # 1X2
+                            if _pp["p_typ"] >= 0.58 and _pp["fo_typ"] >= 1.30:
+                                _pkel = kelly_stake(_pp["p_typ"], _pp["fo_typ"],
+                                                    bankroll=_pt_bk_teraz, rynek="1X2")
+                                if _pkel["safe"] and _pkel["stake_pln"] > 0:
+                                    _pt_trades_to_save.append({
+                                        "mecz": f"{_ph} – {_pa}",
+                                        "home": _ph, "away": _pa,
+                                        "rynek": "1X2", "typ": _pp["typ"],
+                                        "p_model": round(_pp["p_typ"], 4),
+                                        "fair_odds": round(_pp["fo_typ"], 3),
+                                        "kelly_frac": _pkel.get("fraction_used", 0.125),
+                                        "stawka": round(_pkel["stake_pln"], 2),
+                                    })
+                            # Alt markets
+                            _palt = alternatywne_zdarzenia(
+                                _plh, _pla, _plr, _plk, rho,
+                                prog_min=0.60, lam_sot=_plsot)
+                            _pexp = _pkel["stake_pln"] if _pkel["safe"] else 0.0
+                            for _pem, _pnaz, _pp2, _pfo, _pkat, _plin in _palt:
+                                if _pfo < 1.30: continue
+                                _pkel2 = kelly_stake(_pp2, _pfo, bankroll=_pt_bk_teraz,
+                                                     rynek=_pkat,
+                                                     already_exposed=_pexp)
+                                if _pkel2["safe"] and _pkel2["stake_pln"] > 0:
+                                    _pexp += _pkel2["stake_pln"]
+                                    _pt_trades_to_save.append({
+                                        "mecz": f"{_ph} – {_pa}",
+                                        "home": _ph, "away": _pa,
+                                        "rynek": _pkat, "typ": _pnaz,
+                                        "p_model": round(_pp2, 4),
+                                        "fair_odds": round(_pfo, 3),
+                                        "kelly_frac": _pkel2.get("fraction_used", 0.075),
+                                        "stawka": round(_pkel2["stake_pln"], 2),
+                                    })
+                        except Exception:
+                            continue
+
+                    if _pt_trades_to_save:
+                        n_saved = zapisz_paper_trades(
+                            wybrana_liga, _pt_kolejka,
+                            _pt_trades_to_save, _pt_bk_teraz)
+                        st.success(f"✅ Zapisano {n_saved} typów Kelly dla kolejki {_pt_kolejka}")
+                        st.rerun()
+                    else:
+                        st.warning("Brak typów spełniających kryteria Kelly (EV≥5%, p≥58%)")
+            else:
+                st.success(f"✅ Kolejka {_pt_kolejka} – {len(_pt_existing)} typów załadowanych")
+
+            # ── Oczekujące paper trades ────────────────────────────────────
+            if not _pt_ocz.empty:
+                st.markdown(f"**⏳ Oczekujące typy (kolejka {_pt_kolejka})**")
+                _pt_col_h = st.columns([3,2,1,1,1,0.7])
+                for lbl in ["Mecz","Typ","P model","Kurs","Stawka",""]:
+                    _pt_col_h[["Mecz","Typ","P model","Kurs","Stawka",""].index(lbl)].markdown(
+                        f"<span style='color:#555;font-size:0.74em'>{lbl}</span>",
+                        unsafe_allow_html=True)
+                for _, _pt_row in _pt_ocz.iterrows():
+                    _ptc = st.columns([3,2,1,1,1,0.7])
+                    _ptc[0].markdown(
+                        f"<span style='font-size:0.84em;color:#ccc'>{_pt_row['mecz']}</span>"
+                        f"<br><span style='font-size:0.74em;color:#555'>{_pt_row['rynek']}</span>",
+                        unsafe_allow_html=True)
+                    _ptc[1].markdown(
+                        f"<span style='font-size:0.86em;font-weight:bold;color:#fff'>{_pt_row['typ']}</span>",
+                        unsafe_allow_html=True)
+                    _ptc[2].markdown(
+                        f"<span style='font-size:0.84em;color:#2196F3'>{float(_pt_row['p_model']):.0%}</span>",
+                        unsafe_allow_html=True)
+                    _ptc[3].markdown(
+                        f"<span style='font-size:0.84em;color:#888'>{float(_pt_row['fair_odds']):.2f}</span>",
+                        unsafe_allow_html=True)
+                    _ptc[4].markdown(
+                        f"<span style='font-size:0.9em;font-weight:bold;color:#4CAF50'>"
+                        f"{float(_pt_row['stawka']):.0f} zł</span>",
+                        unsafe_allow_html=True)
+                    if _ptc[5].button("🗑️", key=f"del_pt_{_pt_row['id']}",
+                                      help="Usuń ten typ"):
+                        if usun_paper_trade(int(_pt_row["id"])):
+                            st.rerun()
+
+                # Ręczne rozliczenie (jeśli wyniki dostępne)
+                if st.button("🔄 Rozlicz oczekujące po wynikach", key="_pt_rozlicz",
+                             help="Sprawdza football-data.co.uk i rozlicza zakończone mecze"):
+                    _rozl2 = rozlicz_paper_trades(wybrana_liga, historical)
+                    if _rozl2["rozliczone"] > 0:
+                        st.success(
+                            f"✅ Rozliczono {_rozl2['rozliczone']} typów · "
+                            f"{_rozl2['trafione']} trafione · "
+                            f"PnL: **{_rozl2['pnl_total']:+.2f} zł** · "
+                            f"Nowy bankroll: **{_rozl2['bankroll_po']:.0f} zł**")
+                        st.rerun()
+                    else:
+                        st.info("Brak wyników do rozliczenia – poczekaj na aktualizację football-data.co.uk")
+
+        # ── Historia rozliczonych trades ───────────────────────────────────
+        if not _pt_rozl.empty:
+            st.divider()
+            st.markdown("**📜 Historia rozliczonych typów**")
+            with st.expander(f"Pokaż {len(_pt_rozl)} rozliczonych typów", expanded=False):
+                for _, _pr in _pt_rozl.sort_values("id", ascending=False).iterrows():
+                    _traf_i  = int(_pr.get("trafiony", 0) or 0)
+                    _pnl_v   = float(_pr.get("pnl", 0) or 0)
+                    _bk_v    = float(_pr.get("bankroll_po", 0) or 0)
+                    _ico = "✅" if _traf_i else "❌"
+                    _pnl_c = "#4CAF50" if _pnl_v >= 0 else "#F44336"
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"padding:4px 0;border-bottom:1px solid #1a1a2e;font-size:0.82em'>"
+                        f"<span style='color:#888'>K{int(_pr['kolejnosc'])}</span>"
+                        f"<span style='color:#ccc'>{_pr['mecz']}</span>"
+                        f"<span style='color:#888'>{_pr['typ']} @ {float(_pr['fair_odds']):.2f}</span>"
+                        f"<span style='color:#888'>{float(_pr['stawka']):.0f} zł</span>"
+                        f"<span style='color:{_pnl_c};font-weight:bold'>{_ico} {_pnl_v:+.2f} zł</span>"
+                        f"<span style='color:#555'>{_bk_v:.0f} zł</span>"
+                        f"</div>",
+                        unsafe_allow_html=True)
+                # Podsumowanie
+                _total_pnl = _pt_rozl["pnl"].sum()
+                _total_traf = int(_pt_rozl["trafiony"].sum())
+                _hr_pt = _total_traf / len(_pt_rozl)
+                st.markdown(
+                    f"<div style='margin-top:8px;padding:8px;background:#0e1117;"
+                    f"border-radius:6px;display:flex;justify-content:space-around;"
+                    f"font-size:0.84em'>"
+                    f"<span>Typów: <b>{len(_pt_rozl)}</b></span>"
+                    f"<span>HR: <b style='color:{'#4CAF50' if _hr_pt>=0.62 else '#FF9800'}'>"
+                    f"{_hr_pt:.0%}</b></span>"
+                    f"<span>PnL total: <b style='color:{'#4CAF50' if _total_pnl>=0 else '#F44336'}'>"
+                    f"{_total_pnl:+.2f} zł</b></span>"
+                    f"<span>Bankroll: <b>{_pt_bankroll_cur:.0f} zł</b></span>"
+                    f"</div>",
+                    unsafe_allow_html=True)
+
         st.divider()
 
         # ── Equity Curve (teoretyczna z DB) ───────────────────────────────
