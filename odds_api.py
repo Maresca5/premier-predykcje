@@ -224,117 +224,240 @@ def get_usage_stats(db_file):
 # Odds API uzywa pelnych angielskich nazw, model uzywa skroconych z football-data.co.uk
 TEAM_NAME_MAP = {
     # ── PREMIER LEAGUE ───────────────────────────────────────────────────────
-    "Brighton & Hove Albion":  "Brighton",
-    "West Ham United":         "West Ham",
-    "Newcastle United":        "Newcastle",
-    "Tottenham Hotspur":       "Tottenham",
-    "Leeds United":            "Leeds",
-    "Manchester United":       "Man United",
-    "Manchester City":         "Man City",
-    "Nottingham Forest":       "Nott'm Forest",
-    "Wolverhampton Wanderers": "Wolves",
-    "Wolverhampton":           "Wolves",
-    "Leicester City":          "Leicester",
-    "Sheffield United":        "Sheffield Utd",
-    # LA LIGA
-    "Girona FC":               "Girona",
-    "Rayo Vallecano":          "Vallecano",
-    "RCD Mallorca":            "Mallorca",
-    "FC Barcelona":            "Barcelona",
-    "Deportivo Alavés":        "Alaves",
-    "Deportivo Alaves":        "Alaves",
-    "Levante UD":              "Levante",
-    "Valencia CF":             "Valencia",
-    "Real Sociedad":           "Sociedad",
-    "Celta Vigo":              "Celta",
-    "Getafe CF":               "Getafe",
-    "Athletic Club":           "Ath Bilbao",
-    "Athletic Bilbao":         "Ath Bilbao",
-    "Sevilla FC":              "Sevilla",
-    "RCD Espanyol":            "Espanol",
-    "Espanyol":                "Espanol",
-    "Atlético Madrid":         "Ath Madrid",
-    "Atletico Madrid":         "Ath Madrid",
-    "Elche CF":                "Elche",
-    "Real Betis":              "Betis",
-    "CA Osasuna":              "Osasuna",
-    "Real Valladolid":         "Valladolid",
-    "Real Oviedo":             "Oviedo",
-    "UD Las Palmas":           "Las Palmas",
-    "Cadiz CF":                "Cadiz",
-    "Granada CF":              "Granada",
-    "UD Almeria":              "Almeria",
-    # BUNDESLIGA
-    "FC Bayern München":              "Bayern Munich",
-    "Bayern":                         "Bayern Munich",
-    "Borussia Dortmund":              "Dortmund",
-    "Leipzig":                        "RB Leipzig",
-    "Bayer 04 Leverkusen":            "Leverkusen",
-    "Eintracht Frankfurt":            "Ein Frankfurt",
-    "VfB Stuttgart":                  "Stuttgart",
-    "VfL Wolfsburg":                  "Wolfsburg",
-    "Borussia Mönchengladbach":       "M'gladbach",
-    "Borussia Monchengladbach":       "M'gladbach",
-"Borussia M'gladbach": "M'gladbach",
-    "1. FC Union Berlin":             "Union Berlin",
-    "SC Freiburg":                    "Freiburg",
-    "1. FC Köln":                     "FC Koln",
-    "FC Köln":                        "FC Koln",
-    "1. FSV Mainz 05":                "Mainz",
-    "FSV Mainz 05":                   "Mainz",
-    "TSG Hoffenheim":                 "Hoffenheim",
-    "SV Werder Bremen":               "Werder Bremen",
-    "VfL Bochum":                     "Bochum",
-    "FC Augsburg":                    "Augsburg",
-    "FC St. Pauli":                   "St Pauli",
-    "St. Pauli":                      "St Pauli",
-    "1. FC Heidenheim":               "Heidenheim",
-    "Hamburger SV":                   "Hamburg",
-    # SERIE A
-    "AC Milan":               "Milan",
-    "Internazionale":         "Inter",
-    "AS Roma":                "Roma",
-    "Hellas Verona":          "Verona",
-    # LIGUE 1
-    "Paris Saint-Germain":    "Paris SG",
-    "PSG":                    "Paris SG",
-    "Olympique de Marseille": "Marseille",
-    "AS Monaco":              "Monaco",
-    "Olympique Lyonnais":     "Lyon",
-    "LOSC Lille":             "Lille",
-    "Stade Rennais":          "Rennes",
-    "OGC Nice":               "Nice",
-    "RC Lens":                "Lens",
-    "RC Strasbourg":          "Strasbourg",
-    "FC Nantes":              "Nantes",
-    "Montpellier HSC":        "Montpellier",
-    "FC Toulouse":            "Toulouse",
-    "Stade de Reims":         "Reims",
-    "Stade Brestois 29":      "Brest",
-    "Stade Brestois":         "Brest",
-    "Clermont Foot":          "Clermont",
-    "AJ Auxerre":             "Auxerre",
-    "Le Havre AC":            "Le Havre",
-    "FC Metz":                "Metz",
+    "Manchester City":              "Man City",
+    "Manchester United":            "Man United",
+    "Tottenham Hotspur":            "Tottenham",
+    "Nottingham Forest":            "Nott'm Forest",
+    "Newcastle United":             "Newcastle",
+    "West Ham United":              "West Ham",
+    "Wolverhampton Wanderers":      "Wolves",
+    "Brighton and Hove Albion":     "Brighton",
+    "Brighton & Hove Albion":       "Brighton",
+    "AFC Bournemouth":              "Bournemouth",
+    "Bournemouth":                  "Bournemouth",
+    "Ipswich Town":                 "Ipswich",
+    "Leicester City":               "Leicester",
+    "Arsenal":                      "Arsenal",
+    "Chelsea":                      "Chelsea",
+    "Liverpool":                    "Liverpool",
+    "Everton":                      "Everton",
+    "Aston Villa":                  "Aston Villa",
+    "Crystal Palace":               "Crystal Palace",
+    "Fulham":                       "Fulham",
+    "Brentford":                    "Brentford",
+    "Southampton":                  "Southampton",
+    # ── LA LIGA ──────────────────────────────────────────────────────────────
+    "Athletic Club":                "Ath Bilbao",
+    "Athletic Bilbao":              "Ath Bilbao",
+    "Atletico Madrid":              "Ath Madrid",
+    "Atletico de Madrid":           "Ath Madrid",
+    "Real Betis":                   "Betis",
+    "Celta Vigo":                   "Celta",
+    "Deportivo Alaves":             "Alaves",
+    "Alaves":                       "Alaves",
+    "Rayo Vallecano":               "Vallecano",
+    "Real Sociedad":                "Sociedad",
+    "UD Las Palmas":                "Las Palmas",
+    "Las Palmas":                   "Las Palmas",
+    "RCD Mallorca":                 "Mallorca",
+    "Mallorca":                     "Mallorca",
+    "RCD Espanyol":                 "Espanol",
+    "Espanyol":                     "Espanol",
+    "Girona FC":                    "Girona",
+    "Girona":                       "Girona",
+    "Villarreal CF":                "Villarreal",
+    "Villarreal":                   "Villarreal",
+    "CD Leganes":                   "Leganes",
+    "Leganes":                      "Leganes",
+    "FC Barcelona":                 "Barcelona",
+    "Barcelona":                    "Barcelona",
+    "Real Madrid":                  "Real Madrid",
+    "Sevilla FC":                   "Sevilla",
+    "Sevilla":                      "Sevilla",
+    "Getafe CF":                    "Getafe",
+    "Getafe":                       "Getafe",
+    "CA Osasuna":                   "Osasuna",
+    "Osasuna":                      "Osasuna",
+    "Valencia CF":                  "Valencia",
+    "Valencia":                     "Valencia",
+    "Real Valladolid":              "Valladolid",
+    # ── BUNDESLIGA ───────────────────────────────────────────────────────────
+    "Bayern Munich":                "Bayern Munich",
+    "FC Bayern Munich":             "Bayern Munich",
+    "FC Bayern Munchen":            "Bayern Munich",
+    "Bayer Leverkusen":             "Leverkusen",
+    "Bayer 04 Leverkusen":          "Leverkusen",
+    "Borussia Dortmund":            "Dortmund",
+    "Borussia Monchengladbach":     "M'gladbach",
+    "Borussia M'gladbach":          "M'gladbach",
+    "Eintracht Frankfurt":          "Ein Frankfurt",
+    "Werder Bremen":                "Werder Bremen",
+    "SV Werder Bremen":             "Werder Bremen",
+    "SC Freiburg":                  "Freiburg",
+    "Freiburg":                     "Freiburg",
+    "FC Augsburg":                  "Augsburg",
+    "Augsburg":                     "Augsburg",
+    "FC Heidenheim 1846":           "Heidenheim",
+    "Heidenheim":                   "Heidenheim",
+    "FC St. Pauli":                 "St Pauli",
+    "St. Pauli":                    "St Pauli",
+    "Holstein Kiel":                "Kiel",
+    "VfL Bochum":                   "Bochum",
+    "Bochum":                       "Bochum",
+    "VfL Wolfsburg":                "Wolfsburg",
+    "Wolfsburg":                    "Wolfsburg",
+    "VfB Stuttgart":                "Stuttgart",
+    "Stuttgart":                    "Stuttgart",
+    "TSG Hoffenheim":               "Hoffenheim",
+    "Hoffenheim":                   "Hoffenheim",
+    "RB Leipzig":                   "RB Leipzig",
+    "1. FC Union Berlin":           "Union Berlin",
+    "Union Berlin":                 "Union Berlin",
+    "1. FC Koln":                   "FC Koln",
+    "FC Koln":                      "FC Koln",
+    "1. FSV Mainz 05":              "Mainz",
+    "FSV Mainz 05":                 "Mainz",
+    "Mainz":                        "Mainz",
+    "Hamburger SV":                 "Hamburg",
+    # ── SERIE A ──────────────────────────────────────────────────────────────
+    "Internazionale":               "Inter",
+    "Inter Milan":                  "Inter",
+    "AC Milan":                     "Milan",
+    "AS Roma":                      "Roma",
+    "SS Lazio":                     "Lazio",
+    "Lazio":                        "Lazio",
+    "SSC Napoli":                   "Napoli",
+    "Napoli":                       "Napoli",
+    "Hellas Verona":                "Verona",
+    "Verona":                       "Verona",
+    "Udinese Calcio":               "Udinese",
+    "Udinese":                      "Udinese",
+    "US Lecce":                     "Lecce",
+    "Lecce":                        "Lecce",
+    "Genoa CFC":                    "Genoa",
+    "Genoa":                        "Genoa",
+    "Cagliari Calcio":              "Cagliari",
+    "Cagliari":                     "Cagliari",
+    "Parma Calcio 1913":            "Parma",
+    "Parma":                        "Parma",
+    "Venezia FC":                   "Venezia",
+    "Venezia":                      "Venezia",
+    "Como 1907":                    "Como",
+    "Como":                         "Como",
+    "AC Monza":                     "Monza",
+    "Monza":                        "Monza",
+    "Empoli FC":                    "Empoli",
+    "Empoli":                       "Empoli",
+    "Bologna FC 1909":              "Bologna",
+    "Bologna":                      "Bologna",
+    "ACF Fiorentina":               "Fiorentina",
+    "Fiorentina":                   "Fiorentina",
+    "Torino FC":                    "Torino",
+    "Torino":                       "Torino",
+    "Atalanta BC":                  "Atalanta",
+    "Atalanta":                     "Atalanta",
+    "Juventus":                     "Juventus",
+    # ── LIGUE 1 ──────────────────────────────────────────────────────────────
+    "Paris Saint-Germain":          "Paris SG",
+    "PSG":                          "Paris SG",
+    "Olympique de Marseille":       "Marseille",
+    "Marseille":                    "Marseille",
+    "Olympique Lyonnais":           "Lyon",
+    "Lyon":                         "Lyon",
+    "AS Monaco":                    "Monaco",
+    "Monaco":                       "Monaco",
+    "OGC Nice":                     "Nice",
+    "Nice":                         "Nice",
+    "RC Lens":                      "Lens",
+    "Lens":                         "Lens",
+    "Stade Rennais FC":             "Rennes",
+    "Stade Rennais":                "Rennes",
+    "Rennes":                       "Rennes",
+    "Stade Brestois 29":            "Brest",
+    "Stade Brestois":               "Brest",
+    "Brest":                        "Brest",
+    "Le Havre AC":                  "Le Havre",
+    "Le Havre":                     "Le Havre",
+    "Montpellier HSC":              "Montpellier",
+    "Montpellier":                  "Montpellier",
+    "FC Nantes":                    "Nantes",
+    "Nantes":                       "Nantes",
+    "Toulouse FC":                  "Toulouse",
+    "Toulouse":                     "Toulouse",
+    "RC Strasbourg Alsace":         "Strasbourg",
+    "RC Strasbourg":                "Strasbourg",
+    "Strasbourg":                   "Strasbourg",
+    "Angers SCO":                   "Angers",
+    "Angers":                       "Angers",
+    "AS Saint-Etienne":             "St Etienne",
+    "Saint-Etienne":                "St Etienne",
+    "AJ Auxerre":                   "Auxerre",
+    "Auxerre":                      "Auxerre",
+    "Stade de Reims":               "Reims",
+    "Reims":                        "Reims",
+    "Lille OSC":                    "Lille",
+    "Lille":                        "Lille",
 }
 _REV_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
 
 def map_api_to_model(api_name):
     return TEAM_NAME_MAP.get(api_name, api_name)
 
+def _fuzzy_team_match(name: str, candidates: list, cutoff: float = 0.72) -> str:
+    """Dopasowanie fuzzy nazwy drużyny. Zwraca najlepsze dopasowanie lub None."""
+    import difflib
+    name_n = name.lower().strip()
+    # Exact after normalization
+    for c in candidates:
+        if c.lower().strip() == name_n:
+            return c
+    # difflib sequence matching
+    matches = difflib.get_close_matches(name_n, [c.lower() for c in candidates],
+                                        n=1, cutoff=cutoff)
+    if matches:
+        # Return original case
+        for c in candidates:
+            if c.lower() == matches[0]:
+                return c
+    # Token overlap: check if all words of short name are in long name
+    words_n = set(name_n.split())
+    for c in candidates:
+        words_c = set(c.lower().split())
+        if words_n and words_n.issubset(words_c):
+            return c
+        if words_c and words_c.issubset(words_n):
+            return c
+    return None
+
+
 def znajdz_kursy(home_model, away_model, cached):
+    # 1. Direct lookup via reverse map
     home_api = _REV_MAP.get(home_model, home_model)
     away_api = _REV_MAP.get(away_model, away_model)
-    if (home_api, away_api) in cached:
-        return cached[(home_api, away_api)]
-    if (home_model, away_model) in cached:
-        return cached[(home_model, away_model)]
-    cl = {(h.lower(), a.lower()): v for (h, a), v in cached.items()}
+    for hk, ak in [(home_api, away_api), (home_model, away_model)]:
+        if (hk, ak) in cached:
+            return cached[(hk, ak)]
+
+    # 2. Case-insensitive
+    cl_lower = {(h.lower(), a.lower()): v for (h, a), v in cached.items()}
     for hk, ak in [(home_api.lower(), away_api.lower()),
                    (home_model.lower(), away_model.lower())]:
-        if (hk, ak) in cl:
-            return cl[(hk, ak)]
+        if (hk, ak) in cl_lower:
+            return cl_lower[(hk, ak)]
+
+    # 3. Map API names to model names
     for (h, a), v in cached.items():
         if map_api_to_model(h) == home_model and map_api_to_model(a) == away_model:
             return v
+
+    # 4. Fuzzy fallback – last resort
+    all_homes = list({h for (h, _) in cached})
+    all_aways = list({a for (_, a) in cached})
+    for search_h in [home_model, home_api]:
+        fh = _fuzzy_team_match(search_h, all_homes)
+        if fh:
+            for search_a in [away_model, away_api]:
+                fa = _fuzzy_team_match(search_a, all_aways)
+                if fa and (fh, fa) in cached:
+                    return cached[(fh, fa)]
     return None
