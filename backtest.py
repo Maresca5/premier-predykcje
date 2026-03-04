@@ -17,6 +17,11 @@ SOT_BLEND_W   = 0.30
 PROG_PEWNY    = 0.42
 PROG_PODWOJNA = 0.62
 TAU_DAYS      = 30.0
+KELLY_FRACTIONS_BT = {
+    "Gole": 0.15, "BTTS": 0.15,
+    "Rożne": 0.10, "Kartki": 0.10, "SOT": 0.10,
+}
+MAX_EXPOSURE_BT = 0.05
 
 # ── Nazwa tabeli w SQLite ──────────────────────────────────────────────────
 _TABLE = "backtest"
@@ -325,16 +330,19 @@ def _alt_zdarzenia(lh: float, la: float, lam_r: float, lam_k: float,
     """
     from scipy.stats import poisson as _poi
     rows = []
-    mg = int(min(max(int(lh + la) + 4, 6), 10))
+    mg = int(min(max(int(lh + la) + 5, 8), 12))
 
     def _fair(p):
         return round(1 / p, 3) if p > 0.01 else 999.0
 
-    def _kelly_pnl(p, fo, traf):
+    _rynek_fracs = {"Gole":0.15,"BTTS":0.15,"Rożne":0.10,"Kartki":0.10,"SOT":0.10}
+
+    def _kelly_pnl(p, fo, traf, rynek="Gole"):
         b = fo - 1.0
         if b <= 0 or p <= 0 or p >= 1: return 0.0, 0.0, 0.0
+        frac = _rynek_fracs.get(rynek, kelly_fraction)
         f_full = max(0.0, (p * b - (1 - p)) / b)
-        f_frac = f_full * kelly_fraction
+        f_frac = f_full * frac
         pnl = (fo - 1) * f_frac if traf else -f_frac
         return round(f_full, 4), round(f_frac, 4), round(pnl, 4)
 
