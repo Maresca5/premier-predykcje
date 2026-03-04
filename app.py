@@ -2121,18 +2121,6 @@ if not historical.empty:
                     df_rank = df_rank[df_rank["Kategoria"] != "1X2"]
                 # else: Wszystkie - df_rank bez zmian
 
-                # VALUE BETS
-                if _widok == "⚡ Alternatywne":
-                    st.warning(
-                        "⛔ **Kartki/Rożne – Kelly wyłączony**: Dixon-Coles to model bramkowy. "
-                        "Lambda nie modeluje rożnych/kartkowych (różne rozkłady). "
-                        "Traktuj te rynki **wyłącznie informacyjnie** – bez stawek Kelly, "
-                        "dopóki nie będzie dedykowanego modelu corners/cards.")
-                    st.info(
-                        f"⚠️ **Disclaimer Kelly alt**: niezweryfikowane historycznie. "
-                        f"🔒 = stawka ograniczona limitem {MAX_EXPOSURE_PCT:.0%}/mecz. "
-                        f"Frakcje: Gole/BTTS 0.15 · Kartki/Rożne/SOT 0.10")
-
                 st.markdown("### 🥇 Best Bet per mecz")
                 st.caption(f"Najwyższe EV×P per spotkanie · limit {MAX_EXPOSURE_PCT:.0%} bankrollu per mecz")
                 _vb_all = df_rank[df_rank["EV"] > 0].copy()
@@ -2147,6 +2135,10 @@ if not historical.empty:
                         _bunv = _brow.get("Kelly_unverified", False)
                         _bfrac = _brow.get("Kelly_frac_used", 0.25)
                         _bkhtml = ""
+                        try:
+                            _bks = float(_bks) if _bks is not None else None
+                            if _bks is not None and (_bks != _bks or _bks <= 0): _bks = None
+                        except (TypeError, ValueError): _bks = None
                         if _bks:
                             _bkc = "#FF9800" if (_bcap or _bunv) else "#4CAF50"
                             _bki = "🔒" if _bcap else ("⚠️" if _bunv else "🏦")
@@ -2192,6 +2184,10 @@ if not historical.empty:
                             _is_unverif = row.get("Kelly_unverified", False)
                             _is_capped  = row.get("Kelly_capped", False)
                             _frac_used  = row.get("Kelly_frac_used", 0.25)
+                            try:
+                                _ks = float(_ks) if _ks is not None else None
+                                if _ks is not None and (_ks != _ks or _ks <= 0): _ks = None
+                            except (TypeError, ValueError): _ks = None
                             if _ks:
                                 if _is_capped:
                                     _disc, _col = "🔒", "#FF9800"
@@ -2215,6 +2211,15 @@ if not historical.empty:
                         st.divider()
                 else:
                     st.info("Brak value bets w tej kolejce")
+
+                # Legenda (footnota)
+                with st.expander("ℹ️ Legenda & Kelly", expanded=False):
+                    st.caption(
+                        "**Kelly 1/8** · max 5% bankrollu/mecz · EV≥5% wymagane\n"
+                        "🏦 normalny · ⚠️ niezweryfikowany · 🔒 limit · ✦ fair odds (brak live)\n"
+                        "**Frakcje**: 1X2 f=0.125 · Gole/BTTS f=0.075 · SOT f=0.05\n"
+                        "⛔ Kartki/Rożne: Kelly wyłączony – model bramkowy, tylko informacyjnie"
+                    )
 
                 # SAFE HAVEN + SHOT KINGS → zwijana lista na dole
                 with st.expander("🛡️ Safe Haven & 🎯 Shot Kings", expanded=False):
@@ -3053,9 +3058,14 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     _ptc[3].markdown(
                         f"<span style='font-size:0.84em;color:#888'>{float(_pt_row['fair_odds']):.2f}</span>",
                         unsafe_allow_html=True)
+                    try:
+                        _st_v = float(_pt_row['stawka'])
+                        _st_v = 0.0 if _st_v != _st_v else _st_v
+                    except (TypeError, ValueError): _st_v = 0.0
                     _ptc[4].markdown(
-                        f"<span style='font-size:0.9em;font-weight:bold;color:#4CAF50'>"
-                        f"{float(_pt_row['stawka']):.0f} zł</span>",
+                        (f"<span style='font-size:0.9em;font-weight:bold;color:#4CAF50'>"
+                         f"{_st_v:.0f} zł</span>") if _st_v > 0
+                        else "<span style='color:#555'>–</span>",
                         unsafe_allow_html=True)
                     # Real Odds – edytowalne pole dla slippage
                     _cur_real = _pt_row.get("real_odds")
@@ -3098,7 +3108,11 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     _pnl_v    = float(_pr.get("pnl", 0) or 0)
                     _pnl_real = _pr.get("pnl_real")
                     _real_o   = _pr.get("real_odds")
-                    _bk_v    = float(_pr.get("bankroll_po", 0) or 0)
+                    try:
+                        _bk_raw = _pr.get("bankroll_po")
+                        _bk_v = float(_bk_raw) if _bk_raw is not None else 0.0
+                        if _bk_v != _bk_v: _bk_v = 0.0
+                    except (TypeError, ValueError): _bk_v = 0.0
                     _ico = "✅" if _traf_i else "❌"
                     _pnl_c = "#4CAF50" if _pnl_v >= 0 else "#F44336"
                     _real_str = ""
