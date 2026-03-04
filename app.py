@@ -2054,6 +2054,13 @@ if not historical.empty:
 
             if wszystkie_zd:
                 df_rank = pd.DataFrame(wszystkie_zd)
+                # Zapisz Kelly bets do session_state – paper trading to stąd czyta
+                _kelly_bets_ss = [
+                    z for z in wszystkie_zd
+                    if z.get("Kelly_stake") and z.get("Kelly_stake", 0) > 0
+                ]
+                st.session_state["kelly_bets_kolejka"] = _kelly_bets_ss
+                st.session_state["kelly_bets_kolejka_nr"] = int(aktualna_kolejka)
 
                 # ── Przełącznik widoku: Główne / Alternatywne / Wszystkie ──────
                 _t2c1, _t2c2 = st.columns([2, 3])
@@ -2925,71 +2932,56 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _pt_mecze_k  = schedule[schedule["round"] == _pt_kolejka]
 
             if _pt_existing.empty:
-                st.info(f"📥 Kolejka {_pt_kolejka} – brak zapisanych typów. Kliknij aby auto-załadować Kelly bets.")
+                _ss_bets_count = len(st.session_state.get("kelly_bets_kolejka", []))
+                _ss_nr_check   = st.session_state.get("kelly_bets_kolejka_nr", None)
+                if _ss_bets_count > 0 and _ss_nr_check == _pt_kolejka:
+                    st.info(f"📥 Kolejka {_pt_kolejka} – znaleziono **{_ss_bets_count} typów** z Kelly stake w Rankingu. "
+                            f"Kliknij aby zapisać do trackera.")
+                else:
+                    st.info(f"📥 Kolejka {_pt_kolejka} – brak typów. "
+                            f"Najpierw otwórz zakładkę **📊 Ranking Zdarzeń** (typy ładują się automatycznie), "
+                            f"potem wróć tutaj.")
                 if st.button(f"⚡ Załaduj Kelly bets kolejki {_pt_kolejka}", key="_pt_load",
                              type="primary"):
-                    _pt_trades_to_save = []
                     _pt_bk_teraz = pobierz_aktualny_bankroll(wybrana_liga, _pt_bankroll_start)
 
-                    for _, _pt_m in _pt_mecze_k.iterrows():
-                        _ph = map_nazwa(_pt_m["home_team"])
-                        _pa = map_nazwa(_pt_m["away_team"])
-                        if _ph not in srednie_df.index or _pa not in srednie_df.index:
-                            continue
-                        try:
-                            _plh, _pla, _plr, _plk, _, _plsot = oblicz_lambdy(
-                                _ph, _pa, srednie_df, srednie_lig, forma_dict)
-                            _pp = predykcja_meczu(_plh, _pla, rho=rho,
-                                                  csv_code=LIGI[wybrana_liga]["csv_code"],
-                                                  n_train=n_biezacy)
-                            # 1X2
-                            _pkel = None  # reset dla każdego meczu
-                            if _pp["p_typ"] >= 0.58 and _pp["fo_typ"] >= 1.30:
-                                _pkel = kelly_stake(_pp["p_typ"], _pp["fo_typ"],
-                                                    bankroll=_pt_bk_teraz, rynek="1X2")
-                                if _pkel["safe"] and _pkel["stake_pln"] > 0:
-                                    _pt_trades_to_save.append({
-                                        "mecz": f"{_ph} – {_pa}",
-                                        "home": _ph, "away": _pa,
-                                        "rynek": "1X2", "typ": _pp["typ"],
-                                        "p_model": round(_pp["p_typ"], 4),
-                                        "fair_odds": round(_pp["fo_typ"], 3),
-                                        "kelly_frac": _pkel.get("fraction_used", 0.125),
-                                        "stawka": round(_pkel["stake_pln"], 2),
-                                    })
-                            # Alt markets – ten sam próg co tab2 (0.55)
-                            _palt = alternatywne_zdarzenia(
-                                _plh, _pla, _plr, _plk, rho,
-                                prog_min=0.55, lam_sot=_plsot)
-                            _pexp = (_pkel["stake_pln"]
-                                     if _pkel and _pkel["safe"] else 0.0)
-                            for _pem, _pnaz, _pp2, _pfo, _pkat, _plin in _palt:
-                                if _pfo < 1.30: continue
-                                _pkel2 = kelly_stake(_pp2, _pfo, bankroll=_pt_bk_teraz,
-                                                     rynek=_pkat,
-                                                     already_exposed=_pexp)
-                                if _pkel2["safe"] and _pkel2["stake_pln"] > 0:
-                                    _pexp += _pkel2["stake_pln"]
-                                    _pt_trades_to_save.append({
-                                        "mecz": f"{_ph} – {_pa}",
-                                        "home": _ph, "away": _pa,
-                                        "rynek": _pkat, "typ": _pnaz,
-                                        "p_model": round(_pp2, 4),
-                                        "fair_odds": round(_pfo, 3),
-                                        "kelly_frac": _pkel2.get("fraction_used", 0.075),
-                                        "stawka": round(_pkel2["stake_pln"], 2),
-                                    })
-                        except Exception:
-                            continue
+                    # Pobierz typy z session_state – te same co widać w Rankingu/Analizie
+                    _ss_bets = st.session_state.get("kelly_bets_kolejka", [])
+                    _ss_nr   = st.session_state.get("kelly_bets_kolejka_nr", None)
 
-                    if _pt_trades_to_save:
-                        n_saved = zapisz_paper_trades(
-                            wybrana_liga, _pt_kolejka,
-                            _pt_trades_to_save, _pt_bk_teraz)
-                        st.success(f"✅ Zapisano {n_saved} typów Kelly dla kolejki {_pt_kolejka}")
-                        st.rerun()
+                    if not _ss_bets or _ss_nr != _pt_kolejka:
+                        st.warning(
+                            "⚠️ Otwórz najpierw zakładkę **📊 Ranking Zdarzeń** "
+                            "aby załadować typy kolejki, potem wróć tutaj.")
                     else:
-                        st.warning("Brak typów spełniających kryteria Kelly (EV≥5%, p≥58%)")
+                        # Mapuj strukturę z wszystkie_zd do paper_trades
+                        _pt_trades_to_save = []
+                        for _z in _ss_bets:
+                            # Wyciągnij home/away z nazwy meczu
+                            _mecz_str = _z.get("Mecz", "")
+                            _parts = _mecz_str.split(" – ")
+                            _ph = _parts[0].strip() if len(_parts) >= 2 else _mecz_str
+                            _pa = _parts[1].strip() if len(_parts) >= 2 else ""
+                            _pt_trades_to_save.append({
+                                "mecz": _mecz_str,
+                                "home": _ph,
+                                "away": _pa,
+                                "rynek": _z.get("Rynek", "1X2"),
+                                "typ": _z.get("Typ", ""),
+                                "p_model": round(float(_z.get("P", 0)), 4),
+                                "fair_odds": round(float(_z.get("Fair", 1.5)), 3),
+                                "kelly_frac": _z.get("Kelly_frac_used", 0.125),
+                                "stawka": round(float(_z.get("Kelly_stake", 0)), 2),
+                            })
+                        if _pt_trades_to_save:
+                            n_saved = zapisz_paper_trades(
+                                wybrana_liga, _pt_kolejka,
+                                _pt_trades_to_save, _pt_bk_teraz)
+                            st.success(f"✅ Zapisano {n_saved} typów Kelly dla kolejki {_pt_kolejka} "
+                                       f"(dokładnie te same co w Rankingu Zdarzeń)")
+                            st.rerun()
+                        else:
+                            st.warning("Ranking Zdarzeń nie zawiera typów z Kelly stake dla tej kolejki.")
             else:
                 st.success(f"✅ Kolejka {_pt_kolejka} – {len(_pt_existing)} typów załadowanych")
 
