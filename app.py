@@ -671,8 +671,20 @@ def wybierz_typ(p_home: float, p_draw: float, p_away: float,
 
 # ── Market Noise & Kelly helpers ──────────────────────────────────────
 MARKET_NOISE_MAX = 0.25
-KELLY_FRACTION   = 0.25
+KELLY_FRACTION   = 0.25          # 1X2 / AH
 KELLY_BANKROLL_DEFAULT = 1000.0
+
+# Per-rynek ułamki Kelly (im słabiej skalibrowany rynek, tym mniejszy ułamek)
+KELLY_FRACTIONS = {
+    "1X2":    0.25,   # quarter Kelly – dobrze skalibrowany
+    "AH":     0.25,
+    "Gole":   0.15,   # bardziej podatne na losowość (spalony w 90.)
+    "BTTS":   0.15,
+    "Rożne":  0.10,   # model najmniej zweryfikowany
+    "Kartki": 0.10,
+    "SOT":    0.10,
+}
+MAX_EXPOSURE_PCT = 0.05   # max 5% bankrollu per mecz (suma wszystkich rynków)
 
 def market_noise_check(p_model, p_impl):
     diff = abs(p_model - p_impl)
@@ -683,21 +695,50 @@ def market_noise_check(p_model, p_impl):
     return {"noise": noise, "diff": diff, "kierunek": kierunek,
             "kolor": kolor, "zgodnosc_pct": zgodnosc}
 
-def kelly_stake(p_model, kurs_buk, bankroll=KELLY_BANKROLL_DEFAULT, fraction=KELLY_FRACTION):
+def kelly_stake(p_model, kurs_buk, bankroll=KELLY_BANKROLL_DEFAULT,
+               fraction=None, rynek: str = "1X2",
+               already_exposed: float = 0.0) -> dict:
+    """
+    Oblicza stawkę Kelly z:
+    - Per-rynek ułamkiem (1X2=0.25, gole=0.15, kartki/rożne=0.10)
+    - Max Exposure per Match: suma stawek na jeden mecz ≤ MAX_EXPOSURE_PCT * bankroll
+    - already_exposed: ile już postawiono na ten mecz (z innych rynków)
+    """
     try:
+        # Wybierz ułamek per rynek (lub override)
+        if fraction is None:
+            fraction = KELLY_FRACTIONS.get(rynek, KELLY_FRACTION)
+
         b = kurs_buk - 1.0
         q = 1.0 - p_model
         if b <= 0 or p_model <= 0 or p_model >= 1:
-            return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,"safe":False}
+            return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,
+                    "safe":False,"rynek":rynek,"capped":False}
         f_full = max(0.0, (p_model * b - q) / b)
         f_frac = f_full * fraction
-        stake  = round(bankroll * f_frac, 2)
+        stake  = bankroll * f_frac
+
+        # Max Exposure per Match – cap jeśli przekracza limit
+        max_allowed = bankroll * MAX_EXPOSURE_PCT - already_exposed
+        capped = False
+        if stake > max_allowed > 0:
+            stake  = max_allowed
+            f_frac = stake / bankroll
+            capped = True
+        elif max_allowed <= 0:
+            stake  = 0.0
+            f_frac = 0.0
+            capped = True
+
         ev_puu = p_model * b - q
         return {"f_full":round(f_full,4),"f_frac":round(f_frac,4),
-                "stake_pln":stake,"ev_per_unit":round(ev_puu,4),
-                "safe": f_frac > 0 and ev_puu > 0}
+                "stake_pln":round(stake, 2),"ev_per_unit":round(ev_puu,4),
+                "safe": f_frac > 0 and ev_puu > 0,
+                "rynek":rynek,"capped":capped,
+                "fraction_used":round(fraction,3)}
     except Exception:
-        return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,"safe":False}
+        return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,
+                "safe":False,"rynek":rynek,"capped":False}
 
 def due_to_score_flag(team, srednie_df, historical):
     try:
@@ -790,7 +831,7 @@ def fair_odds(p: float) -> float:
     return round(1 / p, 2) if 0 < p <= 1 else 999.0
 
 def predykcja_meczu(lam_h: float, lam_a: float, rho: float = -0.13, csv_code: str = "E0", n_train: int = 200) -> dict:
-    max_gole = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
+    max_gole = int(np.clip(np.ceil(max(lam_h, lam_a) + 5), 8, 12))
     M = dixon_coles_adj(
         np.outer(poisson.pmf(range(max_gole), lam_h),
                  poisson.pmf(range(max_gole), lam_a)),
@@ -828,7 +869,7 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
                             prog_min: float = 0.55,
                             lam_sot: float = None) -> list:
     zdarzenia = []
-    mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
+    mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 5), 8, 12))
     M = dixon_coles_adj(
         np.outer(poisson.pmf(range(mg), lam_h), poisson.pmf(range(mg), lam_a)),
         lam_h, lam_a, rho=rho
@@ -1288,7 +1329,7 @@ def render_macierz_html(M: np.ndarray, home: str, away: str) -> str:
     return "".join(rows)
 
 def macierz_goli_p(lam_h, lam_a, rho, linia_int, typ_gole):
-    mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 4), 6, 10))
+    mg = int(np.clip(np.ceil(max(lam_h, lam_a) + 5), 8, 12))
     M  = dixon_coles_adj(
         np.outer(poisson.pmf(range(mg), lam_h), poisson.pmf(range(mg), lam_a)),
         lam_h, lam_a, rho=rho
@@ -1722,25 +1763,29 @@ if not historical.empty:
                             "Kategoria": "1X2"
                         })
 
-                    # Alternatywne zdarzenia – tylko z fair odds ≥ 1.30
+                    # Alternatywne zdarzenia – z per-rynek frakcją Kelly i max exposure
                     alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.55, lam_sot=lam_sot)
+                    _br_alt = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
+                    # Śledź ekspozycję per mecz – sumuj 1X2 już postawione
+                    _exp_mecz = sum(
+                        z.get("Kelly_stake") or 0
+                        for z in wszystkie_zd
+                        if z.get("Mecz") == mecz_str and z.get("Kelly_stake")
+                    )
                     for emoji, nazwa, p, fo, kat, linia in alt:
                         if fo >= 1.30:
                             ev = _ev(p, fo)
-                            # Kelly dla alt markets – niezweryfikowany, disclaimer w UI
-                            _br_alt = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
-                            _kel_alt = kelly_stake(p, fo, bankroll=_br_alt)
+                            _kel_alt = kelly_stake(p, fo, bankroll=_br_alt,
+                                                   rynek=kat, already_exposed=_exp_mecz)
+                            if _kel_alt["safe"]:
+                                _exp_mecz += _kel_alt["stake_pln"]
                             wszystkie_zd.append({
-                                "Mecz": mecz_str,
-                                "Rynek": kat,
-                                "Typ": nazwa,
-                                "P": p,
-                                "Fair": fo,
-                                "KursBuk": None,
-                                "EV": ev,
+                                "Mecz": mecz_str, "Rynek": kat, "Typ": nazwa,
+                                "P": p, "Fair": fo, "KursBuk": None, "EV": ev,
                                 "Kelly_stake": _kel_alt["stake_pln"] if _kel_alt["safe"] else None,
-                                "Kelly_unverified": True,
-                                "Kategoria": kat
+                                "Kelly_capped": _kel_alt.get("capped", False),
+                                "Kelly_frac_used": _kel_alt.get("fraction_used", 0.10),
+                                "Kelly_unverified": True, "Kategoria": kat
                             })
                     
                     # Shot Kings – tylko jeśli fair odds ≥ 1.30
@@ -1780,12 +1825,45 @@ if not historical.empty:
                 # VALUE BETS
                 if _widok == "⚡ Alternatywne":
                     st.info(
-                        "⚠️ **Disclaimer Kelly dla rynków alternatywnych**: "
-                        "Stawki Kelly obliczone z prawdopodobieństw modelu, które **nie były "
-                        "jeszcze historycznie zweryfikowane** dla tych rynków. "
-                        "Traktuj je orientacyjnie – użyj ułamka sugerowanej stawki. "
-                        "Weryfikacja dostępna po uruchomieniu backtestów w zakładce 🧪 Backtest.")
-                st.markdown("### 🔥 Value Bets (EV > 0)")
+                        f"⚠️ **Disclaimer Kelly alt**: niezweryfikowane historycznie. "
+                        f"🔒 = stawka ograniczona limitem {MAX_EXPOSURE_PCT:.0%}/mecz. "
+                        f"Frakcje: Gole/BTTS 0.15 · Kartki/Rożne/SOT 0.10")
+
+                st.markdown("### 🥇 Best Bet per mecz")
+                st.caption(f"Najwyższe EV×P per spotkanie · limit {MAX_EXPOSURE_PCT:.0%} bankrollu per mecz")
+                _vb_all = df_rank[df_rank["EV"] > 0].copy()
+                if not _vb_all.empty:
+                    _vb_all["ev_risk"] = _vb_all["EV"] * _vb_all["P"]
+                    _best = _vb_all.sort_values("ev_risk", ascending=False).drop_duplicates("Mecz")
+                    for _, _brow in _best.head(6).iterrows():
+                        _bks = _brow.get("Kelly_stake"); _bkb = _brow.get("KursBuk")
+                        _bec = "#4CAF50" if _brow["EV"] > 0.05 else "#FF9800"
+                        _bkd = f"{_bkb:.2f}" if _bkb else f"{_brow['Fair']:.2f}❆"
+                        _bcap = _brow.get("Kelly_capped", False)
+                        _bunv = _brow.get("Kelly_unverified", False)
+                        _bfrac = _brow.get("Kelly_frac_used", 0.25)
+                        _bkhtml = ""
+                        if _bks:
+                            _bkc = "#FF9800" if (_bcap or _bunv) else "#4CAF50"
+                            _bki = "🔒" if _bcap else ("⚠️" if _bunv else "🏦")
+                            _bkhtml = (f"<br><span style='color:{_bkc};font-size:0.85em'>"
+                                      f"{_bki} {_bks:.0f} zł · f={_bfrac:.2f}</span>")
+                        st.markdown(
+                            f"<div style='background:#0a1628;border-left:3px solid {_bec};"
+                            f"border-radius:6px;padding:8px 12px;margin:3px 0'>"
+                            f"<div style='display:flex;justify-content:space-between'>"
+                            f"<div><b style='color:#fff;font-size:0.88em'>{_brow['Mecz']}</b> "
+                            f"<span style='color:#666;font-size:0.78em'>· {_brow['Typ']} "
+                            f"<code>{_brow['Rynek']}</code></span></div>"
+                            f"<div style='text-align:right'>"
+                            f"<span style='color:#aaa;font-size:0.82em'>{_brow['P']:.0%} @ {_bkd} "
+                            f"· <b style='color:{_bec}'>EV {_brow['EV']:+.3f}</b></span>"
+                            f"{_bkhtml}</div></div></div>",
+                            unsafe_allow_html=True)
+                else:
+                    st.info("Brak best bets w tej kolejce.")
+
+                st.markdown("### 🔥 Wszystkie Value Bets")
                 value_bets = df_rank[df_rank["EV"] > 0].sort_values("EV", ascending=False)
                 if not value_bets.empty:
                     for _, row in value_bets.head(10).iterrows():
@@ -1808,13 +1886,23 @@ if not historical.empty:
                                         unsafe_allow_html=True)
                         with cols[5]:
                             _is_unverif = row.get("Kelly_unverified", False)
+                            _is_capped  = row.get("Kelly_capped", False)
+                            _frac_used  = row.get("Kelly_frac_used", 0.25)
                             if _ks:
-                                _disc = "⚠️" if _is_unverif else "🏦"
-                                _col  = "#FF9800" if _is_unverif else "#4CAF50"
-                                _tip  = " (niezwer.)" if _is_unverif else ""
+                                if _is_capped:
+                                    _disc, _col = "🔒", "#FF9800"
+                                    _tip = f" CAP"
+                                elif _is_unverif:
+                                    _disc, _col = "⚠️", "#FF9800"
+                                    _tip = " ?"
+                                else:
+                                    _disc, _col = "🏦", "#4CAF50"
+                                    _tip = ""
                                 st.markdown(
                                     f"<span style='color:{_col};font-weight:bold'>"
-                                    f"{_disc} {_ks:.0f} zł{_tip}</span>",
+                                    f"{_disc} {_ks:.0f} zł{_tip}</span>"
+                                    f"<br><span style='color:#555;font-size:0.72em'>"
+                                    f"f={_frac_used:.2f}</span>",
                                     unsafe_allow_html=True)
                             else:
                                 st.markdown("<span style='color:#444'>–</span>", unsafe_allow_html=True)
