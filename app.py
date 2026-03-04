@@ -2686,17 +2686,28 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         ).fetchall()
                         con_u.close()
                         for h_db, a_db in mecze_db:
+                            # Count how many zdarzenia actually got a result
+                            con_chk = sqlite3.connect(DB_FILE)
+                            _before = con_chk.execute(
+                                "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+                                (h_db, a_db)).fetchone()[0]
+                            con_chk.close()
                             aktualizuj_wynik_zdarzenia(h_db, a_db, historical)
-                        # Auto-rozlicz paper trades po aktualizacji wyników
+                            con_chk2 = sqlite3.connect(DB_FILE)
+                            _after = con_chk2.execute(
+                                "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+                                (h_db, a_db)).fetchone()[0]
+                            con_chk2.close()
+                            if _after > _before:
+                                n_updated += 1
+                        # Auto-rozlicz paper trades
                         _rozl = rozlicz_paper_trades(wybrana_liga, historical)
                         if _rozl["rozliczone"] > 0:
-                            _pnl_c = "#4CAF50" if _rozl["pnl_total"] >= 0 else "#F44336"
                             st.success(
                                 f"📊 Rozliczono {_rozl['rozliczone']} paper trades: "
                                 f"{_rozl['trafione']} trafione · "
                                 f"PnL: **{_rozl['pnl_total']:+.2f} zł** · "
                                 f"Bankroll: {_rozl['bankroll_po']:.0f} zł")
-                            n_updated += 1
                         st.success(f"✅ Zaktualizowano wyniki dla {n_updated} meczów.")
             else:
                 st.info("Brak meczów w tej kolejce")
@@ -2932,6 +2943,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                   csv_code=LIGI[wybrana_liga]["csv_code"],
                                                   n_train=n_biezacy)
                             # 1X2
+                            _pkel = None  # reset dla każdego meczu
                             if _pp["p_typ"] >= 0.58 and _pp["fo_typ"] >= 1.30:
                                 _pkel = kelly_stake(_pp["p_typ"], _pp["fo_typ"],
                                                     bankroll=_pt_bk_teraz, rynek="1X2")
@@ -2945,11 +2957,12 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                         "kelly_frac": _pkel.get("fraction_used", 0.125),
                                         "stawka": round(_pkel["stake_pln"], 2),
                                     })
-                            # Alt markets
+                            # Alt markets – ten sam próg co tab2 (0.55)
                             _palt = alternatywne_zdarzenia(
                                 _plh, _pla, _plr, _plk, rho,
-                                prog_min=0.60, lam_sot=_plsot)
-                            _pexp = _pkel["stake_pln"] if _pkel["safe"] else 0.0
+                                prog_min=0.55, lam_sot=_plsot)
+                            _pexp = (_pkel["stake_pln"]
+                                     if _pkel and _pkel["safe"] else 0.0)
                             for _pem, _pnaz, _pp2, _pfo, _pkat, _plin in _palt:
                                 if _pfo < 1.30: continue
                                 _pkel2 = kelly_stake(_pp2, _pfo, bankroll=_pt_bk_teraz,
