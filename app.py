@@ -842,8 +842,8 @@ def pobierz_bankroll_history(liga: str = None) -> pd.DataFrame:
 
 def pobierz_aktualny_bankroll(liga: str, start: float = 1000.0) -> float:
     """Zwraca aktualny stan bankrollu (po paper trades i korektach)."""
-    init_db()
     con = sqlite3.connect(DB_FILE)
+    _ensure_paper_trades_table(con)
     # Sprawdź paper trades które mają wynik
     row = con.execute(
         "SELECT bankroll_po FROM paper_trades WHERE liga=? AND bankroll_po IS NOT NULL "
@@ -866,8 +866,8 @@ def zapisz_paper_trades(liga: str, kolejnosc: int, trades: list, bankroll_przed:
                "fair_odds", "kelly_frac", "stawka"}, ...]
     Zwraca liczbę zapisanych rekordów.
     """
-    init_db()
     con = sqlite3.connect(DB_FILE)
+    _ensure_paper_trades_table(con)
     saved = 0
     for t in trades:
         try:
@@ -891,8 +891,8 @@ def zapisz_paper_trades(liga: str, kolejnosc: int, trades: list, bankroll_przed:
 
 def usun_paper_trade(trade_id: int) -> bool:
     """Usuwa pojedynczy paper trade (tylko ze statusem oczekuje)."""
-    init_db()
     con = sqlite3.connect(DB_FILE)
+    _ensure_paper_trades_table(con)
     try:
         con.execute(
             "DELETE FROM paper_trades WHERE id=? AND status='oczekuje'", (trade_id,))
@@ -907,8 +907,8 @@ def usun_paper_trade(trade_id: int) -> bool:
 def pobierz_paper_trades(liga: str, kolejnosc: int = None,
                           status: str = None) -> pd.DataFrame:
     """Pobiera paper trades z DB."""
-    init_db()
     con = sqlite3.connect(DB_FILE)
+    _ensure_paper_trades_table(con)
     q = "SELECT * FROM paper_trades WHERE liga=?"
     params = [liga]
     if kolejnosc:
@@ -920,19 +920,48 @@ def pobierz_paper_trades(liga: str, kolejnosc: int = None,
     con.close()
     return df
 
+def _ensure_paper_trades_table(con) -> None:
+    """Tworzy tabelę paper_trades jeśli nie istnieje (migracja starej bazy)."""
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trades (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            liga        TEXT NOT NULL,
+            kolejnosc   INTEGER NOT NULL,
+            mecz        TEXT NOT NULL,
+            home        TEXT NOT NULL,
+            away        TEXT NOT NULL,
+            rynek       TEXT NOT NULL,
+            typ         TEXT NOT NULL,
+            p_model     REAL,
+            fair_odds   REAL,
+            kelly_frac  REAL,
+            stawka      REAL NOT NULL,
+            bankroll_przed REAL,
+            status      TEXT DEFAULT 'oczekuje',
+            trafiony    INTEGER,
+            wynik_meczu TEXT,
+            pnl         REAL,
+            bankroll_po REAL,
+            data_zapisu TEXT,
+            data_wyniku TEXT,
+            UNIQUE(liga, kolejnosc, mecz, rynek, typ)
+        )
+    """)
+    con.commit()
+
+
 def rozlicz_paper_trades(liga: str, hist: pd.DataFrame) -> dict:
     """
     Po aktualizacji wyników sprawdza oczekujące paper trades i rozlicza je.
     Aktualizuje pnl, bankroll_po, status.
     Zwraca {"rozliczone": N, "trafione": M, "pnl_total": X, "bankroll_po": Y}
     """
-    if "SeasonCode" in hist.columns or hist.empty:
-        hist_biezacy = hist[hist["_sezon"] == "biezacy"] if "_sezon" in hist.columns else hist
-    else:
-        hist_biezacy = hist
+    if hist.empty:
+        return {"rozliczone": 0, "trafione": 0, "pnl_total": 0.0, "bankroll_po": None}
+    hist_biezacy = hist[hist["_sezon"] == "biezacy"] if "_sezon" in hist.columns else hist
 
-    init_db()
     con = sqlite3.connect(DB_FILE)
+    _ensure_paper_trades_table(con)
     oczekujace = con.execute(
         "SELECT id, home, away, rynek, typ, linia, stawka, fair_odds, bankroll_przed "
         "FROM paper_trades WHERE liga=? AND status='oczekuje'",
