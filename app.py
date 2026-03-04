@@ -2701,16 +2701,48 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                 unsafe_allow_html=True)
 
                                             if _is_val and _kelly["safe"]:
-                                                st.markdown(
+                                                _kc1, _kc2 = st.columns([3, 1])
+                                                _kc1.markdown(
                                                     f"<div style='background:#001a0a;border:1px solid #2a6b2a;"
                                                     f"border-radius:5px;padding:5px 10px;margin:3px 0;"
                                                     f"font-size:0.82em'>"
-                                                    f"💰 <b>Kelly 1/4</b>: postaw "
+                                                    f"💰 <b>Kelly 1/8</b>: postaw "
                                                     f"<b style='color:#4CAF50'>{_kelly['stake_pln']:.0f} zł</b>"
                                                     f" ({_kelly['f_frac']:.1%} bankrollu) · "
                                                     f"EV/jedn.: <b style='color:#4CAF50'>{_kelly['ev_per_unit']:+.3f}</b>"
                                                     f"</div>",
                                                     unsafe_allow_html=True)
+                                                # Sprawdź czy już w trackerze
+                                                _mecz_str_t = f"{h} – {a}"
+                                                _already_key = f"pt_added_{wybrana_liga}_{aktualna_kolejka}_{h}_{a}_1X2"
+                                                _already = st.session_state.get(_already_key, False)
+                                                if _already:
+                                                    _kc2.markdown(
+                                                        "<div style='padding:6px 4px;text-align:center;"
+                                                        "color:#4CAF50;font-size:0.8em'>✅ w trackerze</div>",
+                                                        unsafe_allow_html=True)
+                                                else:
+                                                    if _kc2.button("➕ Tracker", key=f"pt_add_{h}_{a}_1x2",
+                                                                   help="Dodaj ten typ do Paper Trading Trackera"):
+                                                        _pt_bk = pobierz_aktualny_bankroll(
+                                                            wybrana_liga,
+                                                            st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT))
+                                                        _n = zapisz_paper_trades(
+                                                            wybrana_liga, int(aktualna_kolejka),
+                                                            [{
+                                                                "mecz": _mecz_str_t,
+                                                                "home": h, "away": a,
+                                                                "rynek": "1X2",
+                                                                "typ": pred["typ"],
+                                                                "p_model": round(pred["p_typ"], 4),
+                                                                "fair_odds": round(pred["fo_typ"], 3),
+                                                                "kelly_frac": _kelly.get("fraction_used", 0.125),
+                                                                "stawka": round(_kelly["stake_pln"], 2),
+                                                            }], _pt_bk)
+                                                        if _n:
+                                                            st.session_state[_already_key] = True
+                                                            st.toast(f"✅ Dodano do trackera: {pred['typ']} {_mecz_str_t} · {_kelly['stake_pln']:.0f} zł", icon="💰")
+                                                            st.rerun()
 
                                 elif _OA_OK and _oa_key and not _oa_cached:
                                     st.caption("📊 Brak kursów — kliknij 'Odśwież kursy' w sidebarze.")
@@ -2719,30 +2751,60 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
                                     if alt:
                                         cat_colors = {"Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336","1X2":"#4CAF50","SOT":"#00BCD4"}
-                                        rows_alt = []
-                                        for emoji, nazwa, p, fo, kat, linia_z in alt[:8]:
+                                        _alt_kelly = kelly_stake  # shorthand
+                                        _alt_bk    = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
+                                        _alt_exp   = 0.0  # exposure alt per mecz
+                                        for emoji, nazwa, p, fo, kat, linia_z in alt[:10]:
                                             kc = cat_colors.get(kat, "#888")
-                                            bw = int(p * 100)
                                             fc = "#4CAF50" if fo <= 1.60 else ("#FF9800" if fo <= 2.00 else "#aaa")
-                                            rows_alt.append(
-                                                f"<tr><td style='padding:4px 8px;font-size:0.88em'>{emoji} {nazwa}</td>"
-                                                f"<td style='padding:4px 8px;width:110px'>"
-                                                f"<div style='display:flex;align-items:center;gap:5px'>"
-                                                f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
-                                                f"<div style='background:{kc};width:{bw}%;height:5px;border-radius:3px'></div></div>"
-                                                f"<span style='color:{kc};font-size:0.82em;min-width:30px'>{p:.0%}</span></div></td>"
-                                                f"<td style='padding:4px 8px;text-align:right;color:{fc};font-weight:bold;font-size:0.88em'>{fo:.2f}</td></tr>"
-                                            )
-                                        st.markdown(
-                                            f"<table style='width:100%;border-collapse:collapse'>"
-                                            f"<thead><tr style='color:#555;font-size:0.75em;text-transform:uppercase'>"
-                                            f"<th style='padding:4px 8px;text-align:left'>Rynek</th>"
-                                            f"<th style='padding:4px 8px;text-align:left'>P</th>"
-                                            f"<th style='padding:4px 8px;text-align:right'>Fair</th></tr></thead>"
-                                            f"<tbody>{''.join(rows_alt)}</tbody></table>"
-                                            f"<p style='color:#444;font-size:0.72em;margin:4px 0 0'>⚠️ Rożne/kartki – Poisson bez korelacji. Orientacyjnie.</p>",
-                                            unsafe_allow_html=True,
-                                        )
+                                            _kel_alt = kelly_stake(p, fo, bankroll=_alt_bk,
+                                                                   rynek=kat, already_exposed=_alt_exp)
+                                            _has_kelly = _kel_alt.get("safe") and _kel_alt["stake_pln"] > 0
+                                            if _has_kelly:
+                                                _alt_exp += _kel_alt["stake_pln"]
+                                            _ac1, _ac2, _ac3, _ac4 = st.columns([3, 1, 1, 1])
+                                            _ac1.markdown(
+                                                f"<span style='font-size:0.88em'>{emoji} {nazwa}</span>",
+                                                unsafe_allow_html=True)
+                                            _ac2.markdown(
+                                                f"<span style='color:{kc};font-size:0.84em'>{p:.0%}</span>",
+                                                unsafe_allow_html=True)
+                                            _ac3.markdown(
+                                                f"<span style='color:{fc};font-weight:bold;font-size:0.84em'>{fo:.2f}</span>",
+                                                unsafe_allow_html=True)
+                                            if _has_kelly:
+                                                _alt_key = f"pt_added_{wybrana_liga}_{aktualna_kolejka}_{h}_{a}_{kat}_{nazwa[:12]}"
+                                                if st.session_state.get(_alt_key):
+                                                    _ac4.markdown(
+                                                        "<span style='color:#4CAF50;font-size:0.75em'>✅</span>",
+                                                        unsafe_allow_html=True)
+                                                else:
+                                                    if _ac4.button("➕", key=f"pt_alt_{h}_{a}_{kat}_{nazwa[:10]}",
+                                                                   help=f"Dodaj {nazwa} do trackera · Kelly {_kel_alt['stake_pln']:.0f} zł"):
+                                                        _pt_bk2 = pobierz_aktualny_bankroll(
+                                                            wybrana_liga, _alt_bk)
+                                                        _n2 = zapisz_paper_trades(
+                                                            wybrana_liga, int(aktualna_kolejka),
+                                                            [{
+                                                                "mecz": f"{h} – {a}",
+                                                                "home": h, "away": a,
+                                                                "rynek": kat,
+                                                                "typ": nazwa,
+                                                                "p_model": round(p, 4),
+                                                                "fair_odds": round(fo, 3),
+                                                                "kelly_frac": _kel_alt.get("fraction_used", 0.075),
+                                                                "stawka": round(_kel_alt["stake_pln"], 2),
+                                                            }], _pt_bk2)
+                                                        if _n2:
+                                                            st.session_state[_alt_key] = True
+                                                            st.toast(f"✅ {nazwa} · {_kel_alt['stake_pln']:.0f} zł", icon="💰")
+                                                            st.rerun()
+                                            else:
+                                                _ac4.markdown(
+                                                    f"<span style='color:#444;font-size:0.72em'>"
+                                                    f"{'⛔' if KELLY_FRACTIONS.get(kat,0)==0 else '–'}</span>",
+                                                    unsafe_allow_html=True)
+                                        st.caption("⚠️ Rożne/kartki – ⛔ Kelly wyłączony (orientacyjnie).")
                                     else:
                                         st.caption("Brak zdarzeń powyżej progu 55%.")
 
