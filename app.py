@@ -671,18 +671,21 @@ def wybierz_typ(p_home: float, p_draw: float, p_away: float,
 
 # ── Market Noise & Kelly helpers ──────────────────────────────────────
 MARKET_NOISE_MAX = 0.25
-KELLY_FRACTION   = 0.25          # 1X2 / AH
+KELLY_FRACTION   = 0.125         # 1/8 Kelly – default po analizie backtestów
+                                 # (1/4 dało MaxDD=70%, 1/8 daje MaxDD=42% przy podobnym ROI)
 KELLY_BANKROLL_DEFAULT = 1000.0
 
-# Per-rynek ułamki Kelly (im słabiej skalibrowany rynek, tym mniejszy ułamek)
+# Per-rynek ułamki Kelly – obniżone o 50% względem poprzednich wartości
+# Analiza backtestu E0 2425: model zawyża p przy faworytach (p=0.80 → actual 50%)
+# → mniejsze frakcje chronią przed agresywnym Kelly na niepewnych predykcjach
 KELLY_FRACTIONS = {
-    "1X2":    0.25,   # quarter Kelly – dobrze skalibrowany
-    "AH":     0.25,
-    "Gole":   0.15,   # bardziej podatne na losowość (spalony w 90.)
-    "BTTS":   0.15,
-    "Rożne":  0.10,   # model najmniej zweryfikowany
-    "Kartki": 0.10,
-    "SOT":    0.10,
+    "1X2":    0.125,  # 1/8 Kelly – backtest wykazał optymalny balans ROI/DrawDown
+    "AH":     0.125,
+    "Gole":   0.075,  # niezweryfikowane historycznie + losowość bramkowa
+    "BTTS":   0.075,
+    "Rożne":  0.050,  # najsłabiej skalibrowane
+    "Kartki": 0.050,
+    "SOT":    0.050,
 }
 MAX_EXPOSURE_PCT = 0.05   # max 5% bankrollu per mecz (suma wszystkich rynków)
 
@@ -709,12 +712,21 @@ def kelly_stake(p_model, kurs_buk, bankroll=KELLY_BANKROLL_DEFAULT,
         if fraction is None:
             fraction = KELLY_FRACTIONS.get(rynek, KELLY_FRACTION)
 
+        # Kalibracja liniowa p_model przed Kelly
+        # Backtest E0 2425: model systematycznie zawyża p przy faworytach
+        # Analiza: actual_hr = 0.88 * p_model + 0.06 (fit na 169 value bets)
+        # Stosujemy tylko do Kelly, nie do wyświetlanego prawdopodobieństwa
+        CALIB_SLOPE     = 0.88
+        CALIB_INTERCEPT = 0.06
+        p_kelly = float(p_model) * CALIB_SLOPE + CALIB_INTERCEPT
+        p_kelly = max(0.01, min(0.99, p_kelly))
+
         b = kurs_buk - 1.0
-        q = 1.0 - p_model
-        if b <= 0 or p_model <= 0 or p_model >= 1:
+        q = 1.0 - p_kelly
+        if b <= 0 or p_kelly <= 0 or p_kelly >= 1:
             return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,
                     "safe":False,"rynek":rynek,"capped":False}
-        f_full = max(0.0, (p_model * b - q) / b)
+        f_full = max(0.0, (p_kelly * b - q) / b)
         f_frac = f_full * fraction
         stake  = bankroll * f_frac
 
@@ -730,12 +742,16 @@ def kelly_stake(p_model, kurs_buk, bankroll=KELLY_BANKROLL_DEFAULT,
             f_frac = 0.0
             capped = True
 
-        ev_puu = p_model * b - q
+        ev_puu = p_kelly * b - q
+        # EV filter: nie stawiamy jeśli EV < 5% (backtest: EV 0-5% → ROI -64%)
+        ev_ok = ev_puu >= 0.05
         return {"f_full":round(f_full,4),"f_frac":round(f_frac,4),
                 "stake_pln":round(stake, 2),"ev_per_unit":round(ev_puu,4),
-                "safe": f_frac > 0 and ev_puu > 0,
+                "safe": f_frac > 0 and ev_puu > 0 and ev_ok,
+                "ev_ok": ev_ok,
                 "rynek":rynek,"capped":capped,
-                "fraction_used":round(fraction,3)}
+                "fraction_used":round(fraction,3),
+                "p_kelly":round(p_kelly,4)}
     except Exception:
         return {"f_full":0,"f_frac":0,"stake_pln":0,"ev_per_unit":0,
                 "safe":False,"rynek":rynek,"capped":False}
@@ -1527,8 +1543,8 @@ _br_input = st.sidebar.number_input(
     step=100.0, key="_br_widget",
     help="Kwota używana do obliczenia stawki Kelly 1/4")
 st.session_state["bankroll"] = _br_input
-_kelly_info_val = _br_input * 0.005
-st.sidebar.caption(f"Typowa stawka (0.5% Kelly): **{_kelly_info_val:.0f} zł**")
+_kelly_info_val = _br_input * KELLY_FRACTIONS.get("1X2", 0.125) * 0.3
+st.sidebar.caption(f"Kelly 1/8 · max 5%/mecz · EV≥5% filtr | Typowa stawka: **{_kelly_info_val:.0f} zł**")
 
 
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
@@ -1741,37 +1757,35 @@ if not historical.empty:
                             _kurs_live_1x2 = _o_r
 
                     # Typ główny – dopisz kurs live i kelly
+                    # Śledź ekspozycję per mecz od 1X2
+                    _br_mecz2 = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
+                    _exposed_mecz2 = 0.0
                     if pred["p_typ"] >= 0.58 and pred["fo_typ"] >= 1.30:
                         ev = _ev(pred["p_typ"], pred["fo_typ"])
-                        # Pobierz kurs bukmachera jeśli dostępny
                         _kbuk = None
                         if _kurs_live_1x2:
                             _kbuk, _ = _kurs_dc_live(pred["typ"],
                                 _kurs_live_1x2["odds_h"], _kurs_live_1x2["odds_d"], _kurs_live_1x2["odds_a"])
-                        _br_t2 = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
                         _kel = kelly_stake(pred["p_typ"], _kbuk if _kbuk else pred["fo_typ"],
-                                           bankroll=_br_t2)
+                                           bankroll=_br_mecz2, rynek="1X2",
+                                           already_exposed=_exposed_mecz2)
+                        if _kel["safe"]:
+                            _exposed_mecz2 += _kel["stake_pln"]
                         wszystkie_zd.append({
-                            "Mecz": mecz_str,
-                            "Rynek": "1X2",
-                            "Typ": pred["typ"],
-                            "P": pred["p_typ"],
-                            "Fair": pred["fo_typ"],
-                            "KursBuk": _kbuk,
+                            "Mecz": mecz_str, "Rynek": "1X2", "Typ": pred["typ"],
+                            "P": pred["p_typ"], "Fair": pred["fo_typ"], "KursBuk": _kbuk,
                             "EV": ev,
                             "Kelly_stake": _kel["stake_pln"] if _kel["safe"] else None,
-                            "Kategoria": "1X2"
+                            "Kelly_capped": _kel.get("capped", False),
+                            "Kelly_frac_used": _kel.get("fraction_used", 0.125),
+                            "p_kelly_used": _kel.get("p_kelly"),
+                            "Kelly_unverified": False, "Kategoria": "1X2"
                         })
 
                     # Alternatywne zdarzenia – z per-rynek frakcją Kelly i max exposure
                     alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, prog_min=0.55, lam_sot=lam_sot)
-                    _br_alt = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
-                    # Śledź ekspozycję per mecz – sumuj 1X2 już postawione
-                    _exp_mecz = sum(
-                        z.get("Kelly_stake") or 0
-                        for z in wszystkie_zd
-                        if z.get("Mecz") == mecz_str and z.get("Kelly_stake")
-                    )
+                    _br_alt = _br_mecz2
+                    _exp_mecz = _exposed_mecz2  # kontynuuje z 1X2
                     for emoji, nazwa, p, fo, kat, linia in alt:
                         if fo >= 1.30:
                             ev = _ev(p, fo)
@@ -1784,7 +1798,8 @@ if not historical.empty:
                                 "P": p, "Fair": fo, "KursBuk": None, "EV": ev,
                                 "Kelly_stake": _kel_alt["stake_pln"] if _kel_alt["safe"] else None,
                                 "Kelly_capped": _kel_alt.get("capped", False),
-                                "Kelly_frac_used": _kel_alt.get("fraction_used", 0.10),
+                                "Kelly_frac_used": _kel_alt.get("fraction_used", 0.050),
+                                "p_kelly_used": _kel_alt.get("p_kelly"),
                                 "Kelly_unverified": True, "Kategoria": kat
                             })
                     
@@ -1891,18 +1906,20 @@ if not historical.empty:
                             if _ks:
                                 if _is_capped:
                                     _disc, _col = "🔒", "#FF9800"
-                                    _tip = f" CAP"
+                                    _tip = " CAP"
                                 elif _is_unverif:
                                     _disc, _col = "⚠️", "#FF9800"
                                     _tip = " ?"
                                 else:
                                     _disc, _col = "🏦", "#4CAF50"
                                     _tip = ""
+                                _pkelly = row.get("p_kelly_used")
+                                _pk_str = (f" · p_adj={_pkelly:.0%}" if _pkelly else "")
                                 st.markdown(
                                     f"<span style='color:{_col};font-weight:bold'>"
                                     f"{_disc} {_ks:.0f} zł{_tip}</span>"
                                     f"<br><span style='color:#555;font-size:0.72em'>"
-                                    f"f={_frac_used:.2f}</span>",
+                                    f"f={_frac_used:.2f}{_pk_str}</span>",
                                     unsafe_allow_html=True)
                             else:
                                 st.markdown("<span style='color:#444'>–</span>", unsafe_allow_html=True)
@@ -3578,7 +3595,11 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                                     _agg[["rynek","typ","n","hit","HR","P model","Brier","Kelly PnL"]]
                                     .rename(columns={"rynek":"Rynek","typ":"Typ","n":"N","hit":"Traf."}),
                                     use_container_width=True, hide_index=True)
-                                st.caption("Rynki niezweryfikowane na live kursach – Kelly na fair odds (bez marży).")
+                                st.caption(
+                                "Kelly na fair odds (bez marży bukmachera – real ~3-8% niżej). "
+                                "Frakcje po analizie backtestów: Gole/BTTS f=0.075 · Kartki/Rożne f=0.05. "
+                                "Kalibracja liniowa p_model zastosowana (slope=0.88, intercept=0.06). "
+                                "EV<5% odfiltrowane.")
 
                     st.divider()
                     ec1, ec2 = st.columns(2)
