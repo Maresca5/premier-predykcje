@@ -4333,11 +4333,51 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                                 "EV<5% odfiltrowane.")
 
                     st.divider()
+
+                    # ── Metryki Kelly ───────────────────────────────────────
+                    _k_end  = summ.get("kelly_end",  1000.0)
+                    _k_roi  = summ.get("kelly_roi",  0.0)
+                    _k_dd   = summ.get("kelly_max_dd", 0.0)
+                    _k_n    = summ.get("kelly_typy", 0)
+                    _k_traf = summ.get("kelly_trafione", 0)
+                    _k_hr   = _k_traf / _k_n if _k_n > 0 else 0
+
+                    st.markdown("**📊 Symulacja Kelly (1/8 frakcja · EV≥5% · bankroll 1000 zł)**")
+                    _km1, _km2, _km3, _km4, _km5 = st.columns(5)
+                    _km1.metric("💰 Końcowy bankroll",
+                                f"{_k_end:.0f} zł",
+                                delta=f"{_k_roi:+.1f}%",
+                                delta_color="normal" if _k_roi >= 0 else "inverse")
+                    _km2.metric("📋 Typów Kelly", _k_n,
+                                help="Tylko typy z EV≥5% i fair odds≥1.30")
+                    _km3.metric("✅ Trafione", f"{_k_traf} ({_k_hr:.0%})")
+                    _km4.metric("📉 Max Drawdown", f"{_k_dd:.1f}%",
+                                delta_color="inverse" if _k_dd > 20 else "off")
+                    _km5.metric("📈 ROI flat",
+                                f"{summ['roi_pct']:+.1f}%",
+                                help="Flat betting (1 jedn./typ) na fair odds – dla porównania")
+
+                    # ── Dwie krzywe: flat (jednostki) vs Kelly (bankroll) ───
                     ec1, ec2 = st.columns(2)
                     with ec1:
-                        st.markdown("**📈 Krzywa kapitału**")
-                        eq = summ["equity_df"].rename(columns={"equity":"Kapitał"}).set_index("kolejka")
-                        st.line_chart(eq["Kapitał"], height=220)
+                        st.markdown("**📈 Flat vs Kelly – krzywa kapitału**")
+                        _eq_flat  = summ["equity_df"].copy()
+                        _eq_kelly = summ.get("equity_kelly_df", pd.DataFrame())
+                        if not _eq_kelly.empty:
+                            # Normalizuj flat do 1000 zł bazowo dla porównania
+                            _eq_flat_n = _eq_flat.set_index("kolejka")["equity"]
+                            _eq_flat_n = 1000 + _eq_flat_n * (1000 / max(abs(_eq_flat_n).max(), 1))
+                            _eq_k_n    = _eq_kelly.set_index("kolejka")["bankroll_kelly"]
+                            _chart_eq  = pd.DataFrame({
+                                "Flat (norm. 1000 zł)": _eq_flat_n,
+                                "Kelly (zł)":           _eq_k_n,
+                            }).dropna()
+                            st.line_chart(_chart_eq, height=220,
+                                          color=["#888888", "#4CAF50"])
+                            st.caption("Szara = flat betting znormalizowany · Zielona = Kelly bankroll")
+                        else:
+                            _eq_f = _eq_flat.rename(columns={"equity":"Kapitał"}).set_index("kolejka")
+                            st.line_chart(_eq_f["Kapitał"], height=220)
                     with ec2:
                         st.markdown("**📉 Brier & Hit per kolejka**")
                         per_k = summ["per_kolejka"]
@@ -4346,6 +4386,23 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                                 columns={"kolejka":"Kolejka","brier":"Brier","hit_rate":"Hit"}
                             ).set_index("Kolejka")
                             st.line_chart(chart_k, height=220)
+
+                    # ── Stawki Kelly per mecz – histogram ──────────────────
+                    _eq_kelly2 = summ.get("equity_kelly_df", pd.DataFrame())
+                    if not _eq_kelly2.empty and "stawka_kelly" in _eq_kelly2.columns:
+                        _stakes = _eq_kelly2[_eq_kelly2["stawka_kelly"] > 0]["stawka_kelly"]
+                        if not _stakes.empty:
+                            with st.expander(f"📋 Rozkład stawek Kelly ({len(_stakes)} typów)", expanded=False):
+                                _s_min = _stakes.min(); _s_max = _stakes.max()
+                                _s_avg = _stakes.mean(); _s_med = _stakes.median()
+                                _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+                                _sc1.metric("Min stawka", f"{_s_min:.0f} zł")
+                                _sc2.metric("Max stawka", f"{_s_max:.0f} zł")
+                                _sc3.metric("Średnia",    f"{_s_avg:.0f} zł")
+                                _sc4.metric("Mediana",    f"{_s_med:.0f} zł")
+                                st.caption(
+                                    "Stawki rosną/maleją z bankrollem – Kelly automatycznie "
+                                    "redukuje ryzyko przy stracie i zwiększa przy zysku.")
 
                     st.divider()
                     st.markdown("### 🎯 Skuteczność per typ")
