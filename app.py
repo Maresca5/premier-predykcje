@@ -2989,6 +2989,120 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 )
                 st.caption("⏳ = predykcje zapisane, wyniki jeszcze nie dostępne w football-data.co.uk")
 
+        # ── Aktualizuj wszystkie kolejki jednym kliknięciem ───────────────
+        _t4c1, _t4c2 = st.columns([2, 3])
+        with _t4c1:
+            if st.button("🔄 Aktualizuj wszystkie kolejki", key="update_all_rounds",
+                         help="Pobiera wyniki ze wszystkich nierozliczonych kolejek football-data.co.uk"):
+                with st.spinner("Aktualizuję wyniki..."):
+                    _all_mecze = sqlite3.connect(DB_FILE).execute(
+                        "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
+                        (wybrana_liga,)).fetchall()
+                    sqlite3.connect(DB_FILE).close()
+                    _n_up = 0
+                    for _hh, _aa in _all_mecze:
+                        _con_b = sqlite3.connect(DB_FILE)
+                        _b4 = _con_b.execute(
+                            "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+                            (_hh, _aa)).fetchone()[0]
+                        _con_b.close()
+                        aktualizuj_wynik_zdarzenia(_hh, _aa, historical)
+                        _con_a = sqlite3.connect(DB_FILE)
+                        _af = _con_a.execute(
+                            "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+                            (_hh, _aa)).fetchone()[0]
+                        _con_a.close()
+                        if _af > _b4:
+                            _n_up += 1
+                    _rozl_all = rozlicz_paper_trades(wybrana_liga, historical)
+                    _rozl_msg = ""
+                    if _rozl_all["rozliczone"] > 0:
+                        _rozl_msg = (f" · 📊 Paper Trading: {_rozl_all['trafione']}/{_rozl_all['rozliczone']} "
+                                     f"· PnL {_rozl_all['pnl_total']:+.2f} zł")
+                    st.success(f"✅ Zaktualizowano {_n_up} meczów{_rozl_msg}")
+                    st.rerun()
+        with _t4c2:
+            st.caption("Pobiera dane z football-data.co.uk. Uruchom po każdej serii meczów "
+                       "(dane dostępne ~24h po meczu).")
+
+        st.divider()
+
+        # ── Szczegóły kolejki – kliknij w tabelę powyżej ─────────────────
+        if not _hist_kolejki.empty:
+            _kolejki_list = sorted(_hist_kolejki["kolejnosc"].astype(int).tolist(), reverse=True)
+            _sel_kol = st.selectbox(
+                "🔍 Sprawdź szczegóły kolejki",
+                options=_kolejki_list,
+                format_func=lambda k: f"Kolejka #{k}",
+                key="tab4_sel_kolejka"
+            )
+            if _sel_kol:
+                _con_det = sqlite3.connect(DB_FILE)
+                _det_df  = pd.read_sql_query(
+                    """SELECT mecz, home, away, rynek, typ, linia, p_model, fair_odds,
+                              trafione, data
+                       FROM zdarzenia
+                       WHERE liga=? AND kolejnosc=?
+                       ORDER BY rynek, mecz""",
+                    _con_det, params=(wybrana_liga, int(_sel_kol))
+                )
+                _con_det.close()
+
+                if not _det_df.empty:
+                    _kol_row = _hist_kolejki[_hist_kolejki["kolejnosc"] == _sel_kol]
+                    _kol_hr  = float(_kol_row["hit_rate"].iloc[0]) if not _kol_row.empty and _kol_row["hit_rate"].notna().any() else None
+                    _kol_n   = int(_kol_row["n_typow"].iloc[0]) if not _kol_row.empty else 0
+                    _kol_t   = int(_kol_row["n_traf"].iloc[0]) if not _kol_row.empty else 0
+                    _hr_str  = f"{_kol_hr:.0%}" if _kol_hr is not None else "⏳"
+                    st.markdown(
+                        f"**Kolejka #{_sel_kol}** · {_kol_t}/{_kol_n} trafione (1X2) · Hit Rate: **{_hr_str}**")
+
+                    # Grupuj mecze
+                    for _mecz_str, _grp in _det_df.groupby("mecz"):
+                        _home_r = _grp["home"].iloc[0]
+                        _away_r = _grp["away"].iloc[0]
+                        # Główny typ 1X2
+                        _1x2 = _grp[_grp["rynek"] == "1X2"]
+                        _has_result = _1x2["trafione"].notna().any() if not _1x2.empty else False
+                        _traf_ico   = ""
+                        if not _1x2.empty and _1x2["trafione"].notna().any():
+                            _traf_ico = "✅" if int(_1x2["trafione"].iloc[0]) == 1 else "❌"
+
+                        with st.expander(f"{_traf_ico} {_mecz_str}", expanded=False):
+                            # Wiersze per rynek
+                            _det_rows = []
+                            for _, dr in _grp.iterrows():
+                                _trf = dr["trafione"]
+                                _ico = "✅" if _trf == 1 else ("❌" if _trf == 0 else "⏳")
+                                _ico_c = "#4CAF50" if _trf == 1 else ("#F44336" if _trf == 0 else "#888")
+                                _lin = f" {dr['linia']:.1f}" if dr["linia"] and float(dr["linia"]) > 0 else ""
+                                _rynek_opis = f"{dr['rynek']}{_lin}"
+                                _p_str = f"{float(dr['p_model']):.0%}" if dr["p_model"] else "–"
+                                _fo_str = f"{float(dr['fair_odds']):.2f}" if dr["fair_odds"] else "–"
+                                _det_rows.append(
+                                    f"<tr>"
+                                    f"<td style='padding:4px 8px;font-size:0.86em;color:#aaa'>{_rynek_opis}</td>"
+                                    f"<td style='padding:4px 8px;font-size:0.86em;font-weight:bold'>{dr['typ']}</td>"
+                                    f"<td style='padding:4px 8px;text-align:center;color:#2196F3;font-size:0.84em'>{_p_str}</td>"
+                                    f"<td style='padding:4px 8px;text-align:center;color:#888;font-size:0.84em'>{_fo_str}</td>"
+                                    f"<td style='padding:4px 8px;text-align:center;color:{_ico_c};font-weight:bold'>{_ico}</td>"
+                                    f"</tr>"
+                                )
+                            st.markdown(
+                                f"<table style='width:100%;border-collapse:collapse'>"
+                                f"<thead><tr style='color:#555;font-size:0.72em;text-transform:uppercase'>"
+                                f"<th style='padding:4px 8px'>Rynek</th>"
+                                f"<th style='padding:4px 8px'>Typ</th>"
+                                f"<th style='padding:4px 8px;text-align:center'>P model</th>"
+                                f"<th style='padding:4px 8px;text-align:center'>Fair</th>"
+                                f"<th style='padding:4px 8px;text-align:center'>Wynik</th>"
+                                f"</tr></thead>"
+                                f"<tbody>{''.join(_det_rows)}</tbody></table>",
+                                unsafe_allow_html=True
+                            )
+
+        st.divider()
+
         # ══════════════════════════════════════════════════════════════════
         # PAPER TRADING TRACKER
         # ══════════════════════════════════════════════════════════════════
