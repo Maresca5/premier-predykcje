@@ -14,8 +14,8 @@ from typing import Optional, Callable
 
 # ── Parametry identyczne z app.py ─────────────────────────────────────────
 SOT_BLEND_W   = 0.30
-PROG_PEWNY    = 0.42
-PROG_PODWOJNA = 0.62
+PROG_PEWNY    = 0.55   # identyczny z app.py
+PROG_PODWOJNA = 0.55   # identyczny z app.py
 TAU_DAYS      = 30.0
 # Kelly fractions po analizie backtestów – obniżone o 50%
 KELLY_FRACTIONS_BT = {
@@ -250,6 +250,12 @@ def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
         lh = avg_h * atak_h * obrona_a * fw(fh)
         la = avg_a * atak_a * obrona_h * fw(fa)
 
+        # Asymetryczny shrink – identyczny z app.py
+        ALPHA_OFF = 0.10
+        ALPHA_DEF = 0.20
+        lh = (1 - ALPHA_OFF) * lh + ALPHA_OFF * avg_h
+        la = (1 - ALPHA_DEF) * la + ALPHA_DEF * avg_a
+
         # SOT blend
         if SOT_BLEND_W > 0 and "SOT (dom)" in st.columns and "SOT (wyjazd)" in st.columns:
             sot_h = st.loc[h, "SOT (dom)"]
@@ -261,6 +267,8 @@ def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
                 if not (np.isnan(sh) or np.isnan(sa)):
                     lsot_h = sh * (avg_h / ash) * obrona_a * fw(fh)
                     lsot_a = sa * (avg_a / asa) * obrona_h * fw(fa)
+                    lsot_h = (1 - ALPHA_OFF) * lsot_h + ALPHA_OFF * avg_h
+                    lsot_a = (1 - ALPHA_DEF) * lsot_a + ALPHA_DEF * avg_a
                     lh = (1 - SOT_BLEND_W) * lh + SOT_BLEND_W * lsot_h
                     la = (1 - SOT_BLEND_W) * la + SOT_BLEND_W * lsot_a
 
@@ -306,21 +314,29 @@ def _dc(lh: float, la: float, rho: float) -> np.ndarray:
     return M / M.sum()
 
 
-def _pred(lh: float, la: float, rho: float) -> dict:
+def _pred(lh: float, la: float, rho: float, liga: str = "E0") -> dict:
     M  = _dc(lh, la, rho)
     ph = float(np.tril(M, -1).sum())
     pd_= float(np.trace(M))
     pa = float(np.triu(M, 1).sum())
-    if   ph >= PROG_PEWNY:   typ, pt = "1",  ph
-    elif pa >= PROG_PEWNY:   typ, pt = "2",  pa
-    elif pd_ >= PROG_PEWNY:  typ, pt = "X",  pd_
+    _pred_liga = liga
+    # Identyczny z app.py – shrink Bayesian przed wyborem
+    KALIBRACJA_PER_LIGA = {"E0": 0.25, "SP1": 0.38, "D1": 0.40, "I1": 0.28, "F1": 0.45}
+    SHRINK_ALPHA = 0.25
+    a_shr = KALIBRACJA_PER_LIGA.get(_pred_liga, SHRINK_ALPHA)
+    ph2  = (1 - a_shr) * ph  + a_shr / 3
+    pd2  = (1 - a_shr) * pd_ + a_shr / 3
+    pa2  = (1 - a_shr) * pa  + a_shr / 3
+    s    = ph2 + pd2 + pa2
+    ph2, pd2, pa2 = ph2/s, pd2/s, pa2/s
+    p1x = ph2 + pd2; px2 = pa2 + pd2
+    if   ph2 >= PROG_PEWNY:   typ, pt = "1",  ph2
+    elif pa2 >= PROG_PEWNY:   typ, pt = "2",  pa2
+    elif p1x >= PROG_PODWOJNA or px2 >= PROG_PODWOJNA:
+        typ, pt = ("1X", p1x) if p1x >= px2 else ("X2", px2)
     else:
-        p1x = ph + pd_; px2 = pa + pd_
-        if p1x >= PROG_PODWOJNA or px2 >= PROG_PODWOJNA:
-            typ, pt = ("1X", p1x) if p1x >= px2 else ("X2", px2)
-        else:
-            d = {"1": ph, "X": pd_, "2": pa}
-            typ = max(d, key=d.get); pt = d[typ]
+        d = {"1": ph2, "X": pd2, "2": pa2}
+        typ = max(d, key=d.get); pt = d[typ]
     return {"ph": ph, "pd": pd_, "pa": pa, "typ": typ, "pt": float(pt), "lh": lh, "la": la}
 
 
@@ -677,7 +693,7 @@ def run_backtest(
                     skipped += 1
                     continue
 
-                p    = _pred(lh, la, rho)
+                p    = _pred(lh, la, rho, liga_code)
                 wn   = _wynik(fthg, ftag)
                 tr   = _traf(p["typ"], wn)
                 fo   = round(1 / p["pt"], 2) if p["pt"] > 0 else 999.0
