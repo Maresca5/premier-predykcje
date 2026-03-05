@@ -983,3 +983,4 @@ def summary(liga: str, sezon: str, db: str) -> dict:
         "kelly_trafione": _k_traf,
         "kelly_max_dd": round(_k_max_dd, 2),
     }
+ 
