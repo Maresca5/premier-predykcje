@@ -2782,39 +2782,94 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         st.session_state[_save_key] = n_saved
                         st.success(f"✅ Zapisano zdarzenia dla {n_saved} meczów.")
                 with tc2:
-                    if st.button("🔄 Aktualizuj wyniki (po meczach)", help="Sprawdza bazę historyczną i uzupełnia wyniki zapisanych zdarzeń."):
-                        n_updated = 0
-                        init_db()
-                        con_u = sqlite3.connect(DB_FILE)
-                        mecze_db = con_u.execute(
-                            "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
-                            (wybrana_liga,)
-                        ).fetchall()
-                        con_u.close()
-                        for h_db, a_db in mecze_db:
-                            # Count how many zdarzenia actually got a result
-                            con_chk = sqlite3.connect(DB_FILE)
-                            _before = con_chk.execute(
-                                "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
-                                (h_db, a_db)).fetchone()[0]
-                            con_chk.close()
-                            aktualizuj_wynik_zdarzenia(h_db, a_db, historical)
-                            con_chk2 = sqlite3.connect(DB_FILE)
-                            _after = con_chk2.execute(
-                                "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
-                                (h_db, a_db)).fetchone()[0]
-                            con_chk2.close()
-                            if _after > _before:
-                                n_updated += 1
-                        # Auto-rozlicz paper trades
-                        _rozl = rozlicz_paper_trades(wybrana_liga, historical)
+                    if st.button("🔄 Aktualizuj wyniki (po meczach)", key="update_wyniki_btn",
+                                 help="Zapisuje predykcje dla WSZYSTKICH przeszłych kolejek i aktualizuje wyniki."):
+                        with st.spinner("Zapisuję predykcje dla wszystkich kolejek sezonu..."):
+                            # KROK 1: Zapisz predykcje dla wszystkich przeszłych kolejek
+                            # Iteruj przez WSZYSTKIE kolejki w terminarzu które już się odbyły
+                            _dzisiaj = datetime.now().date()
+                            _wszystkie_rundy = sorted(schedule["round"].unique())
+                            _n_zapisanych = 0
+                            for _runda in _wszystkie_rundy:
+                                _mecze_rundy = schedule[schedule["round"] == _runda]
+                                # Sprawdź czy ta kolejka już się odbyła (większość meczów w przeszłości)
+                                _n_przeszle = sum(
+                                    1 for _, _mr in _mecze_rundy.iterrows()
+                                    if pd.Timestamp(_mr["date"]).date() < _dzisiaj
+                                )
+                                if _n_przeszle == 0:
+                                    continue  # przyszła kolejka – pomiń
+                                for _, mecz_r in _mecze_rundy.iterrows():
+                                    _hr = map_nazwa(mecz_r["home_team"])
+                                    _ar = map_nazwa(mecz_r["away_team"])
+                                    if _hr not in srednie_df.index or _ar not in srednie_df.index:
+                                        continue
+                                    # Sprawdź czy już zapisane
+                                    _con_chk = sqlite3.connect(DB_FILE)
+                                    _juz = _con_chk.execute(
+                                        "SELECT COUNT(*) FROM zdarzenia WHERE liga=? AND kolejnosc=? AND home=? AND away=?",
+                                        (wybrana_liga, int(_runda), _hr, _ar)).fetchone()[0]
+                                    _con_chk.close()
+                                    if _juz > 0:
+                                        continue  # już zapisane – pomiń
+                                    try:
+                                        _lhr, _lar, _lrr, _lkr, _, _lsotr = oblicz_lambdy(
+                                            _hr, _ar, srednie_df, srednie_lig, forma_dict)
+                                        _predr = predykcja_meczu(_lhr, _lar, rho=rho,
+                                                                  csv_code=LIGI[wybrana_liga]["csv_code"],
+                                                                  n_train=n_biezacy)
+                                        _mecz_str_r = f"{_hr} – {_ar}"
+                                        zapisz_zdarzenia(wybrana_liga, int(_runda), _mecz_str_r,
+                                                         _hr, _ar, "1X2", _predr["typ"], 0.0,
+                                                         _predr["p_typ"], _predr["fo_typ"])
+                                        for _em, _nz, _pz, _foz, _kz, _lz in alternatywne_zdarzenia(
+                                                _lhr, _lar, _lrr, _lkr, rho, lam_sot=_lsotr):
+                                            zapisz_zdarzenia(wybrana_liga, int(_runda), _mecz_str_r,
+                                                             _hr, _ar, _kz, _nz, _lz, _pz, _foz)
+                                        _n_zapisanych += 1
+                                    except Exception:
+                                        continue
+
+                            # KROK 2: Zaktualizuj wyniki dla wszystkich zapisanych meczów
+                            _con_u = sqlite3.connect(DB_FILE)
+                            _mecze_db = _con_u.execute(
+                                "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
+                                (wybrana_liga,)).fetchall()
+                            _con_u.close()
+                            n_updated = 0
+                            for _hdb, _adb in _mecze_db:
+                                _con_b = sqlite3.connect(DB_FILE)
+                                _before = _con_b.execute(
+                                    "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+                                    (_hdb, _adb)).fetchone()[0]
+                                _con_b.close()
+                                aktualizuj_wynik_zdarzenia(_hdb, _adb, historical)
+                                _con_a = sqlite3.connect(DB_FILE)
+                                _after = _con_a.execute(
+                                    "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+                                    (_hdb, _adb)).fetchone()[0]
+                                _con_a.close()
+                                if _after > _before:
+                                    n_updated += 1
+
+                            # KROK 3: Rozlicz paper trades
+                            _rozl = rozlicz_paper_trades(wybrana_liga, historical)
+
+                        # Podsumowanie
+                        _msg_parts = []
+                        if _n_zapisanych > 0:
+                            _msg_parts.append(f"💾 Zapisano predykcje dla {_n_zapisanych} nowych meczów")
+                        if n_updated > 0:
+                            _msg_parts.append(f"🔄 Zaktualizowano wyniki: {n_updated} meczów")
                         if _rozl["rozliczone"] > 0:
-                            st.success(
-                                f"📊 Rozliczono {_rozl['rozliczone']} paper trades: "
-                                f"{_rozl['trafione']} trafione · "
-                                f"PnL: **{_rozl['pnl_total']:+.2f} zł** · "
-                                f"Bankroll: {_rozl['bankroll_po']:.0f} zł")
-                        st.success(f"✅ Zaktualizowano wyniki dla {n_updated} meczów.")
+                            _msg_parts.append(
+                                f"📊 Paper Trading: {_rozl['trafione']}/{_rozl['rozliczone']} "
+                                f"· PnL {_rozl['pnl_total']:+.2f} zł")
+                        if _msg_parts:
+                            st.success(" · ".join(_msg_parts))
+                        else:
+                            st.info("✅ Wszystkie dane aktualne – brak nowych wyników do pobrania.")
+                        st.rerun()
             else:
                 st.info("Brak meczów w tej kolejce")
         else:
