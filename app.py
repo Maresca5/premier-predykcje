@@ -43,11 +43,14 @@ def _kurs_dc_live(typ, oh, od, oa):
 # KONFIGURACJA
 # ===========================================================================
 LIGI = {
-    "Premier League": {"csv_code": "E0",  "file": "terminarz_premier_2025.csv"},
-    "La Liga":        {"csv_code": "SP1", "file": "terminarz_la_liga_2025.csv"},
-    "Bundesliga":     {"csv_code": "D1",  "file": "terminarz_bundesliga_2025.csv"},
-    "Serie A":        {"csv_code": "I1",  "file": "terminarz_serie_a_2025.csv"},
-    "Ligue 1":        {"csv_code": "F1",  "file": "terminarz_ligue_1_2025.csv"},
+    # tau: dni time-decay; fw: form_weight krok per W/L
+    # EPL: wyrównana liga, wolniejszy decay, ostrożny form_weight
+    # Ligue 1: bardziej przewidywalna, szybszy decay + silniejszy form
+    "Premier League": {"csv_code": "E0",  "file": "terminarz_premier_2025.csv",  "tau": 30.0, "fw": 0.03},
+    "La Liga":        {"csv_code": "SP1", "file": "terminarz_la_liga_2025.csv",  "tau": 28.0, "fw": 0.04},
+    "Bundesliga":     {"csv_code": "D1",  "file": "terminarz_bundesliga_2025.csv","tau": 28.0, "fw": 0.04},
+    "Serie A":        {"csv_code": "I1",  "file": "terminarz_serie_a_2025.csv",  "tau": 28.0, "fw": 0.04},
+    "Ligue 1":        {"csv_code": "F1",  "file": "terminarz_ligue_1_2025.csv",  "tau": 21.0, "fw": 0.05},
 }
 
 DB_FILE    = "predykcje.db"
@@ -439,7 +442,9 @@ def get_round_status(schedule: pd.DataFrame, round_num: int) -> str:
 # ===========================================================================
 # STATYSTYKI
 # ===========================================================================
-TIME_DECAY_TAU = 21.0  # dni; poprzednio 30 – szybsza reakcja na formę
+TIME_DECAY_TAU = 30.0  # globalny fallback; per-liga ustawiane w LIGI dict
+
+
 
 def weighted_mean(values: pd.Series, dates: pd.Series = None,
                   tau_days: float = TIME_DECAY_TAU) -> float:
@@ -532,7 +537,8 @@ SOT_BLEND_W = 0.30   # 0.0 = tylko gole, 0.30 = 70% gole + 30% SOT
 
 def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
                   srednie_lig: dict, forma_dict: dict,
-                  sot_w: float = SOT_BLEND_W) -> tuple:
+                  sot_w: float = SOT_BLEND_W,
+                  csv_code: str = "E0") -> tuple:
     """
     Zwraca (lam_h, lam_a, lam_r, lam_k, sot_aktywny, lam_sot).
 
@@ -555,7 +561,7 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
     def form_weight(team: str) -> float:
         f = forma_dict.get(team, "")
         w = f.count("W"); l = f.count("L")
-        return float(np.clip(1.0 + (w - l) * 0.05, 0.80, 1.20))  # wzmocniony: ±0.05 vs poprz. ±0.03
+        return float(np.clip(1.0 + (w - l) * 0.03, 0.85, 1.15))
 
     lam_h_goals = avg_h * atak_h * obrona_a * form_weight(h)
     lam_a_goals = avg_a * atak_a * obrona_h * form_weight(a)
@@ -1465,7 +1471,8 @@ def model_sharpness_vs_rynek(liga: str, oa_cached: dict, oa_module,
         if h not in srednie_df.index or a not in srednie_df.index:
             continue
         try:
-            lh, la, lr, lk, _, lsot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+            lh, la, lr, lk, _, lsot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
+                               csv_code=LIGI[wybrana_liga]["csv_code"])
             pred = predykcja_meczu(lh, la, rho=rho, csv_code=csv_code, n_train=n_biezacy)
             o = oa_module.znajdz_kursy(h, a, oa_cached)
             if not o:
@@ -2003,7 +2010,8 @@ if not historical.empty:
             if _sh not in srednie_df.index or _sa not in srednie_df.index: continue
             try:
                 _slh, _sla, _slr, _slk, _, _slsot = oblicz_lambdy(
-                    _sh, _sa, srednie_df, srednie_lig, forma_dict)
+                    _sh, _sa, srednie_df, srednie_lig, forma_dict,
+                                  csv_code=LIGI[wybrana_liga]["csv_code"])
                 _sp = predykcja_meczu(_slh, _sla, rho=rho,
                                        csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                 _so = _oa.znajdz_kursy(_sh, _sa, _oa_cached) if _OA_OK and _oa_key else None
@@ -2084,7 +2092,8 @@ if not historical.empty:
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
                     
-                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
+                                                                    csv_code=LIGI[wybrana_liga]["csv_code"])
                     pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                     mecz_str = f"{h} – {a}"
 
@@ -2415,7 +2424,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
 
-                        lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                        lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
+                                                                    csv_code=LIGI[wybrana_liga]["csv_code"])
                         pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                         data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
@@ -2748,7 +2758,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         a_s = map_nazwa(mecz_s["away_team"])
                         if h_s not in srednie_df.index or a_s not in srednie_df.index:
                             continue
-                        lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
+                        lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict,
+                                                 csv_code=LIGI[wybrana_liga]["csv_code"])
                         pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                         mecz_str_s = f"{h_s} – {a_s}"
                         zapisz_zdarzenia(wybrana_liga, int(aktualna_kolejka), mecz_str_s, h_s, a_s,
@@ -2770,7 +2781,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             a_s = map_nazwa(mecz_s["away_team"])
                             if h_s not in srednie_df.index or a_s not in srednie_df.index:
                                 continue
-                            lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict)
+                            lhs, las, lrs, lks, _sot_sv, _lsot_sv = oblicz_lambdy(h_s, a_s, srednie_df, srednie_lig, forma_dict,
+                                  csv_code=LIGI[wybrana_liga]["csv_code"])
                             pred_s = predykcja_meczu(lhs, las, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                             mecz_str_s = f"{h_s} – {a_s}"
                             zapisz_zdarzenia(wybrana_liga, int(aktualna_kolejka), mecz_str_s, h_s, a_s,
@@ -2814,7 +2826,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                         continue  # już zapisane – pomiń
                                     try:
                                         _lhr, _lar, _lrr, _lkr, _, _lsotr = oblicz_lambdy(
-                                            _hr, _ar, srednie_df, srednie_lig, forma_dict)
+                                            _hr, _ar, srednie_df, srednie_lig, forma_dict,
+                                  csv_code=LIGI[wybrana_liga]["csv_code"])
                                         _predr = predykcja_meczu(_lhr, _lar, rho=rho,
                                                                   csv_code=LIGI[wybrana_liga]["csv_code"],
                                                                   n_train=n_biezacy)
@@ -3222,7 +3235,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 continue
                             try:
                                 _plh, _pla, _plr, _plk, _, _plsot = oblicz_lambdy(
-                                    _ph, _pa, srednie_df, srednie_lig, forma_dict)
+                                    _ph, _pa, srednie_df, srednie_lig, forma_dict,
+                                  csv_code=LIGI[wybrana_liga]["csv_code"])
                                 _pp = predykcja_meczu(_plh, _pla, rho=rho,
                                                       csv_code=LIGI[wybrana_liga]["csv_code"],
                                                       n_train=n_biezacy)
@@ -3926,7 +3940,8 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                     continue
                 try:
                     _mlh, _mla, _mlr, _mlk, _, _mls = oblicz_lambdy(
-                        _mh, _ma, srednie_df, srednie_lig, forma_dict)
+                        _mh, _ma, srednie_df, srednie_lig, forma_dict,
+                                  csv_code=LIGI[wybrana_liga]["csv_code"])
                     _mp = predykcja_meczu(_mlh, _mla, rho=rho,
                                           csv_code=LIGI[wybrana_liga]["csv_code"],
                                           n_train=n_biezacy)
@@ -4081,7 +4096,8 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                     a = map_nazwa(mecz["away_team"])
                     if h not in srednie_df.index or a not in srednie_df.index:
                         continue
-                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict)
+                    lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
+                                                                    csv_code=LIGI[wybrana_liga]["csv_code"])
                     p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
                     p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
                     p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
