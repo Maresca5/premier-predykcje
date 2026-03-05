@@ -4427,12 +4427,18 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                             f"Dla {len(_pnl_comp)} typów z podanym Real Odds. "
                             "Wpisz Real Odds w Trackerze po każdym zakładzie.")
                     with st.expander("📋 Wszystkie predykcje", expanded=False):
-                        disp=bt_df[["kolejka","data","home","away","fthg","ftag",
-                                    "wynik","typ","p_typ","trafiony","brier"]].copy()
-                        disp["p_typ"]=disp["p_typ"].apply(lambda x:f"{x:.0%}")
-                        disp["brier"]=disp["brier"].apply(lambda x:f"{x:.4f}")
-                        disp["trafiony"]=disp["trafiony"].map({1:"✅",0:"❌"})
-                        disp.columns=["Kol.","Data","Dom","Gość","GH","GA","Wynik","Typ","P","✓","Brier"]
+                        _base_cols = ["kolejka","data","home","away","fthg","ftag","wynik","typ","p_typ","trafiony"]
+                        _has_brier = "brier" in bt_df.columns
+                        _sel_cols  = _base_cols + (["brier"] if _has_brier else [])
+                        disp = bt_df[[c for c in _sel_cols if c in bt_df.columns]].copy()
+                        disp["p_typ"] = disp["p_typ"].apply(lambda x: f"{x:.0%}")
+                        disp["trafiony"] = disp["trafiony"].map({1:"✅", 0:"❌"})
+                        if _has_brier:
+                            disp["brier"] = disp["brier"].apply(lambda x: f"{x:.4f}")
+                        _col_names = ["Kol.","Data","Dom","Gość","GH","GA","Wynik","Typ","P","✓"]
+                        if _has_brier:
+                            _col_names.append("Brier")
+                        disp.columns = _col_names
                         st.dataframe(disp, use_container_width=True, hide_index=True)
 
     # Debug
