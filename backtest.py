@@ -910,7 +910,7 @@ def summary(liga: str, sezon: str, db: str) -> dict:
                  .reset_index())
     per_typ["hit"] = per_typ["traf"] / per_typ["n"]
 
-    # Equity curve
+    # ── Equity curve flat (jednostki) ────────────────────────────────────
     df_s = df.sort_values(["kolejka", "home"]).reset_index(drop=True)
     kap = 0.0
     eq  = []
@@ -920,11 +920,66 @@ def summary(liga: str, sezon: str, db: str) -> dict:
         eq.append(kap)
     df_s["equity"] = eq
 
+    # ── Equity curve Kelly (bankroll 1000 zł, walk-forward) ──────────────
+    # Symulacja: przed każdym typem znamy aktualny bankroll i obliczamy
+    # stawkę Kelly (frakcja 1/8, EV≥5%, max 5% bankrollu per typ).
+    # Używamy fair odds (brak marży) – realistyczne z 3-5% dyskontem.
+    KELLY_START   = 1000.0
+    KELLY_FRAC    = 0.125        # 1/8 Kelly
+    KELLY_MAX_EXP = 0.05         # max 5% bankrollu per typ
+    KELLY_MIN_EV  = 0.05         # min EV 5%
+    CALIB_A = 0.88; CALIB_B = 0.06  # kalibracja liniowa p_model
+
+    bk    = KELLY_START
+    eq_k  = []
+    stake_log = []
+    for _, r in df_s.iterrows():
+        fo   = round(1 / r["p_typ"], 2) if 0 < r["p_typ"] <= 1 else 999.0
+        p_c  = float(np.clip(CALIB_A * r["p_typ"] + CALIB_B, 0.01, 0.99))
+        ev   = p_c * fo - 1.0
+        stawka = 0.0
+        if ev >= KELLY_MIN_EV and fo >= 1.30:
+            b    = fo - 1.0
+            f_k  = max((p_c * b - (1 - p_c)) / b, 0.0)
+            f_k  = f_k * KELLY_FRAC                    # frakcja Kelly
+            f_k  = min(f_k, KELLY_MAX_EXP)             # cap ekspozycji
+            stawka = round(bk * f_k, 2)
+        if stawka > 0:
+            if r["trafiony"] == 1:
+                bk += stawka * (fo - 1)
+            else:
+                bk -= stawka
+        bk = max(bk, 0.01)  # bankroll nie może spaść poniżej 0
+        eq_k.append(round(bk, 2))
+        stake_log.append(round(stawka, 2))
+
+    df_s["bankroll_kelly"] = eq_k
+    df_s["stawka_kelly"]   = stake_log
+
+    # Metryki Kelly
+    _k_typy   = sum(1 for s in stake_log if s > 0)
+    _k_traf   = sum(1 for i, s in enumerate(stake_log)
+                    if s > 0 and df_s.iloc[i]["trafiony"] == 1)
+    _k_roi    = (eq_k[-1] - KELLY_START) / KELLY_START * 100 if eq_k else 0.0
+    _k_max_dd = 0.0  # max drawdown
+    _peak = KELLY_START
+    for bki in eq_k:
+        if bki > _peak: _peak = bki
+        dd = (_peak - bki) / _peak * 100
+        if dd > _k_max_dd: _k_max_dd = dd
+
     return {
         "n": n, "trafione": traf, "hit_rate": traf / n,
         "brier": brier, "bss": bss, "roi_pct": roi_pct,
         "per_kolejka": per_k,
         "kalibracja": pd.DataFrame(kal),
         "per_typ": per_typ,
-        "equity_df": df_s[["kolejka", "equity"]],
+        "equity_df":       df_s[["kolejka", "equity"]],
+        "equity_kelly_df": df_s[["kolejka", "bankroll_kelly", "stawka_kelly"]],
+        "kelly_start":  KELLY_START,
+        "kelly_end":    eq_k[-1] if eq_k else KELLY_START,
+        "kelly_roi":    round(_k_roi, 2),
+        "kelly_typy":   _k_typy,
+        "kelly_trafione": _k_traf,
+        "kelly_max_dd": round(_k_max_dd, 2),
     }
