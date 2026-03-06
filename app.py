@@ -2166,13 +2166,15 @@ if not historical.empty:
                 _skdc = None
                 if _so:
                     _skdc, _sidc = _kurs_dc_live(_sp["typ"], _so["odds_h"], _so["odds_d"], _so["odds_a"])
-                _sev = _sp["p_typ"] * (_skdc or _sp["fo_typ"]) - 1
+                _sev = min(_sp["p_typ"] * (_skdc or _sp["fo_typ"]) - 1, 0.15)  # cap EV 15%
                 _smn = market_noise_check(_sp["p_typ"], _sidc) if _so and _skdc else None
+                # Filtr kursowy: tylko 1.30-2.40 (powyżej model zawyża p)
+                _kurs_ok = (_skdc is None) or (1.30 <= _skdc <= 2.40)
                 _start_top.append({
                     "mecz": f"{_sh} – {_sa}",
                     "typ": _sp["typ"], "p": _sp["p_typ"],
                     "fo": _sp["fo_typ"], "kurs_buk": _skdc,
-                    "ev": _sev, "is_val": _sev >= 0.04,
+                    "ev": _sev, "is_val": _sev >= 0.04 and _kurs_ok,
                     "noise": _smn["noise"] if _smn else False,
                     "data": _sm.get("date",""),
                 })
@@ -3675,12 +3677,12 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
 
             _eq_df["kurs_buk"] = _eq_df.apply(_kurs_live, axis=1)
             _eq_df["ev"] = _eq_df.apply(
-                lambda r: float(r["p_model"]) * float(r["kurs_buk"]) - 1.0
-                if r["kurs_buk"] and 1.30 <= float(r["kurs_buk"]) <= 3.50 else None,
+                lambda r: min(float(r["p_model"]) * float(r["kurs_buk"]) - 1.0, _KEV_CAP)
+                if r["kurs_buk"] and 1.30 <= float(r["kurs_buk"]) <= _KMAX_ODDS else None,
                 axis=1)
 
             # Kelly walk-forward per kolejka (top 3 wg EV)
-            _KS   = 1000.0; _KF = 0.125; _KMAX = 0.05; _KEV = 0.05
+            _KS   = 1000.0; _KF = 0.125; _KMAX = 0.05; _KEV = 0.05; _KMAX_ODDS = 2.40; _KEV_CAP = 0.15
             _bk   = _KS
             _bk_flat = _KS   # równoległa flat dla porównania
             _bk_vals  = []
@@ -3726,7 +3728,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             st.markdown(
                 "<div class='section-header'>💰 Symulacja Kelly – bieżący sezon"
                 "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
-                "top 3 typy/kolejkę · Pinnacle/B365 1.30–3.50 · EV≥5% · frakcja 1/8"
+                "top 3 typy/kolejkę · Pinnacle/B365 1.30–2.40 · EV 5–15% (cap) · frakcja 1/8"
                 "</span></div>",
                 unsafe_allow_html=True)
 
@@ -3761,7 +3763,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                            "w historical (brak kolumn PSH/B365H).")
             else:
                 st.caption(
-                    f"Start: 1 000 zł · {_kelly_typy} typów z EV≥5% · "
+                    f"Start: 1 000 zł · {_kelly_typy} typów z EV 5–15% · kurs 1.30–2.40 · "
                     f"PnL Kelly: {_kelly_pnl:+.0f} zł · "
                     f"Flat (fair odds, bez marży): {_roi_flat:+.1f}%"
                 )
@@ -4736,9 +4738,25 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                     _k_pnl    = summ.get("kelly_pnl", 0.0)
                     _k_roi_pct = summ.get("kelly_roi_pct", _k_roi)
 
-                    _kelly_desc = ("**📊 Symulacja Kelly** – top 3 mecze/kolejkę wg EV "
-                                   "· Pinnacle/B365 kurs 1.30–3.50 · EV≥5% · 1/8 Kelly · start 1000 zł")
-                    st.markdown(_kelly_desc)
+                    st.markdown(
+                        "**📊 Symulacja Kelly** – walk-forward, identyczna logika co strona główna")
+                    st.markdown(
+                        "<div style='display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;"
+                        "font-size:0.75em;color:#666'>"
+                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "border-radius:4px;padding:2px 8px'>Pinnacle/B365</span>"
+                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "border-radius:4px;padding:2px 8px'>Kurs 1.30–2.40</span>"
+                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "border-radius:4px;padding:2px 8px'>EV 5–15% (cap)</span>"
+                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "border-radius:4px;padding:2px 8px'>Top 3/kolejkę</span>"
+                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "border-radius:4px;padding:2px 8px'>Kelly 1/8</span>"
+                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "border-radius:4px;padding:2px 8px'>Start 1 000 zł</span>"
+                        "</div>",
+                        unsafe_allow_html=True)
                     _km1, _km2, _km3, _km4, _km5 = st.columns(5)
                     _km1.metric("💰 Końcowy bankroll",
                                 f"{_k_end:.0f} zł",
