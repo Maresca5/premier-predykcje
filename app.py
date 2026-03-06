@@ -1991,17 +1991,28 @@ if _OA_OK and _oa_key:
 elif not _OA_OK:
     st.sidebar.caption("ℹ️ Plik `odds_api.py` nie znaleziony.")
 
-# ── Kelly Bankroll input ───────────────────────────────────────────
+# ── Kelly Bankroll input + Frakcja ─────────────────────────────────
 st.sidebar.divider()
 st.sidebar.markdown("### 💼 Bankroll (Kelly)")
 _br_input = st.sidebar.number_input(
     "Twój bankroll (zł)", min_value=10.0, max_value=1_000_000.0,
     value=float(st.session_state.get("bankroll", 1000.0)),
     step=100.0, key="_br_widget",
-    help="Kwota używana do obliczenia stawki Kelly 1/4")
+    help="Kwota używana do obliczenia stawki Kelly")
 st.session_state["bankroll"] = _br_input
-_kelly_info_val = _br_input * KELLY_FRACTIONS.get("1X2", 0.125) * 0.3
-st.sidebar.caption(f"Kelly 1/8 · max 5%/mecz · EV≥5% filtr | Typowa stawka: **{_kelly_info_val:.0f} zł**")
+
+_kelly_frac_options = {"🛡️ Bezpieczny (1/8)": 0.125, "⚖️ Standardowy (1/4)": 0.25, "🔥 Agresywny (1/2)": 0.5}
+_kelly_frac_label   = st.sidebar.select_slider(
+    "Poziom ryzyka Kelly",
+    options=list(_kelly_frac_options.keys()),
+    value=st.session_state.get("kelly_frac_label", "🛡️ Bezpieczny (1/8)"),
+    key="_kf_slider",
+    help="Bezpieczny = 1/8 Kelly · Standardowy = 1/4 · Agresywny = 1/2"
+)
+st.session_state["kelly_frac_label"] = _kelly_frac_label
+st.session_state["kelly_frac"]       = _kelly_frac_options[_kelly_frac_label]
+_kelly_info_val = _br_input * st.session_state["kelly_frac"] * 0.3
+st.sidebar.caption(f"EV≥5% filtr · max 5%/mecz | Typowa stawka: **{_kelly_info_val:.0f} zł**")
 
 
 historical = load_historical(LIGI[wybrana_liga]["csv_code"])
@@ -2137,26 +2148,6 @@ if not historical.empty:
                 unsafe_allow_html=True)
             st.sidebar.caption("Sweet spot: różnica 5–15% model vs rynek")
 
-    # ── Onboarding – pokazuj nowym użytkownikom ──────────────────────────
-    if "onboard_dismissed" not in st.session_state:
-        st.markdown(
-            "<div class='onboard-banner'>"
-            "<h3>👋 Jak działa ten system?</h3>"
-            "<p>"
-            "<b style='color:#90caf9'>Dixon-Coles</b> to statystyczny model piłkarski który szacuje "
-            "prawdopodobieństwo każdego wyniku meczu na podstawie historycznych danych. "
-            "Gdy prawdopodobieństwo modelu jest <b style='color:#81c784'>wyższe niż wycena bukmachera</b>, "
-            "mamy tzw. <b style='color:#81c784'>Value Bet</b> – zakład z dodatnim oczekiwanym zyskiem (EV).<br><br>"
-            "📊 <b style='color:#90caf9'>Hit Rate</b> – % trafnych predykcji kierunku (1/X/2 lub podwójna szansa) &nbsp;·&nbsp; "
-            "📐 <b style='color:#90caf9'>Brier Score</b> – miara dokładności prawdopodobieństw (niższy = lepszy) &nbsp;·&nbsp; "
-            "💰 <b style='color:#90caf9'>Kelly</b> – optymalny % bankrollu na dany zakład"
-            "</p>"
-            "</div>",
-            unsafe_allow_html=True)
-        if st.button("✕  Rozumiem, zamknij", key="dismiss_onboard"):
-            st.session_state["onboard_dismissed"] = True
-            st.rerun()
-
     # ── Ekran startowy: Najważniejsze okazje kolejki ─────────────────────
     if not schedule.empty and not srednie_df.empty and _oa_cached:
         _start_kolejka = get_current_round(schedule)
@@ -2197,25 +2188,34 @@ if not historical.empty:
             _tv_cols = st.columns(max(len(_top_val), 1))
             for _tvc, _tv in zip(_tv_cols, _top_val):
                 _kb  = st.session_state.get("bankroll", 1000.0)
-                _kl  = kelly_stake(_tv["p"], _tv["kurs_buk"] or _tv["fo"], bankroll=_kb)
+                _kf2 = st.session_state.get("kelly_frac", 0.125)
+                _kl  = kelly_stake(_tv["p"], _tv["kurs_buk"] or _tv["fo"], bankroll=_kb, fraction=_kf2)
                 _kurs_str  = f"{_tv['kurs_buk']:.2f}" if _tv["kurs_buk"] else f"{_tv['fo']:.2f}✦"
                 _ev_pct    = f"{_tv['ev']:+.1%}"
                 _buk_p     = 1 / (_tv['kurs_buk'] or _tv['fo'])
                 _edge_pp   = (_tv['p'] - _buk_p) * 100
                 _kelly_str = (f"<div class='kelly'>💰 Kelly: <b>{int(_kl['stake_pln'])} zł</b></div>"
                               if _kl['safe'] else "")
+                # Sygnalizacja świetlna wg EV
+                if _tv['ev'] >= 0.15:
+                    _sig_color = "#2e7d32"; _sig_label = "🟢 Wysoki EV"
+                elif _tv['ev'] >= 0.05:
+                    _sig_color = "#f57c00"; _sig_label = "🟡 Umiarkowany EV"
+                else:
+                    _sig_color = "#c62828"; _sig_label = "🔴 Niski EV"
                 _tvc.markdown(
-                    f"<div class='vb-card'>"
+                    f"<div class='vb-card' style='border-color:{_sig_color}'>"
                     f"<div class='date'>{str(_tv['data'])[:10] if _tv['data'] else ''}</div>"
                     f"<div class='match'>{_tv['mecz']}</div>"
-                    f"<div class='bet'>{_tv['typ']} @ {_kurs_str}</div>"
+                    f"<div class='bet' style='color:{_sig_color}'>{_tv['typ']} @ {_kurs_str}</div>"
                     f"<div class='meta'>"
                     f"<span title='Prawdopodobieństwo modelu Dixon-Coles'>Model: {_tv['p']:.0%}</span>"
                     f" &nbsp;·&nbsp; "
-                    f"<span class='ev' title='Expected Value – przewaga modelu nad kursem bukmachera'>EV: {_ev_pct}</span>"
+                    f"<span class='ev' style='color:{_sig_color}' title='Expected Value'>EV: {_ev_pct}</span>"
                     f"</div>"
                     f"<div style='margin-top:6px'>"
-                    f"<span class='stat-pill' title='Przewaga modelu nad wbudowanym prawdopodobieństwem bukmachera'>EDGE +{_edge_pp:.1f}pp</span>"
+                    f"<span class='stat-pill' style='border-color:{_sig_color}33;color:{_sig_color}'>{_sig_label}</span>"
+                    f"<span class='stat-pill' title='Przewaga vs implied prob bukmachera'>EDGE +{_edge_pp:.1f}pp</span>"
                     f"</div>"
                     f"{_kelly_str}"
                     f"</div>",
@@ -3161,13 +3161,26 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
         st.markdown("<div class='section-header'>📈 Skuteczność modelu · sezon 2025/26</div>",
                     unsafe_allow_html=True)
 
-        with st.expander('ℹ️  Co oznaczają te metryki?', expanded=False):
+        with st.expander('👋 Jak działa tracking skuteczności? Co oznaczają metryki?', expanded=False):
+            st.markdown(
+                "**Dixon-Coles** to statystyczny model piłkarski który szacuje prawdopodobieństwo "
+                "każdego wyniku meczu na podstawie historycznych danych (Poisson z korektą remisu). "
+                "Gdy prawdopodobieństwo modelu jest **wyższe niż wycena bukmachera**, mamy "
+                "**Value Bet** – zakład z dodatnim oczekiwanym zyskiem (EV)."
+            )
+            st.divider()
             _leg1, _leg2, _leg3, _leg4 = st.columns(4)
             _leg1.markdown('**🎯 Hit Rate**  \n% trafnych predykcji (1/X/2).  \nDobry: **≥60%** · Losowy: ~45–50%')
             _leg2.markdown('**📐 Brier Score ↓**  \nDokładność prawdopodobieństw. Niższy = lepszy.  \nŚwietny: **< 0.20** · Akceptowalny: < 0.23')
             _leg3.markdown('**📊 BSS (Skill Score)**  \nIle model bije losowość.  \n**Dodatni** = model lepszy. Dobry: **> +0.02**')
             _leg4.markdown('**🎯 ECE ↓ (Calibration)**  \nJak p modelu odpowiada rzeczywistości.  \nDoskonały: **< 0.03** · Dobry: < 0.05')
-            st.caption('ROI liczony na fair odds (bez marży bukamachera). Realny ROI ~3–8% niższy.')
+            st.divider()
+            st.markdown(
+                "**💰 Symulacja Kelly** pokazuje jak wyglądałby bankroll gdybyś od początku sezonu "
+                "stawiał tylko na mecze gdzie EV≥5% vs Pinnacle/Bet365. "
+                "Frakcja 1/8 Kelly oznacza bardzo zachowawcze zarządzanie kapitałem.  \n"
+                "ROI na **fair odds** jest zawsze wyższy niż realny – bukmacher pobiera marżę 2–8%."
+            )
 
         _mg_top = metryki_globalne(wybrana_liga)
         if _mg_top:
@@ -3720,18 +3733,20 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _ek1, _ek2, _ek3, _ek4 = st.columns(4)
             _ek1.metric("💰 Bankroll", f"{_bk:.0f} zł",
                         delta=f"{_roi_kelly:+.1f}%",
-                        delta_color="normal" if _bk >= _KS else "inverse",
+                        delta_color="normal" if _roi_kelly >= 0 else "inverse",
                         help="Końcowy bankroll po wszystkich typach Kelly od początku sezonu")
             _ek2.metric("📋 Typów Kelly", _kelly_typy,
                         delta=f"Hit {_kelly_hr}",
+                        delta_color="off",
                         help="Tylko mecze gdzie model miał EV≥5% vs kurs bukmachera")
             _ek3.metric("📉 Max Drawdown", f"{_max_dd_k:.1f}%",
+                        delta="wysoki" if _max_dd_k > 20 else "ok",
                         delta_color="inverse" if _max_dd_k > 20 else "normal",
                         help="Największy spadek bankrollu od szczytu")
             _ek4.metric("📊 Flat (porównanie)", f"{_bk_flat:.0f} zł",
                         delta=f"{_roi_flat:+.1f}%",
-                        delta_color="normal" if _bk_flat >= _KS else "inverse",
-                        help="Flat betting – 1 jednostka na każdy typ 1X2 (fair odds)")
+                        delta_color="normal" if _roi_flat >= 0 else "inverse",
+                        help="Flat betting – 1 jednostka na każdy typ 1X2 (fair odds bez marży)")
 
             if _bk_vals and len(_kol_nums) == len(_bk_vals):
                 import pandas as _pd_eq
@@ -3750,6 +3765,54 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     f"PnL Kelly: {_kelly_pnl:+.0f} zł · "
                     f"Flat (fair odds, bez marży): {_roi_flat:+.1f}%"
                 )
+
+            # ── Szczegóły typów Kelly – gdzie model się mylił ─────────────
+            if _kelly_typy > 0:
+                with st.expander(f"🔍 Szczegóły typów Kelly ({_kelly_typy} zakładów)", expanded=False):
+                    # Zbierz dane do tabeli
+                    _kelly_rows = []
+                    for _kol2, _grp2 in _eq_df.groupby("kolejnosc"):
+                        _cand2 = _grp2[_grp2["ev"].notna() & (_grp2["ev"] >= _KEV)].nlargest(3, "ev")
+                        for _, _r2 in _cand2.iterrows():
+                            _kb2  = float(_r2.get("kurs_buk") or 0)
+                            _pt2  = float(_r2["p_model"])
+                            _ev2  = float(_r2["ev"])
+                            if _kb2 <= 0: continue
+                            _b2   = _kb2 - 1
+                            _f2   = min(max((_pt2*_b2-(1-_pt2))/_b2, 0.0) * _KF, _KMAX)
+                            _stw2 = round(1000 * _f2, 2)  # przybliżona stawka od 1000
+                            _traf2 = _r2["trafione"] == 1
+                            _pnl2  = round(_stw2*(_kb2-1), 2) if _traf2 else round(-_stw2, 2)
+                            _kelly_rows.append({
+                                "Kolejka":  int(_kol2),
+                                "Mecz":     f"{_r2['home']} – {_r2['away']}",
+                                "Typ":      _r2["typ"],
+                                "P model":  f"{_pt2:.0%}",
+                                "Kurs buk": f"{_kb2:.2f}",
+                                "EV":       f"{_ev2:+.1%}",
+                                "Stawka*":  f"{_stw2:.0f} zł",
+                                "Wynik":    "✅ TAK" if _traf2 else "❌ NIE",
+                                "PnL*":     f"{_pnl2:+.0f} zł",
+                            })
+                    if _kelly_rows:
+                        import pandas as _pd_kd
+                        _kd_df = _pd_kd.DataFrame(_kelly_rows)
+                        # Highlight trafione/chybione
+                        st.dataframe(
+                            _kd_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Wynik": st.column_config.TextColumn("Wynik", width="small"),
+                                "PnL*":  st.column_config.TextColumn("PnL*", width="small"),
+                            }
+                        )
+                        _wins   = sum(1 for r in _kelly_rows if "TAK" in r["Wynik"])
+                        _losses = len(_kelly_rows) - _wins
+                        st.caption(
+                            f"✅ Trafione: {_wins} · ❌ Chybione: {_losses} · "
+                            f"*Stawki szacunkowe od bankrollu 1000 zł (walk-forward może się różnić)"
+                        )
 
         # ── Edge Distribution (EV histogram) ─────────────────────────────
         _con_edge = sqlite3.connect(DB_FILE)
