@@ -3219,13 +3219,15 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 st.markdown("**📅 Historia wyników per kolejka (1X2)**")
                 _rows_hk = []
                 for _, rk in _hist_kolejki.iterrows():
-                    hr = rk["hit_rate"]
-                    hr_c = "#4CAF50" if hr and hr >= 0.62 else ("#FF9800" if hr and hr >= 0.55 else ("#888" if hr is None else "#F44336"))
+                    hr_raw = rk["hit_rate"]
+                    import math as _math
+                    hr = float(hr_raw) if (hr_raw is not None and not (isinstance(hr_raw, float) and _math.isnan(hr_raw))) else None
+                    hr_c = "#4CAF50" if hr is not None and hr >= 0.62 else ("#FF9800" if hr is not None and hr >= 0.55 else ("#888" if hr is None else "#F44336"))
                     hr_str = f"{hr:.0%}" if hr is not None else "–"
                     wyn_str = f"{int(rk['n_traf'])}/{int(rk['n_typow'])}" if hr is not None else f"–/{int(rk['n_typow'])}"
-                    status_ico = "✅" if hr and hr >= 0.62 else ("⚠️" if hr and hr >= 0.50 else ("⏳" if hr is None else "❌"))
-                    _bg = "rgba(76,175,80,0.04)" if hr and hr>=0.62 else ("rgba(255,152,0,0.03)" if hr and hr>=0.50 else "#0d0f14")
-                    _bar_w = int(hr*100) if hr else 0
+                    status_ico = "✅" if hr is not None and hr >= 0.62 else ("⚠️" if hr is not None and hr >= 0.50 else ("⏳" if hr is None else "❌"))
+                    _bg = "rgba(76,175,80,0.04)" if hr is not None and hr>=0.62 else ("rgba(255,152,0,0.03)" if hr is not None and hr>=0.50 else "#0d0f14")
+                    _bar_w = int(hr*100) if hr is not None else 0
                     _rows_hk.append(
                         f"<div style='display:grid;grid-template-columns:60px 60px 100px 1fr 90px;"
                         f"align-items:center;padding:8px 12px;background:{_bg};"
