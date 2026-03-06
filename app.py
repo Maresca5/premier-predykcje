@@ -3771,11 +3771,27 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 st.caption("⚠️ Brak typów Kelly – dane o kursach bukmachera niedostępne "
                            "w historical (brak kolumn PSH/B365H).")
             else:
+                _missing_kols = _eq_df.groupby("kolejnosc").apply(
+                    lambda g: g["kurs_buk"].isna().all()).sum()
+                _kols_total = _eq_df["kolejnosc"].nunique()
                 st.caption(
                     f"Start: 1 000 zł · {_kelly_typy} typów z EV 5–15% · kurs 1.30–2.40 · "
                     f"PnL Kelly: {_kelly_pnl:+.0f} zł · "
                     f"Flat (fair odds, bez marży): {_roi_flat:+.1f}%"
                 )
+                # Kontekst statystyczny – N za małe?
+                _n_warn_color = "#f57c00" if _kelly_typy < 150 else "#4CAF50"
+                _n_warn_txt = (
+                    f"⚠️ Próba statystyczna: **{_kelly_typy} typów** – "
+                    f"{'za mało do wiarygodnej oceny Kelly (min. ~150)' if _kelly_typy < 150 else 'wystarczająca próba'}. "
+                    f"Kolejek bez kursów bukmachera: **{_missing_kols}/{_kols_total}** "
+                    f"(historyczne Pinnacle/B365 niedostępne retroaktywnie)."
+                )
+                st.markdown(
+                    f"<div style='font-size:0.78em;color:{_n_warn_color};"
+                    f"background:#14161c;border:1px solid {_n_warn_color}44;"
+                    f"border-radius:6px;padding:8px 12px;margin-top:6px'>{_n_warn_txt}</div>",
+                    unsafe_allow_html=True)
 
             # ── Szczegóły typów Kelly – gdzie model się mylił ─────────────
             if _kelly_typy > 0:
