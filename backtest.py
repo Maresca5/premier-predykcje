@@ -937,52 +937,156 @@ def summary(liga: str, sezon: str, db: str) -> dict:
     df_s["equity"] = eq
 
     # ── Equity curve Kelly (bankroll 1000 zł, walk-forward) ──────────────
-    # Symulacja: przed każdym typem znamy aktualny bankroll i obliczamy
-    # stawkę Kelly (frakcja 1/8, EV≥5%, max 5% bankrollu per typ).
-    # Używamy fair odds (brak marży) – realistyczne z 3-5% dyskontem.
+    # Kelly wymaga kursu BUKMACHERA (nie fair odds).
+    # EV = p_model * kurs_buk - 1. Używamy Pinnacle (PS) jako primary,
+    # B365 jako fallback. Mecze bez kursów → stawka=0 (nie typujemy).
     KELLY_START   = 1000.0
-    KELLY_FRAC    = 0.125        # 1/8 Kelly
-    KELLY_MAX_EXP = 0.05         # max 5% bankrollu per typ
+    KELLY_FRAC    = 0.125        # 1/8 Kelly – identyczny z app.py
+    KELLY_MAX_EXP = 0.05         # max 5% bankrollu per zakład
     KELLY_MIN_EV  = 0.05         # min EV 5%
-    CALIB_A = 0.88; CALIB_B = 0.06  # kalibracja liniowa p_model
+    KELLY_MIN_ODDS = 1.30        # minimalne kursy (unikamy super-faworytów)
+
+    # Wczytaj kursy bukmachera z bazy (jeśli są zapisane)
+    try:
+        _con_k = sqlite3.connect(db)
+        _df_odds = pd.read_sql(
+            f"SELECT kolejka, home, away, odds_ps_typ, odds_b365_typ "
+            f"FROM {_TABLE} WHERE liga=? AND sezon=?",
+            _con_k, params=(liga, sezon))
+        _con_k.close()
+        _has_odds = not _df_odds.empty and "odds_ps_typ" in _df_odds.columns
+    except Exception:
+        _has_odds = False
+
+    # Jeśli baza nie ma kursów per-typ, oblicz je z p_home/p_draw/p_away + odds_h/d/a
+    # Pobieramy pełne dane z bazy
+    try:
+        _con_full = sqlite3.connect(db)
+        _df_full = pd.read_sql(
+            f"SELECT kolejka, home, away, typ, p_typ, trafiony, "
+            f"psh, psd, psa, b365h, b365d, b365a "
+            f"FROM {_TABLE} WHERE liga=? AND sezon=? ORDER BY kolejka, home",
+            _con_full, params=(liga, sezon))
+        _con_full.close()
+    except Exception:
+        _df_full = pd.DataFrame()
+
+    def _kurs_dla_typu(row, source="ps"):
+        """Zwraca kurs bukmachera dla wybranego typu predykcji."""
+        try:
+            typ = str(row.get("typ", ""))
+            if source == "ps":
+                oh = float(row.get("psh") or 0)
+                od = float(row.get("psd") or 0)
+                oa = float(row.get("psa") or 0)
+            else:
+                oh = float(row.get("b365h") or 0)
+                od = float(row.get("b365d") or 0)
+                oa = float(row.get("b365a") or 0)
+            if min(oh, od, oa) <= 1.0:
+                return None
+            s = 1/oh + 1/od + 1/oa
+            ih, id_, ia = (1/oh)/s, (1/od)/s, (1/oa)/s
+            if typ == "1":   return oh
+            if typ == "X":   return od
+            if typ == "2":   return oa
+            if typ == "1X":  return round(1/(ih+id_), 3)
+            if typ == "X2":  return round(1/(id_+ia), 3)
+        except Exception:
+            return None
+        return None
+
+    # Połącz df_s z kursami
+    if not _df_full.empty:
+        _df_s_k = df_s.copy()
+        # Merge po home+away+kolejka
+        if "home" in _df_full.columns and "away" in _df_full.columns:
+            _df_full_idx = _df_full.set_index(["kolejka","home","away"])
+            _kurs_ps_list   = []
+            _kurs_b365_list = []
+            for _, r in _df_s_k.iterrows():
+                key = (r.get("kolejka", 0), r.get("home",""), r.get("away",""))
+                try:
+                    row_full = _df_full_idx.loc[key]
+                    if isinstance(row_full, pd.DataFrame):
+                        row_full = row_full.iloc[0]
+                    _kurs_ps_list.append(_kurs_dla_typu(row_full, "ps"))
+                    _kurs_b365_list.append(_kurs_dla_typu(row_full, "b365"))
+                except Exception:
+                    _kurs_ps_list.append(None)
+                    _kurs_b365_list.append(None)
+            _df_s_k["kurs_ps_typ"]   = _kurs_ps_list
+            _df_s_k["kurs_b365_typ"] = _kurs_b365_list
+        else:
+            _df_s_k["kurs_ps_typ"]   = None
+            _df_s_k["kurs_b365_typ"] = None
+    else:
+        _df_s_k = df_s.copy()
+        _df_s_k["kurs_ps_typ"]   = None
+        _df_s_k["kurs_b365_typ"] = None
 
     bk    = KELLY_START
     eq_k  = []
     stake_log = []
-    for _, r in df_s.iterrows():
-        fo   = round(1 / r["p_typ"], 2) if 0 < r["p_typ"] <= 1 else 999.0
-        p_c  = float(np.clip(CALIB_A * r["p_typ"] + CALIB_B, 0.01, 0.99))
-        ev   = p_c * fo - 1.0
+    ev_log    = []
+    kurs_log  = []
+
+    for _, r in _df_s_k.iterrows():
+        # Wybierz kurs: PS primary, B365 fallback
+        kurs = r.get("kurs_ps_typ") or r.get("kurs_b365_typ")
+        if kurs:
+            try: kurs = float(kurs)
+            except: kurs = None
+
         stawka = 0.0
-        if ev >= KELLY_MIN_EV and fo >= 1.30:
-            b    = fo - 1.0
-            f_k  = max((p_c * b - (1 - p_c)) / b, 0.0)
-            f_k  = f_k * KELLY_FRAC                    # frakcja Kelly
-            f_k  = min(f_k, KELLY_MAX_EXP)             # cap ekspozycji
-            stawka = round(bk * f_k, 2)
+        ev_used = 0.0
+
+        if kurs and kurs >= KELLY_MIN_ODDS:
+            pt = float(r["p_typ"]) if 0 < float(r["p_typ"]) <= 1 else 0.0
+            ev = pt * kurs - 1.0
+            ev_used = round(ev, 4)
+            if ev >= KELLY_MIN_EV:
+                b   = kurs - 1.0
+                f_k = max((pt * b - (1 - pt)) / b, 0.0)
+                f_k = f_k * KELLY_FRAC
+                f_k = min(f_k, KELLY_MAX_EXP)
+                stawka = round(bk * f_k, 2)
+
         if stawka > 0:
             if r["trafiony"] == 1:
-                bk += stawka * (fo - 1)
+                bk += stawka * (kurs - 1)
             else:
                 bk -= stawka
-        bk = max(bk, 0.01)  # bankroll nie może spaść poniżej 0
+        bk = max(bk, 0.01)
         eq_k.append(round(bk, 2))
         stake_log.append(round(stawka, 2))
+        ev_log.append(round(ev_used, 4))
+        kurs_log.append(round(kurs, 3) if kurs else 0.0)
 
     df_s["bankroll_kelly"] = eq_k
     df_s["stawka_kelly"]   = stake_log
+    df_s["ev_kelly"]       = ev_log
+    df_s["kurs_kelly"]     = kurs_log
 
     # Metryki Kelly
     _k_typy   = sum(1 for s in stake_log if s > 0)
     _k_traf   = sum(1 for i, s in enumerate(stake_log)
-                    if s > 0 and df_s.iloc[i]["trafiony"] == 1)
+                    if s > 0 and _df_s_k.iloc[i]["trafiony"] == 1)
     _k_roi    = (eq_k[-1] - KELLY_START) / KELLY_START * 100 if eq_k else 0.0
-    _k_max_dd = 0.0  # max drawdown
+    _k_max_dd = 0.0
     _peak = KELLY_START
     for bki in eq_k:
         if bki > _peak: _peak = bki
         dd = (_peak - bki) / _peak * 100
         if dd > _k_max_dd: _k_max_dd = dd
+
+    # ROI Kelly (tylko typy z stawką)
+    _k_pnl = 0.0
+    for i, s in enumerate(stake_log):
+        if s > 0:
+            k = kurs_log[i]
+            _k_pnl += s*(k-1) if _df_s_k.iloc[i]["trafiony"]==1 else -s
+    _k_roi_pct = _k_pnl / KELLY_START * 100
 
     return {
         "n": n, "trafione": traf, "hit_rate": traf / n,
@@ -992,10 +1096,12 @@ def summary(liga: str, sezon: str, db: str) -> dict:
         "per_typ": per_typ,
         "equity_df":       df_s[["kolejka", "equity"]],
         "equity_kelly_df": df_s[["kolejka", "bankroll_kelly", "stawka_kelly"]],
-        "kelly_start":  KELLY_START,
-        "kelly_end":    eq_k[-1] if eq_k else KELLY_START,
-        "kelly_roi":    round(_k_roi, 2),
-        "kelly_typy":   _k_typy,
+        "kelly_start":    KELLY_START,
+        "kelly_end":      eq_k[-1] if eq_k else KELLY_START,
+        "kelly_roi":      round(_k_roi, 2),
+        "kelly_roi_pct":  round(_k_roi_pct, 2),
+        "kelly_typy":     _k_typy,
         "kelly_trafione": _k_traf,
-        "kelly_max_dd": round(_k_max_dd, 2),
+        "kelly_max_dd":   round(_k_max_dd, 2),
+        "kelly_pnl":      round(_k_pnl, 2),
     }
