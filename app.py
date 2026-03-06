@@ -3675,6 +3675,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     k = _calc(m.get("B365H"), m.get("B365D"), m.get("B365A"))
                 return k
 
+            # Kelly parametry – muszą być zdefiniowane przed lambdą poniżej
+            _KS   = 1000.0; _KF = 0.125; _KMAX = 0.05; _KEV = 0.05; _KMAX_ODDS = 2.40; _KEV_CAP = 0.15
+
             _eq_df["kurs_buk"] = _eq_df.apply(_kurs_live, axis=1)
             _eq_df["ev"] = _eq_df.apply(
                 lambda r: min(float(r["p_model"]) * float(r["kurs_buk"]) - 1.0, _KEV_CAP)
@@ -3682,7 +3685,6 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 axis=1)
 
             # Kelly walk-forward per kolejka (top 3 wg EV)
-            _KS   = 1000.0; _KF = 0.125; _KMAX = 0.05; _KEV = 0.05; _KMAX_ODDS = 2.40; _KEV_CAP = 0.15
             _bk   = _KS
             _bk_flat = _KS   # równoległa flat dla porównania
             _bk_vals  = []
