@@ -5119,4 +5119,4 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             st.sidebar.success("Wszystkie zmapowane ✅")
 
 else:
-    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
+    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.") 
