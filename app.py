@@ -58,7 +58,116 @@ DB_FILE    = "predykcje.db"
 def waga_poprzedniego(n_biezacy: int) -> float:
     return float(np.clip(0.8 - (n_biezacy / 30) * 0.6, 0.2, 0.8))
 
-st.set_page_config(page_title="Football Analytics System", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="⚽ Football Analytics", page_icon="⚽", layout="wide", initial_sidebar_state="expanded")
+
+
+# ── Global CSS ────────────────────────────────────────────
+st.markdown("""
+<style>
+/* ── Tło i typografia ── */
+[data-testid="stAppViewContainer"] { background: #0d0f14; }
+[data-testid="stSidebar"]          { background: #111318; border-right: 1px solid #1e2028; }
+h1, h2, h3 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; }
+
+/* ── Tabs ── */
+[data-testid="stTabs"] button {
+    font-size: 0.82em; font-weight: 500; padding: 6px 14px;
+    border-radius: 6px 6px 0 0; color: #666; transition: all .2s;
+}
+[data-testid="stTabs"] button[aria-selected="true"] {
+    color: #4CAF50 !important; border-bottom: 2px solid #4CAF50 !important;
+    background: rgba(76,175,80,0.07) !important;
+}
+[data-testid="stTabs"] button:hover { color: #aaa !important; background: rgba(255,255,255,0.04) !important; }
+
+/* ── Metryki ── */
+[data-testid="stMetric"] {
+    background: #14161c; border: 1px solid #1e2028;
+    border-radius: 10px; padding: 14px 16px;
+}
+[data-testid="stMetricLabel"] { font-size: 0.72em !important; color: #666 !important; text-transform: uppercase; letter-spacing: 0.05em; }
+[data-testid="stMetricValue"] { font-size: 1.55em !important; font-weight: 700 !important; color: #fff !important; }
+[data-testid="stMetricDelta"]  { font-size: 0.78em !important; }
+
+/* ── Przyciski ── */
+[data-testid="stButton"] > button {
+    background: linear-gradient(135deg, #1a4a1a, #2a6b2a);
+    color: #fff; border: 1px solid #2e7d32; border-radius: 8px;
+    font-weight: 600; transition: all .2s;
+}
+[data-testid="stButton"] > button:hover { background: linear-gradient(135deg, #2a6b2a, #388e3c); border-color: #4CAF50; transform: translateY(-1px); }
+
+/* ── Tabele dataframe ── */
+[data-testid="stDataFrame"] { border: 1px solid #1e2028 !important; border-radius: 8px !important; }
+
+/* ── Divider ── */
+hr { border-color: #1e2028 !important; margin: 20px 0 !important; }
+
+/* ── Sidebar progress ── */
+[data-testid="stSidebar"] .stProgress > div > div { background: #4CAF50 !important; }
+
+/* ── Expander ── */
+details { border: 1px solid #1e2028 !important; border-radius: 8px !important; background: #14161c !important; }
+details summary { font-weight: 600 !important; color: #ccc !important; }
+
+/* ── Tooltips helper ── */
+.tooltip-label {
+    display: inline-block; font-size: 0.72em; font-weight: 600;
+    color: #888; text-transform: uppercase; letter-spacing: 0.06em;
+    border-bottom: 1px dashed #444; cursor: help; margin-bottom: 2px;
+}
+
+/* ── Hero value bet card ── */
+.vb-card {
+    background: linear-gradient(145deg, #0d1f0d, #111a11);
+    border: 1px solid #2e7d32; border-radius: 12px;
+    padding: 16px 14px; text-align: center;
+    transition: transform .2s, border-color .2s;
+}
+.vb-card:hover { transform: translateY(-2px); border-color: #4CAF50; }
+.vb-card .date   { font-size: 0.7em; color: #555; margin-bottom: 4px; }
+.vb-card .match  { font-size: 0.88em; font-weight: 700; color: #e8e8e8; margin-bottom: 8px; line-height: 1.3; }
+.vb-card .bet    { font-size: 1.15em; font-weight: 800; color: #4CAF50; }
+.vb-card .meta   { font-size: 0.78em; color: #888; margin-top: 5px; }
+.vb-card .ev     { color: #4CAF50; font-weight: 700; }
+.vb-card .kelly  { font-size: 0.76em; color: #81C784; margin-top: 4px; }
+
+/* ── Stat pill ── */
+.stat-pill {
+    display: inline-block; background: #14161c; border: 1px solid #1e2028;
+    border-radius: 20px; padding: 3px 10px; font-size: 0.75em;
+    color: #888; margin: 2px;
+}
+
+/* ── Section header ── */
+.section-header {
+    font-size: 1.1em; font-weight: 700; color: #e0e0e0;
+    border-left: 3px solid #4CAF50; padding-left: 10px; margin: 18px 0 12px 0;
+}
+
+/* ── Onboarding banner ── */
+.onboard-banner {
+    background: linear-gradient(135deg, #0d1f3a, #0d1a0d);
+    border: 1px solid #1e3a5f; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;
+}
+.onboard-banner h3 { color: #64b5f6; margin: 0 0 10px 0; font-size: 1.05em; }
+.onboard-banner p  { color: #8899aa; font-size: 0.83em; margin: 0; line-height: 1.6; }
+
+/* ── Hit rate badge ── */
+.hr-badge-green  { color: #4CAF50; font-weight: 700; }
+.hr-badge-orange { color: #FF9800; font-weight: 700; }
+.hr-badge-red    { color: #F44336; font-weight: 700; }
+.hr-badge-gray   { color: #666; }
+
+/* ── Rynek row w tabeli skuteczności ── */
+.rynek-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #1a1a24; }
+.rynek-name { font-weight: 600; color: #ddd; min-width: 140px; font-size: 0.88em; }
+.rynek-bar-wrap { flex: 1; background: #1a1a24; border-radius: 4px; height: 8px; overflow: hidden; }
+.rynek-bar { height: 8px; border-radius: 4px; }
+.rynek-stats { font-size: 0.75em; color: #666; min-width: 120px; text-align: right; }
+</style>
+""", unsafe_allow_html=True)
+
 
 # ===========================================================================
 # MAPOWANIA NAZW
@@ -1924,18 +2033,42 @@ if _auto_update_key not in st.session_state:
     if _n_updated > 0:
         st.toast(f"✅ Auto-zaktualizowano wyniki {_n_updated} meczów z football-data.co.uk", icon="⚽")
 
-# ── Nagłówek główny ────────────────────────────────────────────────────────
-hcol1, hcol2 = st.columns([6, 2])
-with hcol1:
-    st.title(f"⚽ {wybrana_liga}")
-    st.caption(f"Dixon-Coles · SOT blend · Brier tracking · Kalibracja modelu")
-with hcol2:
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+# ── Hero Header ────────────────────────────────────────────────────────────
+_hc1, _hc2, _hc3 = st.columns([5, 2, 2])
+with _hc1:
+    st.markdown(
+        f"<h1 style='margin:0 0 2px 0;font-size:1.9em;font-weight:800;color:#fff'>"
+        f"⚽ {wybrana_liga}</h1>"
+        f"<p style='margin:0;color:#444;font-size:0.8em;letter-spacing:0.04em'>"
+        f"DIXON-COLES MODEL · SOT BLEND · WALK-FORWARD BACKTEST</p>",
+        unsafe_allow_html=True)
+with _hc2:
     if not schedule.empty:
         aktualna_kolejka = get_current_round(schedule)
         liczba_meczy = len(schedule[schedule["round"] == aktualna_kolejka])
         status = get_round_status(schedule, aktualna_kolejka)
-        st.metric(f"{status} kolejka", f"#{aktualna_kolejka}", f"{liczba_meczy} meczów")
+        st.metric(f"{status} kolejka", f"#{aktualna_kolejka}", f"↑ {liczba_meczy} meczów")
+with _hc3:
+    # Szybki KPI: hit rate z bazy
+    try:
+        _con_hero = __import__('sqlite3').connect(DB_FILE)
+        _hr_row = _con_hero.execute(
+            "SELECT COUNT(*), SUM(trafione) FROM zdarzenia WHERE liga=? AND trafione IS NOT NULL AND rynek='1X2'",
+            (wybrana_liga,)).fetchone()
+        _con_hero.close()
+        _hr_n = int(_hr_row[0]) if _hr_row and _hr_row[0] else 0
+        _hr_v = (_hr_row[1]/_hr_row[0]*100) if _hr_row and _hr_row[0] else 0
+        if _hr_n > 0:
+            _hr_col = "#4CAF50" if _hr_v >= 62 else ("#FF9800" if _hr_v >= 55 else "#F44336")
+            st.markdown(
+                f"<div style='background:#14161c;border:1px solid #1e2028;border-radius:10px;"
+                f"padding:12px 16px;text-align:center'>"
+                f"<div style='font-size:0.68em;color:#555;text-transform:uppercase;letter-spacing:.05em'>Hit Rate (1X2)</div>"
+                f"<div style='font-size:2em;font-weight:800;color:{_hr_col};line-height:1.1'>{_hr_v:.1f}%</div>"
+                f"<div style='font-size:0.68em;color:#444'>{_hr_n} typów · sezon 25/26</div>"
+                f"</div>", unsafe_allow_html=True)
+    except Exception:
+        pass
 
 if not historical.empty:
     srednie_df  = oblicz_wszystkie_statystyki(historical.to_json())
@@ -1964,7 +2097,11 @@ if not historical.empty:
     _shrink_base = KALIBRACJA_PER_LIGA.get(LIGI[wybrana_liga]["csv_code"], SHRINK_ALPHA)
     _shrink_bonus = _shrink_now - _shrink_base
     _shrink_info = f"shrink {_shrink_now:.2f}" + (f" (+{_shrink_bonus:.2f} sezón)" if _shrink_bonus > 0.01 else "")
-    st.sidebar.caption(f"ρ Dixon-Coles: `{rho:.4f}` · w_prev: `{w_prev:.2f}` · {_shrink_info}")
+    with st.sidebar.expander("🔧 Parametry modelu", expanded=False):
+        st.caption(f"ρ Dixon-Coles: `{rho:.4f}`")
+        st.caption(f"Waga poprz. sezonu: `{w_prev:.2f}`")
+        st.caption(f"Shrinkage: `{_shrink_info}`")
+        st.caption("Dane: football-data.co.uk")
     
     if not schedule.empty:
         aktualna_kolejka = get_current_round(schedule)
@@ -2000,6 +2137,26 @@ if not historical.empty:
                 unsafe_allow_html=True)
             st.sidebar.caption("Sweet spot: różnica 5–15% model vs rynek")
 
+    # ── Onboarding – pokazuj nowym użytkownikom ──────────────────────────
+    if "onboard_dismissed" not in st.session_state:
+        st.markdown(
+            "<div class='onboard-banner'>"
+            "<h3>👋 Jak działa ten system?</h3>"
+            "<p>"
+            "<b style='color:#90caf9'>Dixon-Coles</b> to statystyczny model piłkarski który szacuje "
+            "prawdopodobieństwo każdego wyniku meczu na podstawie historycznych danych. "
+            "Gdy prawdopodobieństwo modelu jest <b style='color:#81c784'>wyższe niż wycena bukmachera</b>, "
+            "mamy tzw. <b style='color:#81c784'>Value Bet</b> – zakład z dodatnim oczekiwanym zyskiem (EV).<br><br>"
+            "📊 <b style='color:#90caf9'>Hit Rate</b> – % trafnych predykcji kierunku (1/X/2 lub podwójna szansa) &nbsp;·&nbsp; "
+            "📐 <b style='color:#90caf9'>Brier Score</b> – miara dokładności prawdopodobieństw (niższy = lepszy) &nbsp;·&nbsp; "
+            "💰 <b style='color:#90caf9'>Kelly</b> – optymalny % bankrollu na dany zakład"
+            "</p>"
+            "</div>",
+            unsafe_allow_html=True)
+        if st.button("✕  Rozumiem, zamknij", key="dismiss_onboard"):
+            st.session_state["onboard_dismissed"] = True
+            st.rerun()
+
     # ── Ekran startowy: Najważniejsze okazje kolejki ─────────────────────
     if not schedule.empty and not srednie_df.empty and _oa_cached:
         _start_kolejka = get_current_round(schedule)
@@ -2032,37 +2189,53 @@ if not historical.empty:
         _top_val = sorted([x for x in _start_top if x["is_val"] and not x["noise"]],
                           key=lambda x: -x["ev"])[:4]
         if _top_val:
-            st.markdown("---")
-            st.markdown("### 🏆 Najlepsze okazje tej kolejki")
-            _tv_cols = st.columns(len(_top_val))
-            for _tvi, (_tvc, _tv) in enumerate(zip(_tv_cols, _top_val)):
-                _kb = st.session_state.get("bankroll", 1000.0)
-                _kl = kelly_stake(_tv["p"], _tv["kurs_buk"] or _tv["fo"], bankroll=_kb)
-                _kurs_str = f"{_tv['kurs_buk']:.2f}" if _tv["kurs_buk"] else f"{_tv['fo']:.2f}✦"
+            st.markdown(
+                "<div class='section-header'>🏆 Value Bets tej kolejki"
+                "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
+                "EV ≥ 4% · model vs rynek</span></div>",
+                unsafe_allow_html=True)
+            _tv_cols = st.columns(max(len(_top_val), 1))
+            for _tvc, _tv in zip(_tv_cols, _top_val):
+                _kb  = st.session_state.get("bankroll", 1000.0)
+                _kl  = kelly_stake(_tv["p"], _tv["kurs_buk"] or _tv["fo"], bankroll=_kb)
+                _kurs_str  = f"{_tv['kurs_buk']:.2f}" if _tv["kurs_buk"] else f"{_tv['fo']:.2f}✦"
+                _ev_pct    = f"{_tv['ev']:+.1%}"
+                _buk_p     = 1 / (_tv['kurs_buk'] or _tv['fo'])
+                _edge_pp   = (_tv['p'] - _buk_p) * 100
+                _kelly_str = (f"<div class='kelly'>💰 Kelly: <b>{int(_kl['stake_pln'])} zł</b></div>"
+                              if _kl['safe'] else "")
                 _tvc.markdown(
-                    f"<div style='background:#0a1628;border:2px solid #2a6b2a;"
-                    f"border-radius:10px;padding:12px;text-align:center'>"
-                    f"<div style='font-size:0.74em;color:#888;margin-bottom:4px'>"
-                    f"{str(_tv['data'])[:10] if _tv['data'] else ''}</div>"
-                    f"<div style='font-weight:bold;color:#fff;font-size:0.88em;margin-bottom:6px'>"
-                    f"{_tv['mecz']}</div>"
-                    f"<div style='font-size:1.1em;font-weight:bold;color:#4CAF50'>"
-                    f"{_tv['typ']} @ {_kurs_str}</div>"
-                    f"<div style='font-size:0.82em;color:#aaa;margin-top:4px'>"
-                    f"P model: {_tv['p']:.0%} · EV: <b style='color:#4CAF50'>{_tv['ev']:+.1%}</b></div>"
-                    f"{'<div style="font-size:0.78em;color:#4CAF50;margin-top:3px">💰 Kelly: ' + str(int(_kl['stake_pln'])) + ' zł</div>' if _kl['safe'] else ''}"
+                    f"<div class='vb-card'>"
+                    f"<div class='date'>{str(_tv['data'])[:10] if _tv['data'] else ''}</div>"
+                    f"<div class='match'>{_tv['mecz']}</div>"
+                    f"<div class='bet'>{_tv['typ']} @ {_kurs_str}</div>"
+                    f"<div class='meta'>"
+                    f"<span title='Prawdopodobieństwo modelu Dixon-Coles'>Model: {_tv['p']:.0%}</span>"
+                    f" &nbsp;·&nbsp; "
+                    f"<span class='ev' title='Expected Value – przewaga modelu nad kursem bukmachera'>EV: {_ev_pct}</span>"
+                    f"</div>"
+                    f"<div style='margin-top:6px'>"
+                    f"<span class='stat-pill' title='Przewaga modelu nad wbudowanym prawdopodobieństwem bukmachera'>EDGE +{_edge_pp:.1f}pp</span>"
+                    f"</div>"
+                    f"{_kelly_str}"
                     f"</div>",
                     unsafe_allow_html=True)
+            st.markdown(
+                "<p style='font-size:0.72em;color:#444;margin:8px 0 16px 0'>"
+                "✦ = fair odds (brak danych bukmachera) · "
+                "EV = prawdopodobieństwo modelu × kurs − 1 · "
+                "Kelly = optymalna stawka przy bankrollu 1000 zł</p>",
+                unsafe_allow_html=True)
             st.markdown("---")
 
     # TABS
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "⚽ Analiza Meczu",
-        "📊 Ranking Zdarzeń",
+        "⚽ Mecze",
+        "📊 Value Bets",
         "🔬 Deep Data",
         "📈 Skuteczność + ROI",
         "📉 Kalibracja",
-        "🎛️ Laboratorium",
+        "🎛️ Lab",
         "🧪 Backtest",
         "🎯 Kalibracja Alt",
     ])
@@ -2985,11 +3158,19 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
     # TAB 4 – SKUTECZNOŚĆ + ROI
     # =========================================================================
     with tab4:
-        st.subheader("📈 Skuteczność modelu per rynek")
-        # KPI bar – metryki globalne na samej górze
+        st.markdown("<div class='section-header'>📈 Skuteczność modelu · sezon 2025/26</div>",
+                    unsafe_allow_html=True)
+
+        with st.expander('ℹ️  Co oznaczają te metryki?', expanded=False):
+            _leg1, _leg2, _leg3, _leg4 = st.columns(4)
+            _leg1.markdown('**🎯 Hit Rate**  \n% trafnych predykcji (1/X/2).  \nDobry: **≥60%** · Losowy: ~45–50%')
+            _leg2.markdown('**📐 Brier Score ↓**  \nDokładność prawdopodobieństw. Niższy = lepszy.  \nŚwietny: **< 0.20** · Akceptowalny: < 0.23')
+            _leg3.markdown('**📊 BSS (Skill Score)**  \nIle model bije losowość.  \n**Dodatni** = model lepszy. Dobry: **> +0.02**')
+            _leg4.markdown('**🎯 ECE ↓ (Calibration)**  \nJak p modelu odpowiada rzeczywistości.  \nDoskonały: **< 0.03** · Dobry: < 0.05')
+            st.caption('ROI liczony na fair odds (bez marży bukamachera). Realny ROI ~3–8% niższy.')
+
         _mg_top = metryki_globalne(wybrana_liga)
         if _mg_top:
-            _kpi1, _kpi2, _kpi3, _kpi4, _kpi5 = st.columns(5)
             _con_kpi = sqlite3.connect(DB_FILE)
             _kpi_row = _con_kpi.execute(
                 "SELECT COUNT(*), SUM(trafione) FROM zdarzenia WHERE liga=? AND trafione IS NOT NULL AND rynek='1X2'",
@@ -2998,16 +3179,23 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _kpi_n    = int(_kpi_row[0]) if _kpi_row and _kpi_row[0] else 0
             _kpi_traf = int(_kpi_row[1]) if _kpi_row and _kpi_row[1] else 0
             _kpi_hit  = _kpi_traf/_kpi_n if _kpi_n else 0
-            _kpi1.metric("🏆 Typów 1X2", _kpi_n)
-            _kpi2.metric("✅ Trafione",  _kpi_traf)
-            _kpi3.metric("🎯 Hit Rate",  f"{_kpi_hit:.1%}",
-                         delta_color="normal" if _kpi_hit>=0.60 else "inverse")
-            _kpi4.metric("📐 Brier ↓",   f"{_mg_top['brier']:.4f}",
-                         delta=f"BSS {_mg_top['bss']:+.3f}",
-                         delta_color="normal" if _mg_top['bss']>0 else "inverse")
-            _kpi5.metric("🎯 ECE ↓",     f"{_mg_top['ece']:.4f}",
-                         delta="dobrze" if _mg_top['ece']<0.05 else "wymaga uwagi",
-                         delta_color="normal" if _mg_top['ece']<0.05 else "inverse")
+            _kpi1, _kpi2, _kpi3, _kpi4, _kpi5 = st.columns(5)
+            _kpi1.metric('🏆 Typów 1X2', _kpi_n,
+                         help='Predykcje kierunku meczu (1/X/2 + podwójne) z rozliczonym wynikiem')
+            _kpi2.metric('✅ Trafione', _kpi_traf,
+                         help='Ile predykcji było poprawnych')
+            _kpi3.metric('🎯 Hit Rate', f'{_kpi_hit:.1%}',
+                         delta='✅ powyżej progu' if _kpi_hit>=0.60 else '⚠️ poniżej 60%',
+                         delta_color='normal' if _kpi_hit>=0.60 else 'inverse',
+                         help='% trafnych predykcji. Dobry model ≥60%. Losowy ~45–50%.')
+            _kpi4.metric('📐 Brier Score ↓', f"{_mg_top['brier']:.4f}",
+                         delta=f"BSS {_mg_top['bss']:+.3f} vs losowy",
+                         delta_color='normal' if _mg_top['bss']>0 else 'inverse',
+                         help='Błąd kwadratowy prawdopodobieństw. Niższy = lepszy. BSS > 0 = model bije losowość.')
+            _kpi5.metric('🎯 ECE ↓', f"{_mg_top['ece']:.4f}",
+                         delta='dobrze skalibrowany' if _mg_top['ece']<0.05 else 'wymaga uwagi',
+                         delta_color='normal' if _mg_top['ece']<0.05 else 'inverse',
+                         help='Expected Calibration Error. < 0.05 = prawdopodobieństwa modelu odpowiadają rzeczywistości.')
             st.divider()
 
         # Pokaz dane per kolejka – historia nie znika, grupuje sie automatycznie
@@ -3036,25 +3224,35 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     hr_str = f"{hr:.0%}" if hr is not None else "–"
                     wyn_str = f"{int(rk['n_traf'])}/{int(rk['n_typow'])}" if hr is not None else f"–/{int(rk['n_typow'])}"
                     status_ico = "✅" if hr and hr >= 0.62 else ("⚠️" if hr and hr >= 0.50 else ("⏳" if hr is None else "❌"))
+                    _bg = "rgba(76,175,80,0.04)" if hr and hr>=0.62 else ("rgba(255,152,0,0.03)" if hr and hr>=0.50 else "#0d0f14")
+                    _bar_w = int(hr*100) if hr else 0
                     _rows_hk.append(
-                        f"<tr>"
-                        f"<td style='padding:5px 10px;font-weight:bold'>#{int(rk['kolejnosc'])}</td>"
-                        f"<td style='padding:5px 10px;text-align:center;color:#888'>{int(rk['n_typow'])}</td>"
-                        f"<td style='padding:5px 10px;text-align:center'>{wyn_str}</td>"
-                        f"<td style='padding:5px 10px;text-align:center;color:{hr_c};font-weight:bold'>{status_ico} {hr_str}</td>"
-                        f"</tr>"
+                        f"<div style='display:grid;grid-template-columns:60px 60px 100px 1fr 90px;"
+                        f"align-items:center;padding:8px 12px;background:{_bg};"
+                        f"border-bottom:1px solid #131520;font-size:0.84em'>"
+                        f"<span style='font-weight:700;color:#ccc'>#{int(rk['kolejnosc'])}</span>"
+                        f"<span style='color:#555'>{int(rk['n_typow'])}</span>"
+                        f"<span style='color:#888'>{wyn_str}</span>"
+                        f"<div style='padding:0 12px'>"
+                        f"<div style='background:#1a1a24;border-radius:3px;height:6px'>"
+                        f"<div style='width:{_bar_w}%;background:{hr_c};height:6px;border-radius:3px'></div>"
+                        f"</div></div>"
+                        f"<span style='text-align:right;font-weight:700;color:{hr_c}'>{status_ico} {hr_str}</span>"
+                        f"</div>"
                     )
+                # Nagłówek tabeli
                 st.markdown(
-                    f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a2a;margin-bottom:12px'>"
-                    f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
-                    f"<thead><tr style='background:#1a1a2e;color:#666;font-size:0.72em;text-transform:uppercase'>"
-                    f"<th style='padding:5px 10px'>Kolejka</th>"
-                    f"<th style='padding:5px 10px;text-align:center'>Typów</th>"
-                    f"<th style='padding:5px 10px;text-align:center'>Trafione</th>"
-                    f"<th style='padding:5px 10px;text-align:center'>Hit Rate</th>"
-                    f"</tr></thead><tbody>{''.join(_rows_hk)}</tbody></table></div>",
-                    unsafe_allow_html=True
-                )
+                    "<div style='display:grid;grid-template-columns:60px 60px 100px 1fr 90px;"
+                    "gap:0;padding:6px 12px;font-size:0.68em;color:#444;"
+                    "text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid #1e2028'>"
+                    "<span>Kolejka</span><span>Typów</span><span>Wynik</span>"
+                    "<span style='padding-left:4px'>Progress</span><span style='text-align:right'>Hit Rate</span>"
+                    "</div>",
+                    unsafe_allow_html=True)
+                st.markdown(
+                    f"<div style='border:1px solid #1e2028;border-radius:10px;overflow:hidden'>"
+                    f"{''.join(_rows_hk)}</div>",
+                    unsafe_allow_html=True)
                 st.caption("⏳ = predykcje zapisane, wyniki jeszcze nie dostępne w football-data.co.uk")
 
         # ── Aktualizuj wszystkie kolejki jednym kliknięciem ───────────────
@@ -3513,6 +3711,19 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 f"</tr></thead><tbody>{''.join(_ed_rows)}</tbody></table></div>",
                 unsafe_allow_html=True)
 
+        # Legenda kolumn per-rynek
+        st.markdown(
+            "<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;font-size:0.73em;color:#555'>"
+            "<span><b style='color:#888'>N</b> – liczba typów</span>"
+            "<span><b style='color:#888'>Hit%</b> – % trafnych</span>"
+            "<span><b style='color:#888'>P mod.</b> – śr. p modelu</span>"
+            "<span><b style='color:#888'>Fair</b> – śr. kurs fair</span>"
+            "<span><b style='color:#888'>ROI</b> = (traf×(kurs−1)−chyb)/N na fair odds</span>"
+            "<span><b style='color:#4CAF50'>🟢 > 0%</b>"
+            " <b style='color:#FF9800'>🟡 ±2%</b>"
+            " <b style='color:#F44336'>🔴 < −2%</b></span>"
+            "</div>",
+            unsafe_allow_html=True)
         stats_df = statystyki_skutecznosci(wybrana_liga)
 
         if not stats_df.empty:
