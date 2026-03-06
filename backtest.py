@@ -968,14 +968,36 @@ def summary(liga: str, sezon: str, db: str) -> dict:
     _df_k = df_s.copy()
 
     def _get_kurs(r):
-        k = r.get("kurs_ps")
-        if pd.isna(k) or not k:
-            k = r.get("kurs_b365")
-        try:
-            k = float(k)
-            return k if KELLY_MIN_ODDS <= k <= KELLY_MAX_ODDS else None
-        except Exception:
-            return None
+        """PS per-typ direct → B365 per-typ direct → oblicz z psh/psd/psa → oblicz z b365h/d/a"""
+        def _calc(oh, od, oa, typ):
+            try:
+                oh, od, oa = float(oh or 0), float(od or 0), float(oa or 0)
+                if min(oh, od, oa) <= 1.01: return None
+                s = 1/oh + 1/od + 1/oa
+                ih, id_, ia = (1/oh)/s, (1/od)/s, (1/oa)/s
+                if typ == "1":  return oh
+                if typ == "X":  return od
+                if typ == "2":  return oa
+                if typ == "1X": return round(1/(ih+id_), 3)
+                if typ == "X2": return round(1/(id_+ia), 3)
+            except Exception:
+                return None
+        typ = str(r.get("typ", ""))
+        # 1. Bezpośredni kurs per-typ (nowe wpisy w bazie)
+        for col in ("kurs_ps", "kurs_b365"):
+            v = r.get(col)
+            if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                try:
+                    k = float(v)
+                    if KELLY_MIN_ODDS <= k <= KELLY_MAX_ODDS: return k
+                except Exception:
+                    pass
+        # 2. Oblicz z kursów 1X2 (stare wpisy – psh/psd/psa lub b365h/d/a)
+        k = _calc(r.get("psh"), r.get("psd"), r.get("psa"), typ)
+        if k is None:
+            k = _calc(r.get("b365h"), r.get("b365d"), r.get("b365a"), typ)
+        if k is None: return None
+        return k if KELLY_MIN_ODDS <= k <= KELLY_MAX_ODDS else None
 
     _df_k["_kurs"] = _df_k.apply(_get_kurs, axis=1)
     _df_k["_ev"]   = _df_k.apply(
