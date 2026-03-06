@@ -4358,20 +4358,27 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                     _k_traf = summ.get("kelly_trafione", 0)
                     _k_hr   = _k_traf / _k_n if _k_n > 0 else 0
 
-                    st.markdown("**📊 Symulacja Kelly (1/8 frakcja · EV≥5% · bankroll 1000 zł)**")
+                    _k_pnl    = summ.get("kelly_pnl", 0.0)
+                    _k_roi_pct = summ.get("kelly_roi_pct", _k_roi)
+
+                    st.markdown("**📊 Symulacja Kelly – kursy Pinnacle/B365 · 1/8 frakcja · EV≥5% · start 1000 zł**")
                     _km1, _km2, _km3, _km4, _km5 = st.columns(5)
                     _km1.metric("💰 Końcowy bankroll",
                                 f"{_k_end:.0f} zł",
                                 delta=f"{_k_roi:+.1f}%",
                                 delta_color="normal" if _k_roi >= 0 else "inverse")
-                    _km2.metric("📋 Typów Kelly", _k_n,
-                                help="Tylko typy z EV≥5% i fair odds≥1.30")
-                    _km3.metric("✅ Trafione", f"{_k_traf} ({_k_hr:.0%})")
+                    _km2.metric("💵 PnL",
+                                f"{_k_pnl:+.0f} zł",
+                                delta=f"ROI {_k_roi_pct:+.1f}%",
+                                delta_color="normal" if _k_pnl >= 0 else "inverse",
+                                help="Zysk/strata w złotówkach od startu 1000 zł")
+                    _km3.metric("📋 Typów Kelly", f"{_k_n}  ({_k_hr:.0%} traf.)",
+                                help="Tylko mecze EV≥5% vs kurs bukmachera")
                     _km4.metric("📉 Max Drawdown", f"{_k_dd:.1f}%",
                                 delta_color="inverse" if _k_dd > 20 else "off")
-                    _km5.metric("📈 ROI flat",
+                    _km5.metric("📈 ROI flat (fair)",
                                 f"{summ['roi_pct']:+.1f}%",
-                                help="Flat betting (1 jedn./typ) na fair odds – dla porównania")
+                                help="Flat betting na fair odds – benchmark bez kursu buka")
 
                     # ── Dwie krzywe: flat (jednostki) vs Kelly (bankroll) ───
                     ec1, ec2 = st.columns(2)
@@ -4692,4 +4699,4 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             st.sidebar.success("Wszystkie zmapowane ✅")
 
 else:
-    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.") 
+    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
