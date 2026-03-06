@@ -3679,10 +3679,17 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _KS   = 1000.0; _KF = 0.125; _KMAX = 0.05; _KEV = 0.05; _KMAX_ODDS = 2.40; _KEV_CAP = 0.15
 
             _eq_df["kurs_buk"] = _eq_df.apply(_kurs_live, axis=1)
-            _eq_df["ev"] = _eq_df.apply(
-                lambda r: min(float(r["p_model"]) * float(r["kurs_buk"]) - 1.0, _KEV_CAP)
-                if r["kurs_buk"] and 1.30 <= float(r["kurs_buk"]) <= _KMAX_ODDS else None,
-                axis=1)
+
+            def _calc_ev(r):
+                try:
+                    k = r["kurs_buk"]
+                    if k is None or pd.isna(k): return None
+                    k = float(k)
+                    if not (1.30 <= k <= _KMAX_ODDS): return None
+                    return min(float(r["p_model"]) * k - 1.0, _KEV_CAP)
+                except Exception:
+                    return None
+            _eq_df["ev"] = _eq_df.apply(_calc_ev, axis=1)
 
             # Kelly walk-forward per kolejka (top 3 wg EV)
             _bk   = _KS
