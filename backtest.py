@@ -961,9 +961,9 @@ def summary(liga: str, sezon: str, db: str) -> dict:
     KELLY_MAX_EXP  = 0.05
     KELLY_MIN_EV   = 0.05
     KELLY_MIN_ODDS = 1.30
-    KELLY_MAX_ODDS = 2.40   # ← zmiana: 3.50→2.40 (powyżej model zawyża p)
+    KELLY_MAX_ODDS = 3.50
     KELLY_TOP_N    = 3
-    KELLY_EV_CAP   = 0.15   # ← nowe: cap EV na 15% (EV>15% = anomalia modelu)
+    KELLY_EV_CAP   = None   # brak cap EV – oryginalna logika
 
     # kurs_ps i kurs_b365 są teraz bezpośrednio w df_s
     _df_k = df_s.copy()
@@ -1002,7 +1002,7 @@ def summary(liga: str, sezon: str, db: str) -> dict:
 
     _df_k["_kurs"] = _df_k.apply(_get_kurs, axis=1)
     _df_k["_ev"]   = _df_k.apply(
-        lambda r: min(float(r["p_typ"]) * r["_kurs"] - 1.0, KELLY_EV_CAP)
+        lambda r: float(r["p_typ"]) * r["_kurs"] - 1.0
         if r["_kurs"] else -999.0, axis=1)
 
     # Top N per kolejka wg EV
@@ -1079,4 +1079,3 @@ def summary(liga: str, sezon: str, db: str) -> dict:
         "kelly_max_dd":   round(_k_max_dd, 2),
         "kelly_pnl":      round(_k_pnl, 2),
     }
- 
