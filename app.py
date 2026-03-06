@@ -4574,7 +4574,9 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                     _k_pnl    = summ.get("kelly_pnl", 0.0)
                     _k_roi_pct = summ.get("kelly_roi_pct", _k_roi)
 
-                    st.markdown("**📊 Symulacja Kelly – kursy Pinnacle/B365 · 1/8 frakcja · EV≥5% · start 1000 zł**")
+                    _kelly_desc = ("**📊 Symulacja Kelly** – top 3 mecze/kolejkę wg EV "
+                                   "· Pinnacle/B365 kurs 1.30–3.50 · EV≥5% · 1/8 Kelly · start 1000 zł")
+                    st.markdown(_kelly_desc)
                     _km1, _km2, _km3, _km4, _km5 = st.columns(5)
                     _km1.metric("💰 Końcowy bankroll",
                                 f"{_k_end:.0f} zł",
