@@ -1022,7 +1022,7 @@ def summary(liga: str, sezon: str, db: str) -> dict:
     # Metryki Kelly
     _k_typy   = sum(1 for s in stake_log if s > 0)
     _k_traf   = sum(1 for i, s in enumerate(stake_log)
-                    if s > 0 and _df_s_k.iloc[i]["trafiony"] == 1)
+                    if s > 0 and _df_k.iloc[i]["trafiony"] == 1)
     _k_roi    = (eq_k[-1] - KELLY_START) / KELLY_START * 100 if eq_k else 0.0
     _k_max_dd = 0.0
     _peak = KELLY_START
@@ -1036,7 +1036,7 @@ def summary(liga: str, sezon: str, db: str) -> dict:
     for i, s in enumerate(stake_log):
         if s > 0:
             k = kurs_log[i]
-            _k_pnl += s*(k-1) if _df_s_k.iloc[i]["trafiony"]==1 else -s
+            _k_pnl += s*(k-1) if _df_k.iloc[i]["trafiony"]==1 else -s
     _k_roi_pct = _k_pnl / KELLY_START * 100
 
     return {
