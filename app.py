@@ -3902,27 +3902,41 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             w_roi_raw     = (stats_df["ROI_value"] * stats_df["Typów"]).sum() / total_typow if total_typow > 0 else 0
 
             with st.container(border=True):
-                st.caption("📊 Metryki globalne modelu")
-                m1, m2, m3, m4, m5, m6 = st.columns(6)
-                m1.metric("📋 Typów",       total_typow)
-                m2.metric("✅ Trafione",     total_trafion)
-                m3.metric("🎯 Hit Rate",    f"{avg_skut:.1%}")
-                m4.metric("💹 Ważony ROI",  f"{w_roi_raw:+.1f}%",
-                          delta_color="normal" if w_roi_raw > 0 else "inverse")
-                if mg:
-                    bss_delta = f"vs naive {mg['bss']:+.3f}"
-                    m5.metric("📐 Brier Score ↓", f"{mg['brier']:.4f}",
-                              delta=bss_delta,
-                              delta_color="normal" if mg['bss'] > 0 else "inverse",
-                              help="0=idealny, 0.25=losowy. BSS>0 = model bije naive predictor.")
-                    ece_col  = "normal" if mg['ece'] < 0.05 else "inverse"
-                    m6.metric("🎯 ECE ↓",    f"{mg['ece']:.4f}",
-                              delta=f"sharpness {mg['sharpness']:.3f}",
-                              delta_color=ece_col,
-                              help="Expected Calibration Error. <0.05 = dobrze skalibrowany.")
+                st.caption("⚡ Metryki rynków alternatywnych (Gole, BTTS, Rożne, Kartki)")
+                # Pobierz statystyki alt z bazy (z tabeli zdarzenia, rynek != 1X2)
+                try:
+                    _con_alt_tab4 = sqlite3.connect(DB_FILE)
+                    _alt_tab4_df  = pd.read_sql_query(
+                        """SELECT rynek, COUNT(*) as n,
+                                  SUM(trafione) as traf,
+                                  AVG(CASE WHEN p_model IS NOT NULL THEN p_model END) as p_avg
+                           FROM zdarzenia
+                           WHERE liga=? AND trafione IS NOT NULL AND rynek != '1X2'
+                           GROUP BY rynek
+                           ORDER BY n DESC""",
+                        _con_alt_tab4, params=(wybrana_liga,))
+                    _con_alt_tab4.close()
+                except Exception:
+                    _alt_tab4_df = pd.DataFrame()
+
+                if not _alt_tab4_df.empty:
+                    _alt_cols4 = st.columns(min(len(_alt_tab4_df), 5))
+                    for _ai4, (_, _ar4) in enumerate(_alt_tab4_df.iterrows()):
+                        _an4   = int(_ar4["n"])
+                        _at4   = int(_ar4["traf"] or 0)
+                        _ahr4  = _at4 / _an4 if _an4 > 0 else 0
+                        _ap4   = float(_ar4["p_avg"] or 0)
+                        _acol4 = "#4CAF50" if _ahr4 >= _ap4 - 0.03 else ("#FF9800" if _ahr4 >= _ap4 - 0.08 else "#F44336")
+                        _alt_cols4[_ai4 % len(_alt_cols4)].markdown(
+                            f"<div style='text-align:center;padding:6px 4px'>"
+                            f"<div style='font-size:0.72em;color:#666;margin-bottom:2px'>{_ar4['rynek']}</div>"
+                            f"<div style='font-size:1.3em;font-weight:700;color:{_acol4}'>{_ahr4:.0%}</div>"
+                            f"<div style='font-size:0.7em;color:#555'>n={_an4} · p̄={_ap4:.0%}</div>"
+                            f"</div>", unsafe_allow_html=True)
                 else:
-                    m5.metric("📐 Brier", "–")
-                    m6.metric("🎯 ECE",   "–")
+                    _ma, _mb, _mc, _md = st.columns(4)
+                    for _col4, _lbl4 in zip([_ma,_mb,_mc,_md], ["Gole","BTTS","Rożne","Kartki"]):
+                        _col4.metric(_lbl4, "–", help="Brak danych alt markets w tej lidze")
 
             sort_by = st.radio("Sortuj po", ["ROI ↓", "Brier ↑", "Typów ↓"],
                                horizontal=True, key="sort_tab4")
@@ -4191,83 +4205,50 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
 
             st.divider()
             st.markdown("**📊 Reliability Curve** *(model vs rzeczywistość)*")
-            try:
-                import plotly.graph_objects as _go_rc
-            except ImportError:
-                _go_rc = None
-            if _go_rc is not None:
-                _px_min, _px_max = 0.44, 1.01
-                _fig_rc = _go_rc.Figure()
-                _fig_rc.add_trace(_go_rc.Scatter(
-                    x=[_px_min, _px_max], y=[_px_min, _px_max],
-                    mode="lines", line=dict(color="#444", dash="dash", width=1.5),
-                    name="Idealny model", hoverinfo="skip"
-                ))
-                _rc_sizes  = [max(int(rk["liczba"] * 2.5), 8) for _, rk in kal_df.iterrows()]
-                _rc_colors = ["#4CAF50" if abs(rk["rozbieznosc"]) < 0.05
-                              else ("#FF9800" if abs(rk["rozbieznosc"]) < 0.12 else "#F44336")
-                              for _, rk in kal_df.iterrows()]
-                _fig_rc.add_trace(_go_rc.Scatter(
-                    x=kal_df["p_srednia"].tolist(),
-                    y=kal_df["skutecznosc"].tolist(),
-                    mode="markers+text",
-                    marker=dict(size=_rc_sizes, color=_rc_colors,
-                                line=dict(color="white", width=1.5), opacity=0.9),
-                    text=kal_df["przedzial"].tolist(),
-                    textposition="top right",
-                    textfont=dict(size=9, color="#aaa"),
-                    customdata=list(zip(
-                        kal_df["przedzial"], kal_df["liczba"],
-                        kal_df["p_srednia"], kal_df["skutecznosc"], kal_df["rozbieznosc"]
-                    )),
-                    hovertemplate=(
-                        "<b>%{customdata[0]}</b><br>"
-                        "N=%{customdata[1]}<br>"
-                        "Model: %{customdata[2]:.1%}<br>"
-                        "Hit Rate: %{customdata[3]:.1%}<br>"
-                        "Δ: %{customdata[4]:+.1%}<extra></extra>"
-                    ),
-                    name="Przedziały"
-                ))
-                _fig_rc.update_layout(
-                    paper_bgcolor="#0d0f14", plot_bgcolor="#0d0f14",
-                    margin=dict(l=40, r=20, t=20, b=40), height=320,
-                    xaxis=dict(title="P modelu", tickformat=".0%", color="#666",
-                               gridcolor="#1a1c24", range=[_px_min, _px_max]),
-                    yaxis=dict(title="Hit Rate", tickformat=".0%", color="#666",
-                               gridcolor="#1a1c24", range=[_px_min, _px_max]),
-                    showlegend=False, font=dict(color="#888"),
+            w_rc5, h_rc5, pad_rc5 = 580, 340, 55
+            def rc5_px(xv, yv):
+                px = pad_rc5 + (xv - 0.45) / 0.55 * (w_rc5 - 2 * pad_rc5)
+                py = h_rc5 - pad_rc5 - (yv - 0.45) / 0.55 * (h_rc5 - 2 * pad_rc5)
+                return px, py
+            diag5 = [rc5_px(t, t) for t in [0.5, 0.65, 0.80, 0.95]]
+            diag5_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag5)
+            circles5 = []
+            for _, rk in kal_df.iterrows():
+                xv5 = rk["p_srednia"]; yv5 = rk["skutecznosc"]; n5 = int(rk["liczba"])
+                diff5 = rk["rozbieznosc"]
+                px5, py5 = rc5_px(xv5, yv5)
+                r5 = min(max(int(n5 * 1.2), 6), 22)
+                col5 = "#4CAF50" if abs(diff5) < 0.05 else ("#FF9800" if abs(diff5) < 0.12 else "#F44336")
+                circles5.append(
+                    f"<circle cx='{px5:.0f}' cy='{py5:.0f}' r='{r5}' fill='{col5}' "
+                    f"fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
+                    f"<title>Przedzial: {rk['przedzial']} | Model: {xv5:.1%} | Hit: {yv5:.1%} | N={n5}</title>"
+                    f"</circle>"
+                    f"<text x='{px5 + r5 + 4:.0f}' y='{py5 + 4:.0f}' font-size='9' fill='#ccc' "
+                    f"font-family='sans-serif'>{rk['przedzial']} (n={n5})</text>"
                 )
-                st.plotly_chart(_fig_rc, use_container_width=True, config={"displayModeBar": False})
-            else:
-                w_rc5, h_rc5, pad_rc5 = 580, 340, 55
-                def rc5_px(xv, yv):
-                    px = pad_rc5 + (xv - 0.45) / 0.55 * (w_rc5 - 2 * pad_rc5)
-                    py = h_rc5 - pad_rc5 - (yv - 0.45) / 0.55 * (h_rc5 - 2 * pad_rc5)
-                    return px, py
-                diag5      = [rc5_px(t, t) for t in [0.5, 0.65, 0.80, 0.95]]
-                diag5_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag5)
-                circles5   = []
-                for _, rk in kal_df.iterrows():
-                    xv5 = rk["p_srednia"]; yv5 = rk["skutecznosc"]; n5 = int(rk["liczba"])
-                    diff5 = rk["rozbieznosc"]
-                    px5, py5 = rc5_px(xv5, yv5)
-                    r5   = min(max(int(n5 * 1.2), 6), 22)
-                    col5 = "#4CAF50" if abs(diff5) < 0.05 else ("#FF9800" if abs(diff5) < 0.12 else "#F44336")
-                    circles5.append(
-                        f"<circle cx='{px5:.0f}' cy='{py5:.0f}' r='{r5}' fill='{col5}' "
-                        f"fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
-                        f"<title>{rk['przedzial']} | {xv5:.1%} | {yv5:.1%}</title></circle>"
-                    )
-                svg5 = (
-                    f'<svg width="{w_rc5}" height="{h_rc5}" '
-                    f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
-                    f'<polyline points="{diag5_line}" fill="none" stroke="#444" '
-                    f'stroke-width="1.5" stroke-dasharray="6,4"/>'
-                    f'{"".join(circles5)}'
-                    f'</svg>'
-                )
-                st.markdown(svg5, unsafe_allow_html=True)
+            svg5 = (
+                f'<svg width="{w_rc5}" height="{h_rc5}" '
+                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
+                f'<polyline points="{diag5_line}" fill="none" stroke="#444" '
+                f'stroke-width="1.5" stroke-dasharray="6,4"/>'
+                f'<text x="{w_rc5 - pad_rc5 + 4}" y="{pad_rc5 - 4}" font-size="9" fill="#555" '
+                f'font-family="sans-serif">idealny model</text>'
+                f'{"".join(circles5)}'
+                f'<text x="{w_rc5 // 2}" y="{h_rc5 - 6}" text-anchor="middle" '
+                f'font-size="10" fill="#888" font-family="sans-serif">P modelu →</text>'
+                f'<text x="12" y="{h_rc5 // 2}" text-anchor="middle" font-size="10" fill="#888" '
+                f'font-family="sans-serif" transform="rotate(-90,12,{h_rc5 // 2})">Hit Rate →</text>'
+                f'<circle cx="{w_rc5 - 130}" cy="20" r="6" fill="#4CAF50" stroke="white" stroke-width="1"/>'
+                f'<text x="{w_rc5 - 120}" y="25" font-size="9" fill="#aaa" font-family="sans-serif">Dobrze skalibrowany (&lt;5%)</text>'
+                f'<circle cx="{w_rc5 - 130}" cy="38" r="6" fill="#FF9800" stroke="white" stroke-width="1"/>'
+                f'<text x="{w_rc5 - 120}" y="43" font-size="9" fill="#aaa" font-family="sans-serif">Umiarkowany (5–12%)</text>'
+                f'<circle cx="{w_rc5 - 130}" cy="56" r="6" fill="#F44336" stroke="white" stroke-width="1"/>'
+                f'<text x="{w_rc5 - 120}" y="61" font-size="9" fill="#aaa" font-family="sans-serif">Słabo skalibrowany (&gt;12%)</text>'
+                f'</svg>'
+            )
+            st.markdown(svg5, unsafe_allow_html=True)
+            st.divider()
             avg_bias = float(kal_df["rozbieznosc"].mean())
             if abs(avg_bias) < 0.02:
                 st.success(f"✅ Model dobrze skalibrowany (średni bias {avg_bias:+.1%})")
