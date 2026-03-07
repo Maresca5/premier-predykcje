@@ -2229,12 +2229,13 @@ if not historical.empty:
             st.markdown("---")
 
     # TABS
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "⚽ Mecze",
         "📊 Value Bets",
         "🔬 Deep Data",
         "📈 Skuteczność & Kalibracja",
         "🎛️ Lab",
+        "🌍 Multi-Liga",
         "🧪 Backtest",
     ])
 
@@ -2639,15 +2640,34 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
                         sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
 
-                        # Confidence: słownie zamiast kolorowej kropki
-                        _conf_sym = {"High": "↑", "Medium": "→", "Coinflip": "↓"}.get(pred["conf_level"], "·")
+                        # Confidence: czysty label, pasek wewnątrz
                         label_t2 = (
                             f"{h}  –  {a}"
                             f"   {data_meczu}"
-                            f"   {_conf_sym} {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
+                            f"   {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
                         )
                         with kolumna:
                             with st.expander(label_t2, expanded=False):
+                                # ── Confidence Meter ──────────────────────
+                                _conf_pct = {"High": 82, "Medium": 55, "Coinflip": 35}.get(pred["conf_level"], 40)
+                                _conf_col = {"High": "#4CAF50", "Medium": "#FF9800", "Coinflip": "#F44336"}.get(pred["conf_level"], "#888")
+                                _conf_lbl = {"High": "Wysoka pewność", "Medium": "Umiarkowana", "Coinflip": "Wyrównany"}.get(pred["conf_level"], "")
+                                st.markdown(
+                                    f"<div style='margin:0 0 8px 0'>"
+                                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                                    f"font-size:0.7em;color:#555;margin-bottom:3px'>"
+                                    f"<span>🎯 Pewność modelu</span>"
+                                    f"<span style='color:{_conf_col};font-weight:600'>{_conf_lbl} · {_conf_pct}%</span>"
+                                    f"</div>"
+                                    f"<div style='background:#1a1c24;border-radius:3px;height:5px;overflow:hidden'>"
+                                    f"<div style='background:linear-gradient(90deg,{_conf_col}88,{_conf_col});"
+                                    f"width:{_conf_pct}%;height:5px;border-radius:3px;"
+                                    f"transition:width 0.4s ease'></div>"
+                                    f"</div>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+                                # ──────────────────────────────────────────
                                 ch, cmid, ca = st.columns([5,2,5])
                                 with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
                                 with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
@@ -4336,9 +4356,208 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             st.warning("Brak danych")
 
     # =========================================================================
-    # TAB 6 – BACKTEST
+    # =========================================================================
+    # TAB 6 – MULTI-LIGA GLOBAL DASHBOARD
     # =========================================================================
     with tab6:
+        st.markdown("<div class='section-header'>🌍 Multi-Liga · Globalny przegląd strategii</div>",
+                    unsafe_allow_html=True)
+        st.caption("Agregacja predykcji i wyników ze wszystkich lig. Źródło: baza SQLite predykcje.db.")
+
+        # ── Pobierz dane ze wszystkich lig ──────────────────────────────────
+        try:
+            _g_con = sqlite3.connect(DB_FILE)
+            _g_df  = pd.read_sql_query(
+                """SELECT liga, rynek, typ, p_model, fair_odds, trafione, data
+                   FROM zdarzenia
+                   WHERE trafione IS NOT NULL AND rynek = '1X2'""",
+                _g_con)
+            _g_con.close()
+        except Exception:
+            _g_df = pd.DataFrame()
+
+        if _g_df.empty:
+            st.info("📭 Brak danych. Zacznij śledzić predykcje w zakładce ⚽ Mecze.")
+        else:
+            _g_df["trafione"] = _g_df["trafione"].astype(int)
+            _g_df["fair_odds"] = pd.to_numeric(_g_df["fair_odds"], errors="coerce")
+            _g_df["p_model"]   = pd.to_numeric(_g_df["p_model"],   errors="coerce")
+            _g_df = _g_df.dropna(subset=["fair_odds","p_model"])
+
+            # ── KPI bar ──────────────────────────────────────────────────────
+            _g_n    = len(_g_df)
+            _g_traf = int(_g_df["trafione"].sum())
+            _g_hr   = _g_traf / _g_n if _g_n > 0 else 0
+            _g_roi_s = sum(
+                (r["fair_odds"] - 1) if r["trafione"] == 1 else -1
+                for _, r in _g_df.iterrows()
+            )
+            _g_roi_pct = _g_roi_s / _g_n * 100 if _g_n > 0 else 0
+            _g_brier   = float(((1 - _g_df["p_model"][_g_df["trafione"]==1]).pow(2).sum()
+                               + _g_df["p_model"][_g_df["trafione"]==0].pow(2).sum()) / _g_n)
+            _g_ligi    = _g_df["liga"].nunique()
+
+            with st.container(border=True):
+                _gk1, _gk2, _gk3, _gk4, _gk5 = st.columns(5)
+                _gk1.metric("🌍 Lig",         _g_ligi)
+                _gk2.metric("📋 Typów",        _g_n)
+                _gk3.metric("🎯 Global Hit Rate", f"{_g_hr:.1%}",
+                            delta=f"{_g_hr - 0.50:+.1%} vs 50%",
+                            delta_color="normal" if _g_hr > 0.50 else "inverse")
+                _gk4.metric("💹 Global ROI",   f"{_g_roi_pct:+.1f}%",
+                            delta_color="normal" if _g_roi_pct > 0 else "inverse")
+                _gk5.metric("📐 Brier Score",  f"{_g_brier:.4f}",
+                            help="0=idealny · 0.333=losowy")
+
+            st.divider()
+
+            # ── League Power Ranking ─────────────────────────────────────────
+            st.markdown("### 🏆 League Power Ranking")
+            _lig_rows = []
+            for _lg_name, _lg_df in _g_df.groupby("liga"):
+                _ln  = len(_lg_df)
+                _lt  = int(_lg_df["trafione"].sum())
+                _lhr = _lt / _ln if _ln > 0 else 0
+                _lroi_s = sum(
+                    (r["fair_odds"] - 1) if r["trafione"] == 1 else -1
+                    for _, r in _lg_df.iterrows()
+                )
+                _lroi = _lroi_s / _ln * 100
+                _lb   = float(((1 - _lg_df["p_model"][_lg_df["trafione"]==1]).pow(2).sum()
+                               + _lg_df["p_model"][_lg_df["trafione"]==0].pow(2).sum()) / _ln)
+                # Status
+                if _lhr >= 0.62 and _lroi > 2:
+                    _lst = "✅ Stabilna"
+                elif _lhr >= 0.55 or _lroi > 0:
+                    _lst = "🟡 OK"
+                else:
+                    _lst = "⚠️ Słaba"
+                _roi_col = "#4CAF50" if _lroi > 2 else ("#FF9800" if _lroi > -2 else "#F44336")
+                _hr_col  = "#4CAF50" if _lhr >= 0.62 else ("#FF9800" if _lhr >= 0.55 else "#F44336")
+                _lig_rows.append({
+                    "liga": _lg_name, "n": _ln, "traf": _lt,
+                    "hr": _lhr, "roi": _lroi, "brier": _lb,
+                    "status": _lst, "roi_col": _roi_col, "hr_col": _hr_col,
+                })
+            _lig_rows.sort(key=lambda x: -x["hr"])
+
+            _lr_html_rows = []
+            for _lr in _lig_rows:
+                _bar_w = int(_lr["hr"] * 100)
+                _lr_html_rows.append(
+                    f"<tr>"
+                    f"<td style='padding:8px 12px;font-weight:600;font-size:0.9em'>{_lr['liga']}</td>"
+                    f"<td style='padding:8px 10px;text-align:center;color:#888'>{_lr['n']}</td>"
+                    f"<td style='padding:8px 10px;width:140px'>"
+                    f"<div style='display:flex;align-items:center;gap:6px'>"
+                    f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:6px'>"
+                    f"<div style='background:{_lr["hr_col"]};width:{_bar_w}%;height:6px;border-radius:3px'></div></div>"
+                    f"<span style='color:{_lr["hr_col"]};font-weight:700;font-size:0.88em'>{_lr['hr']:.1%}</span>"
+                    f"</div></td>"
+                    f"<td style='padding:8px 10px;text-align:right;font-weight:700;color:{_lr["roi_col"]}'>{_lr['roi']:+.1f}%</td>"
+                    f"<td style='padding:8px 10px;text-align:center;color:#888;font-size:0.84em'>{_lr['brier']:.4f}</td>"
+                    f"<td style='padding:8px 10px;text-align:center'>{_lr['status']}</td>"
+                    f"</tr>"
+                )
+            st.markdown(
+                "<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a3a'>"
+                "<table style='width:100%;border-collapse:collapse'>"
+                "<thead><tr style='background:#1e1e2e;color:#555;font-size:0.72em;text-transform:uppercase;letter-spacing:.05em'>"
+                "<th style='padding:8px 12px;text-align:left'>Liga</th>"
+                "<th style='padding:8px 10px;text-align:center'>Typów</th>"
+                "<th style='padding:8px 10px;text-align:left'>Hit Rate</th>"
+                "<th style='padding:8px 10px;text-align:right'>ROI</th>"
+                "<th style='padding:8px 10px;text-align:center'>Brier</th>"
+                "<th style='padding:8px 10px;text-align:center'>Status</th>"
+                f"</tr></thead><tbody>{''.join(_lr_html_rows)}</tbody></table></div>",
+                unsafe_allow_html=True
+            )
+
+            st.divider()
+
+            # ── Equity Curve per Liga ─────────────────────────────────────────
+            st.markdown("### 📈 Equity Curve per Liga *(flat 1j, ROI kumulatywny)*")
+            try:
+                import plotly.graph_objects as go
+
+                _g_df_sorted = _g_df.copy()
+                _g_df_sorted["data"] = pd.to_datetime(_g_df_sorted["data"], errors="coerce")
+                _g_df_sorted = _g_df_sorted.dropna(subset=["data"]).sort_values("data")
+
+                _lig_colors = {
+                    "Premier League": "#00d4ff",
+                    "La Liga":        "#ff6b35",
+                    "Bundesliga":     "#ffd700",
+                    "Serie A":        "#4CAF50",
+                    "Ligue 1":        "#b44aff",
+                }
+                _fig_eq = go.Figure()
+                for _lname, _ldf_eq in _g_df_sorted.groupby("liga"):
+                    _ldf_eq = _ldf_eq.sort_values("data").reset_index(drop=True)
+                    _kap = 0.0
+                    _eq_pts = []
+                    for _, _r in _ldf_eq.iterrows():
+                        _fo = _r["fair_odds"] if _r["fair_odds"] > 1 else 2.0
+                        _kap += (_fo - 1) if _r["trafione"] == 1 else -1
+                        _eq_pts.append(round(_kap, 3))
+                    _col = _lig_colors.get(_lname, "#888")
+                    _fig_eq.add_trace(go.Scatter(
+                        x=list(range(len(_eq_pts))),
+                        y=_eq_pts,
+                        mode="lines",
+                        name=_lname,
+                        line=dict(color=_col, width=2),
+                        hovertemplate=f"<b>{_lname}</b><br>Typ #%{{x}}<br>PnL: %{{y:+.2f}}j<extra></extra>"
+                    ))
+                # Linia zerowa
+                _max_x = max(len(_g_df_sorted[_g_df_sorted["liga"]==l]) for l in _g_df_sorted["liga"].unique())
+                _fig_eq.add_hline(y=0, line_dash="dash", line_color="#333", line_width=1)
+                _fig_eq.update_layout(
+                    paper_bgcolor="#0d0f14", plot_bgcolor="#0d0f14",
+                    height=360, margin=dict(l=40, r=20, t=20, b=40),
+                    xaxis=dict(title="Typ #", color="#555", gridcolor="#1a1c24", showgrid=True),
+                    yaxis=dict(title="PnL (jednostki)", color="#555", gridcolor="#1a1c24",
+                               zeroline=True, zerolinecolor="#333"),
+                    legend=dict(bgcolor="#0d0f14", bordercolor="#2a2a3a", borderwidth=1,
+                                font=dict(color="#aaa", size=11)),
+                    font=dict(color="#888"),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(_fig_eq, use_container_width=True, config={"displayModeBar": False})
+            except ImportError:
+                st.info("Plotly niedostępny – zainstaluj `plotly` aby zobaczyć wykres.")
+
+            st.divider()
+
+            # ── Hit Rate per typ (1/X/2) globalnie ───────────────────────────
+            st.markdown("### 🎲 Rozkład typów globalnie")
+            _g_typ_df = (_g_df.groupby("typ")
+                         .agg(n=("trafione","count"), traf=("trafione","sum"),
+                              p_avg=("p_model","mean"), fo_avg=("fair_odds","mean"))
+                         .reset_index())
+            _g_typ_df["hr"] = _g_typ_df["traf"] / _g_typ_df["n"]
+            _g_typ_df["roi"] = _g_typ_df.apply(
+                lambda r_: (r_["traf"] * (r_["fo_avg"] - 1) - (r_["n"] - r_["traf"])) / r_["n"] * 100, axis=1)
+            _typ_cols = st.columns(len(_g_typ_df))
+            for _ti, (_, _tr) in enumerate(_g_typ_df.sort_values("n", ascending=False).iterrows()):
+                _tc = "#4CAF50" if _tr["hr"] >= _tr["p_avg"] - 0.03 else "#FF9800"
+                _roic = "#4CAF50" if _tr["roi"] > 0 else "#F44336"
+                _typ_cols[_ti].markdown(
+                    f"<div style='text-align:center;background:#0e1117;border:1px solid #1e2433;"
+                    f"border-radius:8px;padding:10px 6px'>"
+                    f"<div style='font-size:1.4em;font-weight:800;color:#fff'>{_tr['typ']}</div>"
+                    f"<div style='font-size:1.1em;font-weight:700;color:{_tc}'>{_tr['hr']:.0%}</div>"
+                    f"<div style='font-size:0.72em;color:#555'>HR · p̄={_tr['p_avg']:.0%}</div>"
+                    f"<div style='font-size:0.8em;color:{_roic};margin-top:3px'>ROI {_tr['roi']:+.1f}%</div>"
+                    f"<div style='font-size:0.68em;color:#444'>n={int(_tr['n'])}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+
+        # TAB 7 – BACKTEST
+    # =========================================================================
+    with tab7:
         st.subheader("🧪 Backtest – Symulacja walk-forward")
         st.caption(
             "Model trenowany kolejka po kolejce – dla K-tej kolejki widzi tylko dane do K-1. "
