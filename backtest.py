@@ -162,27 +162,12 @@ def _statystyki(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "HomeTeam" not in df.columns:
         return pd.DataFrame()
     druzyny = pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel())
-    # Globalne średnie ligowe jako fallback dla drużyn z małą próbką
-    _lig_fthg = float(df["FTHG"].mean()) if len(df) > 0 else 1.5
-    _lig_ftag = float(df["FTAG"].mean()) if len(df) > 0 else 1.2
-    _lig_rozne   = float(df["total_rozne"].mean())   if "total_rozne"   in df.columns and len(df) > 0 else 4.5
-    _lig_kartki  = float(df["total_kartki"].mean())  if "total_kartki"  in df.columns and len(df) > 0 else 3.5
     dane = {}
     for d in druzyny:
         home = df[df["HomeTeam"] == d].tail(10)
         away = df[df["AwayTeam"] == d].tail(10)
-        # Wymagamy co najmniej 1 meczu dom LUB wyjazd
-        if len(home) == 0 and len(away) == 0:
+        if len(home) < 2 or len(away) < 2:
             continue
-        # Fallback: gdy brak meczów dom/wyjazd – użyj ligowej średniej
-        if len(home) == 0:
-            home = pd.DataFrame([{"FTHG": _lig_fthg, "FTAG": _lig_ftag,
-                                   "total_rozne": _lig_rozne, "total_kartki": _lig_kartki,
-                                   "HST": None, "AST": None, "Date": df["Date"].max()}])
-        if len(away) == 0:
-            away = pd.DataFrame([{"FTAG": _lig_fthg, "FTHG": _lig_ftag,
-                                   "total_rozne": _lig_rozne, "total_kartki": _lig_kartki,
-                                   "HST": None, "AST": None, "Date": df["Date"].max()}])
         h_d = home["Date"] if "Date" in home.columns else None
         a_d = away["Date"] if "Date" in away.columns else None
         h_sot = home["HST"].dropna() if "HST" in home.columns else pd.Series(dtype=float)
@@ -199,9 +184,9 @@ def _statystyki(df: pd.DataFrame) -> pd.DataFrame:
             "Kartki (dom)":  _weighted_mean(home["total_kartki"], h_d) if "total_kartki" in home.columns else 0.0,
             "Kartki (wyjazd)":_weighted_mean(away["total_kartki"], a_d) if "total_kartki" in away.columns else 0.0,
             "SOT (dom)":    (_weighted_mean(home.loc[home["HST"].notna(), "HST"], h_sd)
-                             if len(h_sot) >= 1 else None),
+                             if len(h_sot) >= 2 else None),
             "SOT (wyjazd)": (_weighted_mean(away.loc[away["AST"].notna(), "AST"], a_sd)
-                             if len(a_sot) >= 1 else None),
+                             if len(a_sot) >= 2 else None),
         }
     return pd.DataFrame(dane).T if dane else pd.DataFrame()
 
@@ -683,12 +668,16 @@ def run_backtest(
         elif not df_prev.empty:
             # Pierwsza kolejka – użyj całego poprzedniego sezonu jako start
             df_p = df_prev.copy()
+        elif k_idx == 0:
+            # Brak prev sezonu i pierwsza kolejka – użyj całego df_test jako proxy
+            # (tylko do estymacji średnich ligowych, nie ma look-ahead w predykcjach)
+            df_p = df_test.copy()
         else:
             df_p = pd.DataFrame()
 
         df_train = _polacz(df_p, mecze_przed)
 
-        if len(df_train) < 5:
+        if len(df_train) < 10:
             skipped += len(k_df)
             continue
 
