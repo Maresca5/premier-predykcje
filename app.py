@@ -2022,6 +2022,34 @@ with st.sidebar.expander("💼 Kelly & Bankroll", expanded=True):
     _kelly_info_val = _br_input * st.session_state["kelly_frac"] * 0.3
     st.caption(f"Typowa stawka ~**{_kelly_info_val:.0f} zł** · max 5%/mecz · EV≥5%")
 
+historical = load_historical(LIGI[wybrana_liga]["csv_code"])
+schedule   = load_schedule(LIGI[wybrana_liga]["file"])
+
+# Auto-aktualizacja wynikow: przy kazdym wczytaniu sprawdz nowe wyniki w CSV
+_auto_update_key = f"autoupd_{wybrana_liga}_{len(historical)}"
+if _auto_update_key not in st.session_state:
+    init_db()
+    _con_au = sqlite3.connect(DB_FILE)
+    _mecze_bez_wyniku = _con_au.execute(
+        "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
+        (wybrana_liga,)
+    ).fetchall()
+    _con_au.close()
+    _n_updated = 0
+    for _h_au, _a_au in _mecze_bez_wyniku:
+        _rows_before = sqlite3.connect(DB_FILE).execute(
+            "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+            (_h_au, _a_au)).fetchone()[0]
+        aktualizuj_wynik_zdarzenia(_h_au, _a_au, historical)
+        _rows_after = sqlite3.connect(DB_FILE).execute(
+            "SELECT COUNT(*) FROM zdarzenia WHERE home=? AND away=? AND trafione IS NOT NULL",
+            (_h_au, _a_au)).fetchone()[0]
+        if _rows_after > _rows_before:
+            _n_updated += 1
+    st.session_state[_auto_update_key] = _n_updated
+    if _n_updated > 0:
+        st.toast(f"✅ Auto-zaktualizowano wyniki {_n_updated} meczów z football-data.co.uk", icon="⚽")
+
 # ── Hero Header ────────────────────────────────────────────────────────────
 _hc1, _hc2, _hc3 = st.columns([5, 2, 2])
 with _hc1:
