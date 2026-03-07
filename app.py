@@ -5166,3 +5166,4 @@ if debug_mode:
 
 else:
     st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
+ 
