@@ -2022,8 +2022,9 @@ with st.sidebar.expander("💼 Kelly & Bankroll", expanded=True):
     _kelly_info_val = _br_input * st.session_state["kelly_frac"] * 0.3
     st.caption(f"Typowa stawka ~**{_kelly_info_val:.0f} zł** · max 5%/mecz · EV≥5%")
 
-historical = load_historical(LIGI[wybrana_liga]["csv_code"])
-schedule   = load_schedule(LIGI[wybrana_liga]["file"])
+with st.spinner(f"⚙️ Model Dixon-Coles analizuje dane {wybrana_liga}..."):
+    historical = load_historical(LIGI[wybrana_liga]["csv_code"])
+    schedule   = load_schedule(LIGI[wybrana_liga]["file"])
 
 # Auto-aktualizacja wynikow: przy kazdym wczytaniu sprawdz nowe wyniki w CSV
 _auto_update_key = f"autoupd_{wybrana_liga}_{len(historical)}"
@@ -2214,7 +2215,7 @@ if not historical.empty:
                     f"</div>"
                     f"<div style='margin-top:6px'>"
                     f"<span class='stat-pill' style='border-color:{_sig_color}33;color:{_sig_color}'>{_sig_label}</span>"
-                    f"<span class='stat-pill' title='Przewaga vs implied prob bukmachera'>EDGE +{_edge_pp:.1f}pp</span>"
+                    f"<span class='stat-pill' title='Edge = różnica między p modelu a implied prob bukmachera (1/kurs). Im wyższy, tym silniejszy sygnał.'>EDGE +{_edge_pp:.1f}pp</span>"
                     f"</div>"
                     f"{_kelly_str}"
                     f"</div>",
@@ -2855,7 +2856,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                 f"Typ: {badge_typ(pred['typ'])} &nbsp;"
                                                 f"Fair: <b>{pred['fo_typ']:.2f}</b> | "
                                                 f"Buk: <b>{_kdc:.2f}</b> | "
-                                                f"Edge: <span style='color:{_ev_c}'><b>{_edge:+.1%}</b></span> | "
+                                                f"<abbr title='Edge = p modelu minus implied prob bukmachera. Pozytywny = przewaga nad rynkiem.' "f"style='cursor:help;border-bottom:1px dotted #555'>Edge</abbr>: "f"<span style='color:{_ev_c}'><b>{_edge:+.1%}</b></span> | "
                                                 f"<span style='color:{_ev_c}'><b>EV {_ev_val:+.1%}</b></span>"
                                                 f"{_vbadge}</div>"
                                                 f"<div style='margin-top:5px'>"
@@ -2867,16 +2868,29 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                 unsafe_allow_html=True)
 
                                             if _is_val and _kelly["safe"]:
-                                                st.markdown(
-                                                    f"<div style='background:#001a0a;border:1px solid #2a6b2a;"
-                                                    f"border-radius:5px;padding:5px 10px;margin:3px 0;"
-                                                    f"font-size:0.82em'>"
-                                                    f"💰 <b>Kelly 1/8</b>: postaw "
-                                                    f"<b style='color:#4CAF50'>{_kelly['stake_pln']:.0f} zł</b>"
-                                                    f" ({_kelly['f_frac']:.1%} bankrollu) · "
-                                                    f"EV/jedn.: <b style='color:#4CAF50'>{_kelly['ev_per_unit']:+.3f}</b>"
-                                                    f"</div>",
-                                                    unsafe_allow_html=True)
+                                                _ev_col = "#4CAF50" if _kelly["ev_per_unit"] >= 0.10 else "#FF9800"
+                                                _sdiv = (
+                                                    "<div style='margin:8px 0 4px 0;padding:10px 14px;"
+                                                    "background:linear-gradient(135deg,#021a08 0%,#011208 100%);"
+                                                    f"border-left:3px solid {_ev_col};border-radius:0 6px 6px 0;"
+                                                    f"box-shadow:0 0 12px {_ev_col}22'>"
+                                                    "<div style='font-size:0.68em;color:#555;text-transform:uppercase;"
+                                                    "letter-spacing:.06em;margin-bottom:5px'>📍 Strefa Decyzji</div>"
+                                                    "<div style='display:flex;align-items:center;"
+                                                    "justify-content:space-between;flex-wrap:wrap;gap:8px'>"
+                                                    "<div>"
+                                                    f"<span style='font-size:1.6em;font-weight:800;color:{_ev_col}'>"
+                                                    f"{_kelly['stake_pln']:.0f} zł</span>"
+                                                    "<span style='font-size:0.78em;color:#888;margin-left:6px'>"
+                                                    "stawka Kelly 1/8</span>"
+                                                    "</div>"
+                                                    "<div style='text-align:right;font-size:0.82em'>"
+                                                    f"<div style='color:#888'>{_kelly['f_frac']:.1%} bankrollu</div>"
+                                                    f"<div style='color:{_ev_col};font-weight:600'>"
+                                                    f"EV {_kelly['ev_per_unit']:+.3f}</div>"
+                                                    "</div></div></div>"
+                                                )
+                                                st.markdown(_sdiv, unsafe_allow_html=True)
 
                                 elif _OA_OK and _oa_key and not _oa_cached:
                                     st.caption("📊 Brak kursów — kliknij 'Odśwież kursy' w sidebarze.")
@@ -4177,53 +4191,83 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
 
             st.divider()
             st.markdown("**📊 Reliability Curve** *(model vs rzeczywistość)*")
-            w_rc5, h_rc5, pad_rc5 = 580, 340, 55
-
-            def rc5_px(xv, yv):
-                px = pad_rc5 + (xv - 0.45) / 0.55 * (w_rc5 - 2 * pad_rc5)
-                py = h_rc5 - pad_rc5 - (yv - 0.45) / 0.55 * (h_rc5 - 2 * pad_rc5)
-                return px, py
-
-            diag5 = [rc5_px(t, t) for t in [0.5, 0.65, 0.80, 0.95]]
-            diag5_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag5)
-            circles5 = []
-            for _, rk in kal_df.iterrows():
-                xv5 = rk["p_srednia"]; yv5 = rk["skutecznosc"]; n5 = int(rk["liczba"])
-                diff5 = rk["rozbieznosc"]
-                px5, py5 = rc5_px(xv5, yv5)
-                r5 = min(max(int(n5 * 1.2), 6), 22)
-                col5 = "#4CAF50" if abs(diff5) < 0.05 else ("#FF9800" if abs(diff5) < 0.12 else "#F44336")
-                circles5.append(
-                    f"<circle cx='{px5:.0f}' cy='{py5:.0f}' r='{r5}' fill='{col5}' "
-                    f"fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
-                    f"<title>Przedzial: {rk['przedzial']} | Model: {xv5:.1%} | Hit: {yv5:.1%} | N={n5}</title>"
-                    f"</circle>"
-                    f"<text x='{px5 + r5 + 4:.0f}' y='{py5 + 4:.0f}' font-size='9' fill='#ccc' "
-                    f"font-family='sans-serif'>{rk['przedzial']} (n={n5})</text>"
+            try:
+                import plotly.graph_objects as _go_rc
+            except ImportError:
+                _go_rc = None
+            if _go_rc is not None:
+                _px_min, _px_max = 0.44, 1.01
+                _fig_rc = _go_rc.Figure()
+                _fig_rc.add_trace(_go_rc.Scatter(
+                    x=[_px_min, _px_max], y=[_px_min, _px_max],
+                    mode="lines", line=dict(color="#444", dash="dash", width=1.5),
+                    name="Idealny model", hoverinfo="skip"
+                ))
+                _rc_sizes  = [max(int(rk["liczba"] * 2.5), 8) for _, rk in kal_df.iterrows()]
+                _rc_colors = ["#4CAF50" if abs(rk["rozbieznosc"]) < 0.05
+                              else ("#FF9800" if abs(rk["rozbieznosc"]) < 0.12 else "#F44336")
+                              for _, rk in kal_df.iterrows()]
+                _fig_rc.add_trace(_go_rc.Scatter(
+                    x=kal_df["p_srednia"].tolist(),
+                    y=kal_df["skutecznosc"].tolist(),
+                    mode="markers+text",
+                    marker=dict(size=_rc_sizes, color=_rc_colors,
+                                line=dict(color="white", width=1.5), opacity=0.9),
+                    text=kal_df["przedzial"].tolist(),
+                    textposition="top right",
+                    textfont=dict(size=9, color="#aaa"),
+                    customdata=list(zip(
+                        kal_df["przedzial"], kal_df["liczba"],
+                        kal_df["p_srednia"], kal_df["skutecznosc"], kal_df["rozbieznosc"]
+                    )),
+                    hovertemplate=(
+                        "<b>%{customdata[0]}</b><br>"
+                        "N=%{customdata[1]}<br>"
+                        "Model: %{customdata[2]:.1%}<br>"
+                        "Hit Rate: %{customdata[3]:.1%}<br>"
+                        "Δ: %{customdata[4]:+.1%}<extra></extra>"
+                    ),
+                    name="Przedziały"
+                ))
+                _fig_rc.update_layout(
+                    paper_bgcolor="#0d0f14", plot_bgcolor="#0d0f14",
+                    margin=dict(l=40, r=20, t=20, b=40), height=320,
+                    xaxis=dict(title="P modelu", tickformat=".0%", color="#666",
+                               gridcolor="#1a1c24", range=[_px_min, _px_max]),
+                    yaxis=dict(title="Hit Rate", tickformat=".0%", color="#666",
+                               gridcolor="#1a1c24", range=[_px_min, _px_max]),
+                    showlegend=False, font=dict(color="#888"),
                 )
-            svg5 = (
-                f'<svg width="{w_rc5}" height="{h_rc5}" '
-                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
-                f'<polyline points="{diag5_line}" fill="none" stroke="#444" '
-                f'stroke-width="1.5" stroke-dasharray="6,4"/>'
-                f'<text x="{w_rc5 - pad_rc5 + 4}" y="{pad_rc5 - 4}" font-size="9" fill="#555" '
-                f'font-family="sans-serif">idealny model</text>'
-                f'{"".join(circles5)}'
-                f'<text x="{w_rc5 // 2}" y="{h_rc5 - 6}" text-anchor="middle" '
-                f'font-size="10" fill="#888" font-family="sans-serif">P modelu →</text>'
-                f'<text x="12" y="{h_rc5 // 2}" text-anchor="middle" font-size="10" fill="#888" '
-                f'font-family="sans-serif" transform="rotate(-90,12,{h_rc5 // 2})">Hit Rate →</text>'
-                f'<circle cx="{w_rc5 - 130}" cy="20" r="6" fill="#4CAF50" stroke="white" stroke-width="1"/>'
-                f'<text x="{w_rc5 - 120}" y="25" font-size="9" fill="#aaa" font-family="sans-serif">Dobrze skalibrowany (&lt;5%)</text>'
-                f'<circle cx="{w_rc5 - 130}" cy="38" r="6" fill="#FF9800" stroke="white" stroke-width="1"/>'
-                f'<text x="{w_rc5 - 120}" y="43" font-size="9" fill="#aaa" font-family="sans-serif">Umiarkowany (5–12%)</text>'
-                f'<circle cx="{w_rc5 - 130}" cy="56" r="6" fill="#F44336" stroke="white" stroke-width="1"/>'
-                f'<text x="{w_rc5 - 120}" y="61" font-size="9" fill="#aaa" font-family="sans-serif">Słabo skalibrowany (&gt;12%)</text>'
-                f'</svg>'
-            )
-            st.markdown(svg5, unsafe_allow_html=True)
-
-            st.divider()
+                st.plotly_chart(_fig_rc, use_container_width=True, config={"displayModeBar": False})
+            else:
+                w_rc5, h_rc5, pad_rc5 = 580, 340, 55
+                def rc5_px(xv, yv):
+                    px = pad_rc5 + (xv - 0.45) / 0.55 * (w_rc5 - 2 * pad_rc5)
+                    py = h_rc5 - pad_rc5 - (yv - 0.45) / 0.55 * (h_rc5 - 2 * pad_rc5)
+                    return px, py
+                diag5      = [rc5_px(t, t) for t in [0.5, 0.65, 0.80, 0.95]]
+                diag5_line = " ".join(f"{p[0]:.0f},{p[1]:.0f}" for p in diag5)
+                circles5   = []
+                for _, rk in kal_df.iterrows():
+                    xv5 = rk["p_srednia"]; yv5 = rk["skutecznosc"]; n5 = int(rk["liczba"])
+                    diff5 = rk["rozbieznosc"]
+                    px5, py5 = rc5_px(xv5, yv5)
+                    r5   = min(max(int(n5 * 1.2), 6), 22)
+                    col5 = "#4CAF50" if abs(diff5) < 0.05 else ("#FF9800" if abs(diff5) < 0.12 else "#F44336")
+                    circles5.append(
+                        f"<circle cx='{px5:.0f}' cy='{py5:.0f}' r='{r5}' fill='{col5}' "
+                        f"fill-opacity='0.85' stroke='white' stroke-width='1.5'>"
+                        f"<title>{rk['przedzial']} | {xv5:.1%} | {yv5:.1%}</title></circle>"
+                    )
+                svg5 = (
+                    f'<svg width="{w_rc5}" height="{h_rc5}" '
+                    f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
+                    f'<polyline points="{diag5_line}" fill="none" stroke="#444" '
+                    f'stroke-width="1.5" stroke-dasharray="6,4"/>'
+                    f'{"".join(circles5)}'
+                    f'</svg>'
+                )
+                st.markdown(svg5, unsafe_allow_html=True)
             avg_bias = float(kal_df["rozbieznosc"].mean())
             if abs(avg_bias) < 0.02:
                 st.success(f"✅ Model dobrze skalibrowany (średni bias {avg_bias:+.1%})")
