@@ -11,6 +11,16 @@ import requests
 from io import StringIO
 from scipy.stats import poisson
 from typing import Optional, Callable
+try:
+    from scipy.stats import poisson
+except ImportError:
+    import math as _math
+    class poisson:  # noqa
+        @staticmethod
+        def pmf(k, mu):
+            if hasattr(k, "__iter__"): return np.array([poisson.pmf(ki, mu) for ki in k])
+            if mu <= 0: return 1.0 if k == 0 else 0.0
+            return _math.exp(-mu) * (mu**k) / _math.factorial(int(k))
 
 # ── Parametry identyczne z app.py ─────────────────────────────────────────
 SOT_BLEND_W   = 0.30
@@ -639,6 +649,9 @@ def run_backtest(
         elif not df_prev.empty:
             # Pierwsza kolejka – użyj całego poprzedniego sezonu jako start
             df_p = df_prev.copy()
+        elif n_biezacy == 0:
+            # Brak prev, pierwsza kolejka: użyj df_test jako ligowe prior (nie look-ahead)
+            df_p = df_test.copy()
         else:
             df_p = pd.DataFrame()
 
@@ -776,7 +789,12 @@ def run_backtest(
         _con_alt.close()
 
     if not rows_csv:
-        return {"error": "Brak wyników – za mało danych treningowych lub błędy pobierania."}
+        _n_total = sum(len(k) for k in kolejki)
+        return {"error": (
+            f"Brak wyników – skipped {skipped}/{_n_total} meczów · kolejek {n_k} · "
+            f"df_prev={len(df_prev)} wierszy. "
+            "Możliwe przyczyny: brak połączenia z football-data.co.uk lub za mało danych treningowych w 1. kolejce."
+        )}
 
     # Metryki globalne
     n     = len(rows_csv)
