@@ -14,8 +14,8 @@ from typing import Optional, Callable
 
 # ── Parametry identyczne z app.py ─────────────────────────────────────────
 SOT_BLEND_W   = 0.30
-PROG_PEWNY    = 0.55   # identyczny z app.py
-PROG_PODWOJNA = 0.55   # identyczny z app.py
+PROG_PEWNY    = 0.42
+PROG_PODWOJNA = 0.62
 TAU_DAYS      = 30.0
 # Kelly fractions po analizie backtestów – obniżone o 50%
 KELLY_FRACTIONS_BT = {
@@ -250,12 +250,6 @@ def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
         lh = avg_h * atak_h * obrona_a * fw(fh)
         la = avg_a * atak_a * obrona_h * fw(fa)
 
-        # Asymetryczny shrink – identyczny z app.py
-        ALPHA_OFF = 0.10
-        ALPHA_DEF = 0.20
-        lh = (1 - ALPHA_OFF) * lh + ALPHA_OFF * avg_h
-        la = (1 - ALPHA_DEF) * la + ALPHA_DEF * avg_a
-
         # SOT blend
         if SOT_BLEND_W > 0 and "SOT (dom)" in st.columns and "SOT (wyjazd)" in st.columns:
             sot_h = st.loc[h, "SOT (dom)"]
@@ -267,8 +261,6 @@ def _lambdy(h: str, a: str, st: pd.DataFrame, sl: dict, fh: str, fa: str):
                 if not (np.isnan(sh) or np.isnan(sa)):
                     lsot_h = sh * (avg_h / ash) * obrona_a * fw(fh)
                     lsot_a = sa * (avg_a / asa) * obrona_h * fw(fa)
-                    lsot_h = (1 - ALPHA_OFF) * lsot_h + ALPHA_OFF * avg_h
-                    lsot_a = (1 - ALPHA_DEF) * lsot_a + ALPHA_DEF * avg_a
                     lh = (1 - SOT_BLEND_W) * lh + SOT_BLEND_W * lsot_h
                     la = (1 - SOT_BLEND_W) * la + SOT_BLEND_W * lsot_a
 
@@ -314,29 +306,21 @@ def _dc(lh: float, la: float, rho: float) -> np.ndarray:
     return M / M.sum()
 
 
-def _pred(lh: float, la: float, rho: float, liga: str = "E0") -> dict:
+def _pred(lh: float, la: float, rho: float) -> dict:
     M  = _dc(lh, la, rho)
     ph = float(np.tril(M, -1).sum())
     pd_= float(np.trace(M))
     pa = float(np.triu(M, 1).sum())
-    _pred_liga = liga
-    # Identyczny z app.py – shrink Bayesian przed wyborem
-    KALIBRACJA_PER_LIGA = {"E0": 0.25, "SP1": 0.38, "D1": 0.40, "I1": 0.28, "F1": 0.45}
-    SHRINK_ALPHA = 0.25
-    a_shr = KALIBRACJA_PER_LIGA.get(_pred_liga, SHRINK_ALPHA)
-    ph2  = (1 - a_shr) * ph  + a_shr / 3
-    pd2  = (1 - a_shr) * pd_ + a_shr / 3
-    pa2  = (1 - a_shr) * pa  + a_shr / 3
-    s    = ph2 + pd2 + pa2
-    ph2, pd2, pa2 = ph2/s, pd2/s, pa2/s
-    p1x = ph2 + pd2; px2 = pa2 + pd2
-    if   ph2 >= PROG_PEWNY:   typ, pt = "1",  ph2
-    elif pa2 >= PROG_PEWNY:   typ, pt = "2",  pa2
-    elif p1x >= PROG_PODWOJNA or px2 >= PROG_PODWOJNA:
-        typ, pt = ("1X", p1x) if p1x >= px2 else ("X2", px2)
+    if   ph >= PROG_PEWNY:   typ, pt = "1",  ph
+    elif pa >= PROG_PEWNY:   typ, pt = "2",  pa
+    elif pd_ >= PROG_PEWNY:  typ, pt = "X",  pd_
     else:
-        d = {"1": ph2, "X": pd2, "2": pa2}
-        typ = max(d, key=d.get); pt = d[typ]
+        p1x = ph + pd_; px2 = pa + pd_
+        if p1x >= PROG_PODWOJNA or px2 >= PROG_PODWOJNA:
+            typ, pt = ("1X", p1x) if p1x >= px2 else ("X2", px2)
+        else:
+            d = {"1": ph, "X": pd_, "2": pa}
+            typ = max(d, key=d.get); pt = d[typ]
     return {"ph": ph, "pd": pd_, "pa": pa, "typ": typ, "pt": float(pt), "lh": lh, "la": la}
 
 
@@ -495,17 +479,6 @@ def _traf(typ: str, wynik: str) -> int:
 
 def _init_db(db: str):
     con = sqlite3.connect(db)
-    # Migracja schematu – dodaj brakujące kolumny jeśli baza jest stara
-    try:
-        con.execute(f"ALTER TABLE {_TABLE} ADD COLUMN kurs_ps   REAL")
-    except Exception:
-        pass  # kolumna już istnieje
-    try:
-        con.execute(f"ALTER TABLE {_TABLE} ADD COLUMN kurs_b365 REAL")
-    except Exception:
-        pass
-    con.commit()
-
     con.execute(f"""
         CREATE TABLE IF NOT EXISTS {_TABLE} (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -530,8 +503,6 @@ def _init_db(db: str):
             n_train    INTEGER,
             b365h      REAL, b365d REAL, b365a REAL,
             psh        REAL, psd  REAL, psa  REAL,
-            kurs_ps    REAL,
-            kurs_b365  REAL,
             UNIQUE(liga, sezon, kolejka, home, away)
         )
     """)
@@ -576,8 +547,8 @@ def _insert_bulk(rows: list, db: str):
         INSERT OR REPLACE INTO {_TABLE}
         (liga,sezon,kolejka,data,home,away,fthg,ftag,wynik,
          typ,p_typ,p_home,p_draw,p_away,lam_h,lam_a,trafiony,brier,n_train,
-         b365h,b365d,b365a,psh,psd,psa,kurs_ps,kurs_b365)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         b365h,b365d,b365a,psh,psd,psa)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, rows)
     con.commit()
     con.close()
@@ -668,10 +639,6 @@ def run_backtest(
         elif not df_prev.empty:
             # Pierwsza kolejka – użyj całego poprzedniego sezonu jako start
             df_p = df_prev.copy()
-        elif k_idx == 0:
-            # Brak prev sezonu i pierwsza kolejka – użyj całego df_test jako proxy
-            # (tylko do estymacji średnich ligowych, nie ma look-ahead w predykcjach)
-            df_p = df_test.copy()
         else:
             df_p = pd.DataFrame()
 
@@ -710,7 +677,7 @@ def run_backtest(
                     skipped += 1
                     continue
 
-                p    = _pred(lh, la, rho, liga_code)
+                p    = _pred(lh, la, rho)
                 wn   = _wynik(fthg, ftag)
                 tr   = _traf(p["typ"], wn)
                 fo   = round(1 / p["pt"], 2) if p["pt"] > 0 else 999.0
@@ -727,14 +694,11 @@ def run_backtest(
                     except: return None
                 _b3h=_g("B365H"); _b3d=_g("B365D"); _b3a=_g("B365A")
                 _psh=_g("PSH");   _psd=_g("PSD");   _psa=_g("PSA")
-                _kurs_ps_val   = _kdc(p["typ"], _psh, _psd, _psa)
-                _kurs_b365_val = _kdc(p["typ"], _b3h, _b3d, _b3a)
                 rows_db.append((
                     liga_code, sezon_test, k_nr, data, h, a, fthg, ftag, wn,
                     p["typ"], p["pt"], p["ph"], p["pd"], p["pa"],
                     p["lh"], p["la"], tr, round(brier, 6), len(df_train),
-                    _b3h, _b3d, _b3a, _psh, _psd, _psa,
-                    _kurs_ps_val, _kurs_b365_val
+                    _b3h, _b3d, _b3a, _psh, _psd, _psa
                 ))
                 rows_csv.append({
                     "liga": liga_code, "sezon": sezon_test,
@@ -957,114 +921,52 @@ def summary(liga: str, sezon: str, db: str) -> dict:
     df_s["equity"] = eq
 
     # ── Equity curve Kelly (bankroll 1000 zł, walk-forward) ──────────────
-    # Używa kurs_ps/kurs_b365 zapisanych bezpośrednio w bazie per mecz/typ.
-    # Identyczna logika jak "Najlepsze okazje" na stronie głównej:
-    # top 3 per kolejka wg EV, kurs 1.30–3.50, EV≥5%, Kelly 1/8.
-    KELLY_START    = 1000.0
-    KELLY_FRAC     = 0.125
-    KELLY_MAX_EXP  = 0.05
-    KELLY_MIN_EV   = 0.05
-    KELLY_MIN_ODDS = 1.30
-    KELLY_MAX_ODDS = 3.50
-    KELLY_TOP_N    = 3
-    KELLY_EV_CAP   = None   # brak cap EV – oryginalna logika
+    # Symulacja: przed każdym typem znamy aktualny bankroll i obliczamy
+    # stawkę Kelly (frakcja 1/8, EV≥5%, max 5% bankrollu per typ).
+    # Używamy fair odds (brak marży) – realistyczne z 3-5% dyskontem.
+    KELLY_START   = 1000.0
+    KELLY_FRAC    = 0.125        # 1/8 Kelly
+    KELLY_MAX_EXP = 0.05         # max 5% bankrollu per typ
+    KELLY_MIN_EV  = 0.05         # min EV 5%
+    CALIB_A = 0.88; CALIB_B = 0.06  # kalibracja liniowa p_model
 
-    # kurs_ps i kurs_b365 są teraz bezpośrednio w df_s
-    _df_k = df_s.copy()
-
-    def _get_kurs(r):
-        """PS per-typ direct → B365 per-typ direct → oblicz z psh/psd/psa → oblicz z b365h/d/a"""
-        def _calc(oh, od, oa, typ):
-            try:
-                oh, od, oa = float(oh or 0), float(od or 0), float(oa or 0)
-                if min(oh, od, oa) <= 1.01: return None
-                s = 1/oh + 1/od + 1/oa
-                ih, id_, ia = (1/oh)/s, (1/od)/s, (1/oa)/s
-                if typ == "1":  return oh
-                if typ == "X":  return od
-                if typ == "2":  return oa
-                if typ == "1X": return round(1/(ih+id_), 3)
-                if typ == "X2": return round(1/(id_+ia), 3)
-            except Exception:
-                return None
-        typ = str(r.get("typ", ""))
-        # 1. Bezpośredni kurs per-typ (nowe wpisy w bazie)
-        for col in ("kurs_ps", "kurs_b365"):
-            v = r.get(col)
-            if v is not None and not (isinstance(v, float) and pd.isna(v)):
-                try:
-                    k = float(v)
-                    if KELLY_MIN_ODDS <= k <= KELLY_MAX_ODDS: return k
-                except Exception:
-                    pass
-        # 2. Oblicz z kursów 1X2 (stare wpisy – psh/psd/psa lub b365h/d/a)
-        k = _calc(r.get("psh"), r.get("psd"), r.get("psa"), typ)
-        if k is None:
-            k = _calc(r.get("b365h"), r.get("b365d"), r.get("b365a"), typ)
-        if k is None: return None
-        return k if KELLY_MIN_ODDS <= k <= KELLY_MAX_ODDS else None
-
-    _df_k["_kurs"] = _df_k.apply(_get_kurs, axis=1)
-    _df_k["_ev"]   = _df_k.apply(
-        lambda r: float(r["p_typ"]) * r["_kurs"] - 1.0
-        if r["_kurs"] else -999.0, axis=1)
-
-    # Top N per kolejka wg EV
-    _df_k = _df_k.sort_values(["kolejka", "_ev"], ascending=[True, False])
-    _selected = (_df_k[_df_k["_ev"] >= KELLY_MIN_EV]
-                 .groupby("kolejka").head(KELLY_TOP_N).index)
-    _df_k["_selected"] = _df_k.index.isin(_selected)
-
-    bk        = KELLY_START
-    eq_k      = []
+    bk    = KELLY_START
+    eq_k  = []
     stake_log = []
-    ev_log    = []
-    kurs_log  = []
-
-    for _, r in _df_k.iterrows():
+    for _, r in df_s.iterrows():
+        fo   = round(1 / r["p_typ"], 2) if 0 < r["p_typ"] <= 1 else 999.0
+        p_c  = float(np.clip(CALIB_A * r["p_typ"] + CALIB_B, 0.01, 0.99))
+        ev   = p_c * fo - 1.0
         stawka = 0.0
-        kurs   = r["_kurs"]
-        ev_val = r["_ev"] if r["_selected"] else 0.0
-
-        if r["_selected"] and kurs:
-            pt  = float(r["p_typ"])
-            b   = kurs - 1.0
-            f_k = max((pt * b - (1 - pt)) / b, 0.0)
-            f_k = min(f_k * KELLY_FRAC, KELLY_MAX_EXP)
+        if ev >= KELLY_MIN_EV and fo >= 1.30:
+            b    = fo - 1.0
+            f_k  = max((p_c * b - (1 - p_c)) / b, 0.0)
+            f_k  = f_k * KELLY_FRAC                    # frakcja Kelly
+            f_k  = min(f_k, KELLY_MAX_EXP)             # cap ekspozycji
             stawka = round(bk * f_k, 2)
-
         if stawka > 0:
-            bk += stawka * (kurs - 1) if r["trafiony"] == 1 else -stawka
-        bk = max(bk, 0.01)
+            if r["trafiony"] == 1:
+                bk += stawka * (fo - 1)
+            else:
+                bk -= stawka
+        bk = max(bk, 0.01)  # bankroll nie może spaść poniżej 0
         eq_k.append(round(bk, 2))
         stake_log.append(round(stawka, 2))
-        ev_log.append(round(ev_val, 4))
-        kurs_log.append(round(kurs, 3) if kurs else 0.0)
 
     df_s["bankroll_kelly"] = eq_k
     df_s["stawka_kelly"]   = stake_log
-    df_s["ev_kelly"]       = ev_log
-    df_s["kurs_kelly"]     = kurs_log
 
     # Metryki Kelly
     _k_typy   = sum(1 for s in stake_log if s > 0)
     _k_traf   = sum(1 for i, s in enumerate(stake_log)
-                    if s > 0 and _df_k.iloc[i]["trafiony"] == 1)
+                    if s > 0 and df_s.iloc[i]["trafiony"] == 1)
     _k_roi    = (eq_k[-1] - KELLY_START) / KELLY_START * 100 if eq_k else 0.0
-    _k_max_dd = 0.0
+    _k_max_dd = 0.0  # max drawdown
     _peak = KELLY_START
     for bki in eq_k:
         if bki > _peak: _peak = bki
         dd = (_peak - bki) / _peak * 100
         if dd > _k_max_dd: _k_max_dd = dd
-
-    # ROI Kelly (tylko typy z stawką)
-    _k_pnl = 0.0
-    for i, s in enumerate(stake_log):
-        if s > 0:
-            k = kurs_log[i]
-            _k_pnl += s*(k-1) if _df_k.iloc[i]["trafiony"]==1 else -s
-    _k_roi_pct = _k_pnl / KELLY_START * 100
 
     return {
         "n": n, "trafione": traf, "hit_rate": traf / n,
@@ -1074,12 +976,10 @@ def summary(liga: str, sezon: str, db: str) -> dict:
         "per_typ": per_typ,
         "equity_df":       df_s[["kolejka", "equity"]],
         "equity_kelly_df": df_s[["kolejka", "bankroll_kelly", "stawka_kelly"]],
-        "kelly_start":    KELLY_START,
-        "kelly_end":      eq_k[-1] if eq_k else KELLY_START,
-        "kelly_roi":      round(_k_roi, 2),
-        "kelly_roi_pct":  round(_k_roi_pct, 2),
-        "kelly_typy":     _k_typy,
+        "kelly_start":  KELLY_START,
+        "kelly_end":    eq_k[-1] if eq_k else KELLY_START,
+        "kelly_roi":    round(_k_roi, 2),
+        "kelly_typy":   _k_typy,
         "kelly_trafione": _k_traf,
-        "kelly_max_dd":   round(_k_max_dd, 2),
-        "kelly_pnl":      round(_k_pnl, 2),
+        "kelly_max_dd": round(_k_max_dd, 2),
     }
