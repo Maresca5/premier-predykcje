@@ -24,7 +24,7 @@ except ImportError:
 
 # ── Parametry identyczne z app.py ─────────────────────────────────────────
 SOT_BLEND_W   = 0.30
-PROG_PEWNY    = 0.42
+PROG_PEWNY    = 0.62
 PROG_PODWOJNA = 0.62
 TAU_DAYS      = 30.0
 # Kelly fractions po analizie backtestów – obniżone o 50%
