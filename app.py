@@ -1667,21 +1667,59 @@ def brier_per_kolejka(liga: str = None) -> pd.DataFrame:
     con.close()
     return df
 
-# ===========================================================================
-# KOMENTARZ
-# ===========================================================================
-def _ocen_forme(f: str) -> str:
-    if not f or f == "?": return "forma nieznana"
-    w = f.count("W"); l = f.count("L")
-    if w >= 4: return "doskonała forma"
-    if w >= 3: return "dobra forma"
-    if l >= 3: return "słaba forma"
-    return "nieregularna forma"
 
-def generuj_komentarz(home: str, away: str, pred: dict, forma_dict: dict,
-                      odds_buk: dict = None) -> str:
-    """Analityczny komentarz: wyjaśnia predykcję modelu, wykrywa deep value
-    i konflikt formy z modelem. Nie opisuje naiwnie ciągu W/L jako przyczyny."""
+# ===========================================================================
+# FORMA + KONTEKST (zastępuje AI komentarz)
+# ===========================================================================
+def _forma_badge(litera: str) -> str:
+    """Zwraca span z kolorowym tłem dla W/D/L."""
+    colors = {"W": ("#1b5e20","#4CAF50"), "D": ("#4a3800","#FFC107"), "L": ("#7f0000","#ef5350")}
+    bg, fg = colors.get(litera, ("#1a1a1a","#888"))
+    return (f"<span style='background:{bg};color:{fg};padding:2px 6px;"
+            f"border-radius:4px;font-weight:700;font-size:0.82em;margin:1px'>{litera}</span>")
+
+def _forma_html(forma_str: str) -> str:
+    """Render formy jako kolorowe badge'e."""
+    if not forma_str or forma_str == "?": return "<span style='color:#555'>brak danych</span>"
+    return "".join(_forma_badge(c) for c in forma_str)
+
+def _trend_forma(forma_str: str) -> tuple:
+    """Zwraca (trend_opis, trend_color)."""
+    if not forma_str or len(forma_str) < 3:
+        return "za mało meczów", "#555"
+    ostatnie2 = forma_str[-2:]
+    w = forma_str.count("W"); l = forma_str.count("L")
+    if ostatnie2 in ("WW",) or w >= 4:
+        return "↗ rosnąca forma", "#4CAF50"
+    if ostatnie2 in ("LL",) or l >= 3:
+        return "↘ spadkowa forma", "#ef5350"
+    if w == l:
+        return "→ stabilna forma", "#FFC107"
+    return "→ zmienna forma", "#888"
+
+def _stat_bar(val, avg_liga, label, unit="", higher_better=True) -> str:
+    """Mini pasek porównania z ligową średnią."""
+    if val is None or avg_liga is None or avg_liga == 0:
+        return f"<span style='color:#555;font-size:0.78em'>{label}: brak</span>"
+    ratio = val / avg_liga
+    pct = min(ratio * 50, 100)  # 50% = średnia ligi
+    c = "#4CAF50" if (ratio > 1.1 and higher_better) or (ratio < 0.9 and not higher_better)         else ("#ef5350" if (ratio < 0.9 and higher_better) or (ratio > 1.1 and not higher_better)         else "#FFC107")
+    bar_w = int(min(pct, 100))
+    diff = val - avg_liga
+    sign = "+" if diff >= 0 else ""
+    return (f"<div style='margin:3px 0'>"
+            f"<div style='display:flex;justify-content:space-between;margin-bottom:2px'>"
+            f"<span style='font-size:0.75em;color:#666'>{label}</span>"
+            f"<span style='font-size:0.75em;color:{c};font-weight:600'>"
+            f"{val:.2f}{unit} <span style='color:#444'>({sign}{diff:.2f})</span></span></div>"
+            f"<div style='background:#1a1c24;border-radius:3px;height:4px'>"
+            f"<div style='background:{c};width:{bar_w}%;height:4px;border-radius:3px'></div>"
+            f"</div></div>")
+
+def render_forma_kontekst(home: str, away: str, pred: dict,
+                           forma_dict: dict, srednie_df, srednie_lig: dict,
+                           odds_buk: dict = None) -> str:
+    """Generuje HTML panel z formą drużyn i kontekstem statystycznym."""
     fh = forma_dict.get(home, "?")
     fa = forma_dict.get(away, "?")
     lh = float(pred.get("lam_h", 1.2))
@@ -1689,90 +1727,122 @@ def generuj_komentarz(home: str, away: str, pred: dict, forma_dict: dict,
     ph = float(pred.get("p_home", 0.33))
     pd_ = float(pred.get("p_draw", 0.33))
     pa = float(pred.get("p_away", 0.33))
-    typ = pred.get("typ", "?")
+    ent = float(pred.get("entropy", 0))
+    avg_h_lig = srednie_lig.get("avg_home", 1.5)
+    avg_a_lig = srednie_lig.get("avg_away", 1.2)
 
-    # ── Deep Value: rozbieżność model vs kurs bukmachera ─────────
-    deep_value_msg = ""
+    # Statystyki per drużyna z srednie_df
+    def _get(team, col, default=None):
+        try:
+            v = srednie_df.loc[team, col]
+            return float(v) if v is not None and str(v) != "nan" else default
+        except Exception: return default
+
+    h_gs   = _get(home, "Gole strzelone (dom)")
+    h_gc   = _get(home, "Gole stracone (dom)")
+    a_gs   = _get(away, "Gole strzelone (wyjazd)")
+    a_gc   = _get(away, "Gole stracone (wyjazd)")
+    h_sot  = _get(home, "SOT (dom)")
+    a_sot  = _get(away, "SOT (wyjazd)")
+    h_konw = _get(home, "Konwersja (dom)")
+    a_konw = _get(away, "Konwersja (wyjazd)")
+    avg_sot_h_lig = srednie_lig.get("avg_sot_home")
+    avg_sot_a_lig = srednie_lig.get("avg_sot_away")
+
+    trend_h, tc_h = _trend_forma(fh)
+    trend_a, tc_a = _trend_forma(fa)
+
+    # Konflikt forma vs model
+    konflikty = []
+    if ph > 0.50 and fh.count("L") >= 3:
+        konflikty.append(f"⚠️ {home}: słaba forma [{fh}] vs model faworyt (λ={lh:.2f}) – model widzi siłę statystyczną, nie serię")
+    elif pa > 0.50 and fa.count("L") >= 3:
+        konflikty.append(f"⚠️ {away}: słaba forma [{fa}] vs model faworyt (λ={la:.2f}) – model widzi siłę statystyczną, nie serię")
+    if ph > 0.50 and fh.count("W") >= 4:
+        konflikty.append(f"✅ {home}: forma [{fh}] zbieżna z modelem")
+    if pa > 0.50 and fa.count("W") >= 4:
+        konflikty.append(f"✅ {away}: forma [{fa}] zbieżna z modelem")
+
+    # Deep value vs bukmacher
+    dv_html = ""
     if odds_buk:
         try:
-            kurs_typ = None
-            if typ == "1":   kurs_typ = float(odds_buk.get("odds_h", 0) or 0)
-            elif typ == "2": kurs_typ = float(odds_buk.get("odds_a", 0) or 0)
-            elif typ == "X": kurs_typ = float(odds_buk.get("odds_d", 0) or 0)
-            fair = float(pred.get("fo_typ", 0) or 0)
-            if kurs_typ and kurs_typ > 1 and fair > 1:
-                rozb = (kurs_typ - fair) / fair
-                if rozb > 0.35:
-                    deep_value_msg = (
-                        f"⚡ Deep Value: rynek {kurs_typ:.2f} vs model {fair:.2f} "
-                        f"({rozb:.0%} rozb.). Rynek może reagować na tabelę/formę, "
-                        f"ignorując siłę statystyczną.")
-                elif rozb > 0.12:
-                    deep_value_msg = (
-                        f"Model widzi edge: fair {fair:.2f} vs buk {kurs_typ:.2f} ({rozb:+.0%}).")
-        except Exception:
-            pass
+            typ = pred.get("typ","?")
+            k_buk = {"1": float(odds_buk.get("odds_h",0) or 0),
+                     "X": float(odds_buk.get("odds_d",0) or 0),
+                     "2": float(odds_buk.get("odds_a",0) or 0)}.get(typ, 0)
+            fo = float(pred.get("fo_typ", 0) or 0)
+            if k_buk > 1 and fo > 1:
+                rozb = (k_buk - fo) / fo
+                if abs(rozb) >= 0.08:
+                    dv_c = "#4CAF50" if rozb > 0 else "#ef5350"
+                    dv_label = "⚡ Rynek płaci więcej niż fair" if rozb > 0 else "⚠️ Rynek poniżej fair"
+                    dv_html = (f"<div style='margin-top:8px;background:#13141c;border-left:3px solid {dv_c};"
+                               f"padding:6px 10px;border-radius:0 4px 4px 0;font-size:0.8em'>"
+                               f"<span style='color:{dv_c};font-weight:700'>{dv_label}:</span> "
+                               f"fair={fo:.2f} · buk={k_buk:.2f} · różnica {rozb:+.0%}</div>")
+        except Exception: pass
 
-    # ── Konflikt forma vs model ───────────────────────────────────
-    forma_ok = True
-    konflikt_opis = ""
-    if ph > 0.45 and fh.count("L") >= 3:
-        forma_ok = False
-        konflikt_opis = (f"⚠️ {home} ma formę [{fh}], ale λ={lh:.2f} sugeruje siłę statystyczną "
-                         f"(model patrzy na SOT/jakość sytuacji, nie ciąg W/L).")
-    elif pa > 0.45 and fa.count("L") >= 3:
-        forma_ok = False
-        konflikt_opis = (f"⚠️ {away} ma formę [{fa}], ale λ={la:.2f} sugeruje siłę statystyczną "
-                         f"(model patrzy na SOT/jakość sytuacji, nie ciąg W/L).")
+    # Entropia – jak przewidywalny mecz?
+    if ent < 0.85:   chaos_label, chaos_c = "Łatwy do typowania", "#4CAF50"
+    elif ent < 1.10: chaos_label, chaos_c = "Umiarkowanie otwarty", "#FFC107"
+    else:            chaos_label, chaos_c = "Losowy mecz", "#ef5350"
 
-    # ── Linia 1: siły i szanse ────────────────────────────────────
-    if lh > la + 0.35:   dom = f"ofensywna przewaga gospod. (λ {lh:.2f} vs {la:.2f})"
-    elif la > lh + 0.35: dom = f"ofensywna przewaga gości (λ {la:.2f} vs {lh:.2f})"
-    else:                 dom = f"wyrównane siły (λ {lh:.2f} vs {la:.2f})"
-    linia1 = f"Model: {ph:.0%}/{pd_:.0%}/{pa:.0%} (1/X/2) · {dom} · śr. {lh+la:.1f} gola."
+    # Buduj HTML
+    konflikty_html = ""
+    if konflikty:
+        konflikty_html = "".join(
+            f"<div style='font-size:0.78em;color:#aaa;margin:3px 0;padding:4px 8px;"
+            f"background:#13141c;border-radius:4px'>{k}</div>"
+            for k in konflikty)
 
-    # ── Linia 2: forma lub konflikt ───────────────────────────────
-    if not forma_ok:
-        linia2 = konflikt_opis
-    else:
-        linia2 = f"Forma 5M: {home} [{fh}], {away} [{fa}] – spójna z predykcją modelu."
+    html = (
+        f"<div style='background:#0d0f14;border:1px solid #1e2028;border-radius:8px;"
+        f"padding:12px 14px;font-family:inherit'>"
+        # Wiersz drużyn
+        f"<div style='display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:start'>"
+        # Lewa: dom
+        f"<div>"
+        f"<div style='font-size:0.8em;color:#555;margin-bottom:4px'>🏠 {home}</div>"
+        f"<div style='margin-bottom:6px'>{_forma_html(fh)}</div>"
+        f"<div style='font-size:0.75em;color:{tc_h}'>{trend_h}</div>"
+        + _stat_bar(h_gs, avg_h_lig, "Gole strzel. (dom)")
+        + _stat_bar(h_gc, avg_h_lig, "Gole strac. (dom)", higher_better=False)
+        + ((_stat_bar(h_sot, avg_sot_h_lig, "SOT (dom)")) if h_sot and avg_sot_h_lig else "")
+        + f"</div>"
+        # Środek: szanse
+        f"<div style='text-align:center;padding:0 8px'>"
+        f"<div style='font-size:0.7em;color:#444;margin-bottom:4px'>MODEL</div>"
+        f"<div style='font-size:1.1em;font-weight:800;color:#eee'>"
+        f"<span style='color:#2196F3'>{ph:.0%}</span> · "
+        f"<span style='color:#FF9800'>{pd_:.0%}</span> · "
+        f"<span style='color:#E91E63'>{pa:.0%}</span></div>"
+        f"<div style='font-size:0.65em;color:#444;margin-top:2px'>1 · X · 2</div>"
+        f"<div style='margin-top:8px;font-size:0.7em;color:{chaos_c}'>{chaos_label}</div>"
+        f"<div style='font-size:0.68em;color:#444'>H={ent:.2f}</div>"
+        f"<div style='margin-top:8px'>"
+        f"<div style='font-size:0.7em;color:#444'>λ domu</div>"
+        f"<div style='font-size:0.95em;font-weight:700;color:#eee'>{lh:.2f}</div>"
+        f"<div style='font-size:0.7em;color:#444;margin-top:4px'>λ gości</div>"
+        f"<div style='font-size:0.95em;font-weight:700;color:#eee'>{la:.2f}</div>"
+        f"</div></div>"
+        # Prawa: wyjazd
+        f"<div style='text-align:right'>"
+        f"<div style='font-size:0.8em;color:#555;margin-bottom:4px'>{away} ✈️</div>"
+        f"<div style='margin-bottom:6px;text-align:right'>{_forma_html(fa)}</div>"
+        f"<div style='font-size:0.75em;color:{tc_a};text-align:right'>{trend_a}</div>"
+        + _stat_bar(a_gs, avg_a_lig, "Gole strzel. (wyjazd)")
+        + _stat_bar(a_gc, avg_a_lig, "Gole strac. (wyjazd)", higher_better=False)
+        + ((_stat_bar(a_sot, avg_sot_a_lig, "SOT (wyjazd)")) if a_sot and avg_sot_a_lig else "")
+        + f"</div>"
+        f"</div>"
+        # Dół: konflikty + deep value
+        + (f"<div style='margin-top:8px;border-top:1px solid #1e2028;padding-top:8px'>{konflikty_html}</div>" if konflikty_html else "")
+        + dv_html
+        + f"</div>"
+    )
+    return html
 
-    parts = [linia1, linia2]
-    if deep_value_msg:
-        parts.append(deep_value_msg)
-
-    # ── Fallback: Anthropic API ───────────────────────────────────
-    try:
-        import anthropic
-        key = st.secrets.get("ANTHROPIC_API_KEY", None)
-        if key:
-            client = anthropic.Anthropic(api_key=key)
-            odds_ctx = ""
-            if odds_buk:
-                odds_ctx = (f"Kursy buka: 1={odds_buk.get('odds_h','?')} "
-                            f"X={odds_buk.get('odds_d','?')} 2={odds_buk.get('odds_a','?')}. ")
-            prompt = (
-                f"Jesteś chłodnym analitykiem statystycznym. "
-                f"NIE piszesz naiwnie o formie. Wyjaśniasz CO widzi model i DLACZEGO "
-                f"może różnić się od kursu bukmachera.\n"
-                f"Mecz: {home} vs {away}\n"
-                f"lambda: {lh:.2f}/{la:.2f} | P: {ph:.1%}/{pd_:.1%}/{pa:.1%}\n"
-                f"Forma: {home}=[{fh}] {away}=[{fa}]\n"
-                f"{odds_ctx}"
-                f"Sygnały: konflikt_formy={not forma_ok}, deep_value={bool(deep_value_msg)}\n"
-                f"2-3 zdania po polsku. Jeśli forma kłóci się z modelem – wyjaśnij "
-                f"(model patrzy na SOT/xG-proxy, nie ciąg W/L). "
-                f"Jeśli deep value – nazwij wprost."
-            )
-            msg = client.messages.create(
-                model="claude-3-5-sonnet-20241022", max_tokens=250,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return msg.content[0].text.strip()
-    except Exception:
-        pass
-
-    return " ".join(parts)
 
 # ===========================================================================
 # HELPERS UI
@@ -2561,7 +2631,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             """)
 
         tgl1, tgl2 = st.columns(2)
-        with tgl1: pokaz_komentarz = st.toggle("💬 Komentarz", value=True)
+        with tgl1: pokaz_komentarz = st.toggle("📊 Forma & Kontekst", value=True)
         with tgl2: pokaz_macierz  = st.toggle("🔢 Macierz wyników", value=False)
 
         if not schedule.empty and not srednie_df.empty:
@@ -2948,8 +3018,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
 
                                 if pokaz_komentarz:
                                     _odds_buk_kom = _kurs_live_1x2 if '_kurs_live_1x2' in dir() else None
-                                    st.info(generuj_komentarz(h, a, pred, forma_dict,
-                                                              odds_buk=_odds_buk_kom))
+                                    _fk_html = render_forma_kontekst(
+                                        h, a, pred, forma_dict, srednie_df, srednie_lig,
+                                        odds_buk=_odds_buk_kom)
+                                    st.markdown(_fk_html, unsafe_allow_html=True)
 
                                 if pokaz_macierz:
                                     st.markdown("**Macierz wyników**")
@@ -5075,12 +5147,17 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
         if _diag_df.empty:
             st.info("Uruchom backtest powyzej aby zobaczyc diagnostyke modelu.")
         else:
+            # Normalizuj kolumny nazw (DB: home/away, CSV: dom/gosc)
+            if "home" in _diag_df.columns and "dom" not in _diag_df.columns:
+                _diag_df = _diag_df.rename(columns={"home": "dom", "away": "gosc"})
             for _c in ["p_typ","p_home","p_draw","p_away"]:
                 if _c in _diag_df.columns:
                     _diag_df[_c] = pd.to_numeric(
                         _diag_df[_c].astype(str).str.replace(",","."), errors="coerce")
-            _diag_df["hit"] = (_diag_df["trafiony"] == "TAK").astype(int)
-            _diag_df = _diag_df.dropna(subset=["p_typ","hit"])
+            # trafiony może być int (0/1 z DB) lub string ("TAK"/"NIE" z CSV)
+            _diag_df["hit"] = _diag_df["trafiony"].apply(
+                lambda x: 1 if x in (1, True, "TAK", "1", 1.0) else 0)
+            _diag_df = _diag_df.dropna(subset=["p_typ"])
             _n_total  = len(_diag_df)
             _n_hit    = int(_diag_df["hit"].sum())
             _n_miss   = _n_total - _n_hit
