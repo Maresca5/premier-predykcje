@@ -14,7 +14,7 @@ import itertools
 try:
     import backtest as _bt
     _BT_OK = True
-except ImportError:
+except Exception:
     _BT_OK = False
 
 try:
@@ -2640,11 +2640,14 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
                         sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
 
-                        # Confidence: czysty label, pasek wewnątrz
+                        # Confidence: mini-pill w nagłówku
+                        _cpill = {"High": "●●●", "Medium": "●●○", "Coinflip": "●○○"}.get(pred["conf_level"], "●○○")
+                        _cpill_col = {"High": "#4CAF50", "Medium": "#FF9800", "Coinflip": "#F44336"}.get(pred["conf_level"], "#888")
                         label_t2 = (
                             f"{h}  –  {a}"
                             f"   {data_meczu}"
                             f"   {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
+                            f"   {_cpill}"
                         )
                         with kolumna:
                             with st.expander(label_t2, expanded=False):
@@ -4079,7 +4082,6 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
         # ── Kalibracja (połączone z Skutecznością) ─────────────────────
         st.divider()
         st.subheader("📉 Kalibracja modelu & Rolling Performance")
-        st.subheader("📉 Kalibracja modelu & Rolling Performance")
         st.caption("Kalibracja: czy model mówi 65% → trafia ~65%? Rolling: jak ewoluuje jakość modelu w czasie.")
 
         st.markdown("### 📈 Rolling Performance (okno 50 zdarzeń)")
@@ -4142,15 +4144,48 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
         bpk_df = brier_per_kolejka(wybrana_liga)
         if not bpk_df.empty and len(bpk_df) >= 2:
             st.divider()
-            st.markdown("### 📊 Brier Score per kolejka")
-            bpk_chart = bpk_df[["kolejnosc","brier","hit_rate"]].rename(
-                columns={"kolejnosc":"Kolejka","brier":"Brier Score","hit_rate":"Hit Rate"}
-            ).set_index("Kolejka")
-            st.line_chart(bpk_chart, height=180)
-            worst_k  = bpk_df.loc[bpk_df["brier"].idxmax(), "kolejnosc"]
-            best_k   = bpk_df.loc[bpk_df["brier"].idxmin(), "kolejnosc"]
-            st.caption(f"Najlepsza kolejka: **{int(best_k)}** ({bpk_df['brier'].min():.4f}) · "
-                       f"Najgorsza: **{int(worst_k)}** ({bpk_df['brier'].max():.4f})")
+            st.markdown("### 📊 Brier Score & Hit Rate per kolejka")
+            # Wizualizacja jako kompaktowe paski – czytelna na telefonie
+            _bpk_sorted = bpk_df.sort_values("kolejnosc")
+            _bpk_brier_max = float(_bpk_sorted["brier"].max()) or 0.33
+            _bpk_rows = []
+            for _, _brow in _bpk_sorted.iterrows():
+                _bk   = int(_brow["kolejnosc"])
+                _bb   = float(_brow["brier"])
+                _bhr  = float(_brow.get("hit_rate", 0))
+                _bbc  = "#4CAF50" if _bb < 0.22 else ("#FF9800" if _bb < 0.27 else "#F44336")
+                _bhrc = "#4CAF50" if _bhr >= 0.62 else ("#FF9800" if _bhr >= 0.50 else "#F44336")
+                _bbw  = int(_bb / 0.33 * 100)  # 0.33 = baseline losowy
+                _bhrw = int(_bhr * 100)
+                _bpk_rows.append(
+                    f"<tr>"
+                    f"<td style='padding:4px 8px;color:#666;font-size:0.8em;white-space:nowrap'>K{_bk}</td>"
+                    f"<td style='padding:4px 8px;width:38%'>"
+                    f"<div style='display:flex;align-items:center;gap:4px'>"
+                    f"<div style='flex:1;background:#1a1c24;border-radius:2px;height:5px'>"
+                    f"<div style='background:{_bbc};width:{_bbw}%;height:5px;border-radius:2px'></div></div>"
+                    f"<span style='color:{_bbc};font-size:0.78em;min-width:38px'>{_bb:.4f}</span></div></td>"
+                    f"<td style='padding:4px 8px;width:38%'>"
+                    f"<div style='display:flex;align-items:center;gap:4px'>"
+                    f"<div style='flex:1;background:#1a1c24;border-radius:2px;height:5px'>"
+                    f"<div style='background:{_bhrc};width:{_bhrw}%;height:5px;border-radius:2px'></div></div>"
+                    f"<span style='color:{_bhrc};font-size:0.78em;min-width:34px'>{_bhr:.0%}</span></div></td>"
+                    f"</tr>"
+                )
+            st.markdown(
+                "<div style='overflow-x:auto;border-radius:6px;border:1px solid #1e2028;max-height:260px;overflow-y:auto'>"
+                "<table style='width:100%;border-collapse:collapse'>"
+                "<thead><tr style='background:#13141c;color:#444;font-size:0.7em;text-transform:uppercase;position:sticky;top:0'>"
+                "<th style='padding:5px 8px'>Kolejka</th>"
+                "<th style='padding:5px 8px;text-align:left'>Brier ↓</th>"
+                "<th style='padding:5px 8px;text-align:left'>Hit Rate ↑</th>"
+                f"</tr></thead><tbody>{''.join(_bpk_rows)}</tbody></table></div>",
+                unsafe_allow_html=True
+            )
+            _worst_k = bpk_df.loc[bpk_df["brier"].idxmax(), "kolejnosc"]
+            _best_k  = bpk_df.loc[bpk_df["brier"].idxmin(), "kolejnosc"]
+            st.caption(f"Najlepsza kolejka: **{int(_best_k)}** ({bpk_df['brier'].min():.4f}) · "
+                       f"Najgorsza: **{int(_worst_k)}** ({bpk_df['brier'].max():.4f})")
 
         st.divider()
         st.markdown("### 🎯 Confidence Calibration")
@@ -4475,55 +4510,103 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
 
             st.divider()
 
-            # ── Equity Curve per Liga ─────────────────────────────────────────
-            st.markdown("### 📈 Equity Curve per Liga *(flat 1j, ROI kumulatywny)*")
+
+            # ── Bankroll per Liga (Kelly simulation) ─────────────────────────
+            st.markdown("### 💰 Symulacja bankrollu per liga *(Kelly 1/8, start 1000 zł)*")
+            st.caption("Każda linia = osobna symulacja Kelly na historii predykcji. Tylko typy z EV≥5% i kursem 1.30–3.50.")
             try:
-                import plotly.graph_objects as go
+                import plotly.graph_objects as _go_g
 
-                _g_df_sorted = _g_df.copy()
-                _g_df_sorted["data"] = pd.to_datetime(_g_df_sorted["data"], errors="coerce")
-                _g_df_sorted = _g_df_sorted.dropna(subset=["data"]).sort_values("data")
-
-                _lig_colors = {
+                _lig_colors_g = {
                     "Premier League": "#00d4ff",
                     "La Liga":        "#ff6b35",
                     "Bundesliga":     "#ffd700",
                     "Serie A":        "#4CAF50",
                     "Ligue 1":        "#b44aff",
                 }
-                _fig_eq = go.Figure()
-                for _lname, _ldf_eq in _g_df_sorted.groupby("liga"):
-                    _ldf_eq = _ldf_eq.sort_values("data").reset_index(drop=True)
-                    _kap = 0.0
-                    _eq_pts = []
-                    for _, _r in _ldf_eq.iterrows():
-                        _fo = _r["fair_odds"] if _r["fair_odds"] > 1 else 2.0
-                        _kap += (_fo - 1) if _r["trafione"] == 1 else -1
-                        _eq_pts.append(round(_kap, 3))
-                    _col = _lig_colors.get(_lname, "#888")
-                    _fig_eq.add_trace(go.Scatter(
-                        x=list(range(len(_eq_pts))),
-                        y=_eq_pts,
-                        mode="lines",
-                        name=_lname,
-                        line=dict(color=_col, width=2),
-                        hovertemplate=f"<b>{_lname}</b><br>Typ #%{{x}}<br>PnL: %{{y:+.2f}}j<extra></extra>"
+                KELLY_START_G  = 1000.0
+                KELLY_FRAC_G   = 0.125
+                KELLY_MIN_EV_G = 0.05
+                KELLY_MIN_K_G  = 1.30
+                KELLY_MAX_K_G  = 3.50
+                KELLY_TOP_G    = 3
+
+                _g_df_k = _g_df.copy()
+                _g_df_k["data"] = pd.to_datetime(_g_df_k["data"], errors="coerce")
+                _g_df_k = _g_df_k.dropna(subset=["data"]).sort_values("data").reset_index(drop=True)
+
+                # EV i kurs
+                _g_df_k["_kurs"] = _g_df_k["fair_odds"].where(
+                    (_g_df_k["fair_odds"] >= KELLY_MIN_K_G) & (_g_df_k["fair_odds"] <= KELLY_MAX_K_G))
+                _g_df_k["_ev"] = _g_df_k.apply(
+                    lambda r: float(r["p_model"]) * r["_kurs"] - 1.0
+                    if pd.notna(r["_kurs"]) else -999.0, axis=1)
+
+                _fig_bk = _go_g.Figure()
+                _final_bk = {}
+
+                for _lname_g, _ldf_g in _g_df_k.groupby("liga"):
+                    _ldf_g = _ldf_g.sort_values("data").reset_index(drop=True)
+                    # Top N per "dzień" wg EV
+                    _ldf_g["_date_grp"] = _ldf_g["data"].dt.date
+                    _sel_idx = (_ldf_g[_ldf_g["_ev"] >= KELLY_MIN_EV_G]
+                                .groupby("_date_grp")
+                                .apply(lambda x: x.nlargest(KELLY_TOP_G, "_ev"))
+                                .index.get_level_values(-1))
+                    _ldf_g["_sel"] = _ldf_g.index.isin(_sel_idx)
+
+                    _bk_g = KELLY_START_G
+                    _bk_pts = [KELLY_START_G]
+                    _bk_dates = [_ldf_g["data"].iloc[0] if len(_ldf_g) else pd.Timestamp.now()]
+                    for _, _rg in _ldf_g.iterrows():
+                        if _rg["_sel"] and pd.notna(_rg["_kurs"]):
+                            _pt = float(_rg["p_model"])
+                            _b  = _rg["_kurs"] - 1.0
+                            _fk = max((_pt * _b - (1 - _pt)) / max(_b, 0.001), 0.0)
+                            _st = round(min(_bk_g * _fk * KELLY_FRAC_G, _bk_g * 0.05), 2)
+                            if _st > 0:
+                                _bk_g += _st * _b if _rg["trafione"] == 1 else -_st
+                                _bk_g = max(_bk_g, 0.01)
+                        _bk_pts.append(round(_bk_g, 2))
+                        _bk_dates.append(_rg["data"])
+                    _final_bk[_lname_g] = round(_bk_g, 0)
+                    _col_g = _lig_colors_g.get(_lname_g, "#888")
+                    _line_col = _col_g if _bk_g >= KELLY_START_G else "#F44336"
+                    _fig_bk.add_trace(_go_g.Scatter(
+                        x=_bk_dates, y=_bk_pts,
+                        mode="lines", name=_lname_g,
+                        line=dict(color=_line_col, width=2.5),
+                        hovertemplate=f"<b>{_lname_g}</b><br>%{{x|%d.%m.%Y}}<br>Bankroll: %{{y:.0f}} zł<extra></extra>"
                     ))
-                # Linia zerowa
-                _max_x = max(len(_g_df_sorted[_g_df_sorted["liga"]==l]) for l in _g_df_sorted["liga"].unique())
-                _fig_eq.add_hline(y=0, line_dash="dash", line_color="#333", line_width=1)
-                _fig_eq.update_layout(
+
+                _fig_bk.add_hline(y=KELLY_START_G, line_dash="dot",
+                                  line_color="#444", line_width=1.5,
+                                  annotation_text="Start 1000 zł",
+                                  annotation_font_color="#555")
+                _fig_bk.update_layout(
                     paper_bgcolor="#0d0f14", plot_bgcolor="#0d0f14",
-                    height=360, margin=dict(l=40, r=20, t=20, b=40),
-                    xaxis=dict(title="Typ #", color="#555", gridcolor="#1a1c24", showgrid=True),
-                    yaxis=dict(title="PnL (jednostki)", color="#555", gridcolor="#1a1c24",
-                               zeroline=True, zerolinecolor="#333"),
+                    height=380, margin=dict(l=40, r=20, t=20, b=40),
+                    xaxis=dict(title="Data", color="#555", gridcolor="#1a1c24"),
+                    yaxis=dict(title="Bankroll (zł)", color="#555", gridcolor="#1a1c24",
+                               zeroline=False),
                     legend=dict(bgcolor="#0d0f14", bordercolor="#2a2a3a", borderwidth=1,
                                 font=dict(color="#aaa", size=11)),
-                    font=dict(color="#888"),
-                    hovermode="x unified",
+                    font=dict(color="#888"), hovermode="x unified",
                 )
-                st.plotly_chart(_fig_eq, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(_fig_bk, use_container_width=True, config={"displayModeBar": False})
+
+                # Mini podsumowanie końcowych bankrollów
+                if _final_bk:
+                    _fbk_cols = st.columns(len(_final_bk))
+                    for _fbi, (_fbl, _fbv) in enumerate(sorted(_final_bk.items(), key=lambda x: -x[1])):
+                        _fbc = "#4CAF50" if _fbv >= KELLY_START_G else "#F44336"
+                        _fbcol = _lig_colors_g.get(_fbl, "#888")
+                        _fbk_cols[_fbi].markdown(
+                            f"<div style='text-align:center;padding:8px 4px'>"
+                            f"<div style='font-size:0.72em;color:{_fbcol};font-weight:600'>{_fbl}</div>"
+                            f"<div style='font-size:1.2em;font-weight:800;color:{_fbc}'>{_fbv:.0f} zł</div>"
+                            f"<div style='font-size:0.68em;color:#555'>{(_fbv-KELLY_START_G):+.0f} zł</div>"
+                            f"</div>", unsafe_allow_html=True)
             except ImportError:
                 st.info("Plotly niedostępny – zainstaluj `plotly` aby zobaczyć wykres.")
 
@@ -4828,17 +4911,21 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                         _eq_flat  = summ["equity_df"].copy()
                         _eq_kelly = summ.get("equity_kelly_df", pd.DataFrame())
                         if not _eq_kelly.empty:
-                            # Normalizuj flat do 1000 zł bazowo dla porównania
                             _eq_flat_n = _eq_flat.set_index("kolejka")["equity"]
                             _eq_flat_n = 1000 + _eq_flat_n * (1000 / max(abs(_eq_flat_n).max(), 1))
                             _eq_k_n    = _eq_kelly.set_index("kolejka")["bankroll_kelly"]
+                            _kelly_col = "#4CAF50" if _k_end >= 1000 else "#F44336"
                             _chart_eq  = pd.DataFrame({
                                 "Flat (norm. 1000 zł)": _eq_flat_n,
                                 "Kelly (zł)":           _eq_k_n,
                             }).dropna()
                             st.line_chart(_chart_eq, height=220,
-                                          color=["#888888", "#4CAF50"])
-                            st.caption("Szara = flat betting znormalizowany · Zielona = Kelly bankroll")
+                                          color=["#555555", _kelly_col])
+                            _kelly_status = "✅ Zysk" if _k_end >= 1000 else "🔴 Strata"
+                            st.caption(
+                                f"Szara = flat betting (znorm.) · "
+                                f"<span style='color:{_kelly_col};font-weight:600'>{_kelly_status}: Kelly bankroll</span>",
+                                unsafe_allow_html=True)
                         else:
                             _eq_f = _eq_flat.rename(columns={"equity":"Kapitał"}).set_index("kolejka")
                             st.line_chart(_eq_f["Kapitał"], height=220)
