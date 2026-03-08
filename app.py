@@ -819,8 +819,13 @@ def wybierz_typ(p_home: float, p_draw: float, p_away: float,
     p_home, p_draw, p_away = kalibruj_prawdopodobienstwa(
         p_home, p_draw, p_away, csv_code, n_train)
     p_1x = p_home + p_draw; p_x2 = p_away + p_draw
-    if p_home >= PROG_PEWNY: return "1",  p_home
-    if p_away >= PROG_PEWNY: return "2",  p_away
+    # Bundesliga (D1): wyłącz singiele – backtest 2324/2425:
+    #   Typ=1 overconfidence +23-33pp vs tylko +4-18pp dla 1X/X2
+    #   Hit rate singlei 47-59% vs 58-76% dla 1X/X2
+    is_bundesliga = (csv_code == "D1")
+    if not is_bundesliga:
+        if p_home >= PROG_PEWNY: return "1",  p_home
+        if p_away >= PROG_PEWNY: return "2",  p_away
     if p_1x >= PROG_PODWOJNA or p_x2 >= PROG_PODWOJNA:
         return ("1X", p_1x) if p_1x >= p_x2 else ("X2", p_x2)
     probs = {"1": p_home, "X": p_draw, "2": p_away}
@@ -829,9 +834,13 @@ def wybierz_typ(p_home: float, p_draw: float, p_away: float,
 
 # ── Market Noise & Kelly helpers ──────────────────────────────────────
 MARKET_NOISE_MAX = 0.25
-KELLY_FRACTION   = 0.125         # 1/8 Kelly – default po analizie backtestów
-                                 # (1/4 dało MaxDD=70%, 1/8 daje MaxDD=42% przy podobnym ROI)
+KELLY_FRACTION   = 0.125         # 1/8 Kelly – default
 KELLY_BANKROLL_DEFAULT = 1000.0
+# Conservative Kelly – shrinkage prawdopodobieństwa TYLKO do Kelly/EV
+# Symulacja (5 lig × 2 sezony): -15% nadwyżki + KF/2 → MaxDD 55%→33%
+# p_kelly = 0.5 + (p_model - 0.5) * KELLY_PROB_SCALE
+KELLY_PROB_SCALE = 0.85          # -15% nadwyżki powyżej 50%
+KELLY_FRAC_SCALE = 0.50          # Half-Kelly na wyjście stawki
 
 # Per-rynek ułamki Kelly – obniżone o 50% względem poprzednich wartości
 # Analiza backtestu E0 2425: model zawyża p przy faworytach (p=0.80 → actual 50%)
@@ -871,13 +880,12 @@ def kelly_stake(p_model, kurs_buk, bankroll=KELLY_BANKROLL_DEFAULT,
             fraction = KELLY_FRACTIONS.get(rynek, KELLY_FRACTION)
 
         # Kalibracja liniowa p_model przed Kelly
-        # Backtest E0 2425: model systematycznie zawyża p przy faworytach
-        # Analiza: actual_hr = 0.88 * p_model + 0.06 (fit na 169 value bets)
-        # Stosujemy tylko do Kelly, nie do wyświetlanego prawdopodobieństwa
-        CALIB_SLOPE     = 0.88
-        CALIB_INTERCEPT = 0.06
-        p_kelly = float(p_model) * CALIB_SLOPE + CALIB_INTERCEPT
+        # Conservative Kelly: p_kelly = 0.5 + (p_model - 0.5) * KELLY_PROB_SCALE
+        # Symulacja 5 lig × 2 sezony: -15% nadwyżki + Half-Kelly → MaxDD 55%→33%
+        # Stosujemy TYLKO do Kelly, nie do wyświetlanego p_model ani EV
+        p_kelly = 0.5 + (float(p_model) - 0.5) * KELLY_PROB_SCALE
         p_kelly = max(0.01, min(0.99, p_kelly))
+        fraction = fraction * KELLY_FRAC_SCALE  # Half-Kelly
 
         # Rynki z fraction=0 są wyłączone z Kelly (tylko informacyjne)
         if fraction == 0.0:
@@ -2078,19 +2086,19 @@ with st.sidebar.expander("💼 Kelly & Bankroll", expanded=True):
         step=100.0, key="_br_widget", help="Kwota do obliczeń Kelly")
     st.session_state["bankroll"] = _br_input
     _kelly_frac_options = {
-        "🛡️ Bezpieczny (1/8)": 0.125,
-        "⚖️ Standardowy (1/4)": 0.25,
-        "🔥 Agresywny (1/2)":   0.5,
+        "🛡️ Konserwatywny (1/16)": 0.0625,
+        "⚖️ Standardowy (1/8)":    0.125,
+        "🔥 Agresywny (1/4)":      0.25,
     }
     _kelly_frac_label = st.select_slider(
         "Poziom ryzyka",
         options=list(_kelly_frac_options.keys()),
-        value=st.session_state.get("kelly_frac_label", "🛡️ Bezpieczny (1/8)"),
+        value=st.session_state.get("kelly_frac_label", "⚖️ Standardowy (1/8)"),
         key="_kf_slider")
     st.session_state["kelly_frac_label"] = _kelly_frac_label
     st.session_state["kelly_frac"]       = _kelly_frac_options[_kelly_frac_label]
     _kelly_info_val = _br_input * st.session_state["kelly_frac"] * 0.3
-    st.caption(f"Typowa stawka ~**{_kelly_info_val:.0f} zł** · max 5%/mecz · EV≥5%")
+    st.caption(f"Typowa stawka ~**{_kelly_info_val:.0f} zł** · Conservative Kelly (-15% p + Half-KF) · max 5%/mecz · EV≥5%")
 
 with st.spinner(f"⚙️ Model Dixon-Coles analizuje dane {wybrana_liga}..."):
     historical = load_historical(LIGI[wybrana_liga]["csv_code"])
@@ -2294,7 +2302,7 @@ if not historical.empty:
                 "<p style='font-size:0.72em;color:#444;margin:8px 0 16px 0'>"
                 "✦ = fair odds (brak danych bukmachera) · "
                 "EV = prawdopodobieństwo modelu × kurs − 1 · "
-                "Kelly = optymalna stawka przy bankrollu 1000 zł</p>",
+                "Kelly = Conservative Kelly (p×0.85, Half-KF) · bankroll 1000 zł</p>",
                 unsafe_allow_html=True)
             st.markdown("---")
 
@@ -3799,7 +3807,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             st.markdown(
                 "<div class='section-header'>💰 Symulacja Kelly – bieżący sezon"
                 "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
-                "top 3 typy/kolejkę · Pinnacle/B365 1.30–3.50 · frakcja 1/8"
+                "top 3 typy/kolejkę · Pinnacle/B365 1.30–3.50 · Conservative Kelly"
                 "</span></div>",
                 unsafe_allow_html=True)
 
