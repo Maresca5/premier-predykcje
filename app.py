@@ -3745,8 +3745,15 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     k = _calc(m.get("B365H"), m.get("B365D"), m.get("B365A"))
                 return k
 
-            # Kelly parametry – muszą być zdefiniowane przed lambdą poniżej
-            _KS   = 1000.0; _KF = 0.125; _KMAX = 0.05; _KEV = 0.05; _KMAX_ODDS = 3.50; _KEV_CAP = None
+            # Kelly parametry – Conservative Kelly (zsynchronizowane z oblicz_kelly())
+            # KELLY_PROB_SCALE=0.85 (-15% nadwyżki), KELLY_FRAC_SCALE=0.50 (Half-Kelly)
+            _KS    = 1000.0
+            _KF    = 0.125 * KELLY_FRAC_SCALE   # Half-Kelly: 0.0625
+            _KMAX  = 0.05; _KEV = 0.05; _KMAX_ODDS = 3.50; _KEV_CAP = None
+
+            def _conservative_p(p):
+                """Shrinkage identyczny z oblicz_kelly(): -15% nadwyżki powyżej 50%"""
+                return 0.5 + (float(p) - 0.5) * KELLY_PROB_SCALE
 
             _eq_df["kurs_buk"] = _eq_df.apply(_kurs_live, axis=1)
 
@@ -3776,10 +3783,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     _bk_flat += _pv
                     _flat_vals.append(round(_bk_flat, 2))
 
-                # Kelly – top 3 z EV≥5% i kursem 1.30–3.50
+                # Kelly – top 3 z EV≥5% i kursem 1.35–3.50 · Conservative Kelly
                 _cand = _grp[_grp["ev"].notna() & (_grp["ev"] >= _KEV)].nlargest(3, "ev")
                 for _, _r in _cand.iterrows():
-                    _pt  = float(_r["p_model"])
+                    _pt  = _conservative_p(_r["p_model"])   # shrinkage -15%
                     _k   = float(_r["kurs_buk"])
                     _b   = _k - 1
                     _f   = min(max((_pt*_b-(1-_pt))/_b, 0.0) * _KF, _KMAX)
@@ -4378,7 +4385,7 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
 
     try:
         import sqlite3 as _sq3, pandas as _pd_ev
-        _db_ev = _sq3.connect(DB_PATH)
+        _db_ev = _sq3.connect(DB_FILE)
         _ev_df = _pd_ev.read_sql_query(
             """SELECT p_model, fair_odds, trafione, typ, kolejnosc
                FROM zdarzenia
