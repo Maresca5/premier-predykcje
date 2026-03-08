@@ -2899,6 +2899,37 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                             f"<b>{_dts_team_name}</b>: {_dts['msg']}</div>",
                                             unsafe_allow_html=True)
 
+                                # ── Filtr tempa chaosu ────────────────────
+                                try:
+                                    _tempo_h = historical[historical["HomeTeam"] == h]
+                                    _tempo_a = historical[historical["AwayTeam"] == a]
+                                    if not _tempo_h.empty and not _tempo_a.empty and \
+                                       "HC" in historical.columns and "AC" in historical.columns:
+                                        # Średnia rożnych (corners) obu drużyn z ostatnich 5 meczów
+                                        _c_h = pd.to_numeric(_tempo_h["HC"].tail(5), errors="coerce").mean()
+                                        _c_a = pd.to_numeric(_tempo_a["AC"].tail(5), errors="coerce").mean()
+                                        # Średnia ligowa corners per mecz (pełna tabela)
+                                        _c_league = pd.to_numeric(
+                                            pd.concat([historical["HC"], historical["AC"]]),
+                                            errors="coerce").mean()
+                                        _tempo_score = (_c_h + _c_a)
+                                        _tempo_p80 = _c_league * 2 * 1.35  # ~80. percentyl
+                                        if pd.notna(_tempo_score) and _tempo_score > _tempo_p80:
+                                            st.markdown(
+                                                f"<div style='background:#1a0a00;border:1px solid #FF6B35;"
+                                                f"border-radius:5px;padding:5px 10px;margin:3px 0;"
+                                                f"font-size:0.76em;color:#FF6B35'>"
+                                                f"⚡ <b>Wysokie tempo</b> – avg corners: "
+                                                f"{h[:10]} <b>{_c_h:.1f}</b> + "
+                                                f"{a[:10]} <b>{_c_a:.1f}</b> = "
+                                                f"<b>{_tempo_score:.1f}</b> "
+                                                f"(próg ligi: {_tempo_p80:.1f}). "
+                                                f"Zwiększona nieprzewidywalność – rozważ mniejszą stawkę."
+                                                f"</div>",
+                                                unsafe_allow_html=True)
+                                except Exception:
+                                    pass
+
                                 if _OA_OK and _oa_key and _oa_cached:
                                     _o = _oa.znajdz_kursy(h, a, _oa_cached)
                                     if _o:
@@ -3923,251 +3954,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
 
         st.divider()
 
-        st.divider()
-
-        # ── Edge Distribution (EV histogram) ─────────────────────────────
-        _con_edge = sqlite3.connect(DB_FILE)
-        _edge_df  = pd.read_sql_query(
-            """SELECT p_model, fair_odds, trafione, rynek
-               FROM zdarzenia
-               WHERE liga=? AND trafione IS NOT NULL AND fair_odds IS NOT NULL AND fair_odds > 1""",
-            _con_edge, params=(wybrana_liga,))
-        _con_edge.close()
-
-        if len(_edge_df) >= 10:
-            _edge_df = _edge_df.copy()
-            # EV = p_model * fair_odds - 1
-            _edge_df["ev"] = _edge_df["p_model"] * _edge_df["fair_odds"] - 1
-            # Podziel na buckety
-            _ev_bins  = [-1.0, -0.10, -0.05, 0.0, 0.05, 0.10, 0.20, 0.30, 2.0]
-            _ev_labs  = ["< -10%", "-10–5%", "-5–0%", "0–5%", "5–10%", "10–20%", "20–30%", "> 30%"]
-            _edge_df["bucket"] = pd.cut(_edge_df["ev"], bins=_ev_bins, labels=_ev_labs)
-            _bkt_grp  = _edge_df.groupby("bucket", observed=True).agg(
-                n=("ev", "count"),
-                hit_rate=("trafione", "mean"),
-                total_pnl=("ev", lambda x: (
-                    sum((_edge_df.loc[x.index, "fair_odds"] - 1)
-                        .where(_edge_df.loc[x.index, "trafione"] == 1, -1))
-                ))
-            ).reset_index()
-
-            st.divider()
-            st.markdown("**📊 Edge Distribution – skąd pochodzi zysk?**")
-            st.caption("Jeśli większość PnL pochodzi z bucketów EV 5-20% → stabilny system. Jeśli z > 30% → uważaj na małą próbkę.")
-
-            _ed_rows = []
-            for _, bk in _bkt_grp.iterrows():
-                if bk["n"] == 0: continue
-                pnl = bk["total_pnl"]
-                pnl_c = "#4CAF50" if pnl > 0 else "#F44336"
-                bar_w = min(int(abs(pnl) / max(_bkt_grp["total_pnl"].abs().max(), 0.01) * 80), 80)
-                bar_c = "#4CAF50" if pnl > 0 else "#F44336"
-                hr = bk["hit_rate"]
-                _ed_rows.append(
-                    f"<tr style='border-bottom:1px solid #1a1a2e'>"
-                    f"<td style='padding:5px 10px;color:#aaa;font-size:0.84em'>{bk['bucket']}</td>"
-                    f"<td style='padding:5px 8px;text-align:center;color:#666'>{int(bk['n'])}</td>"
-                    f"<td style='padding:5px 8px;text-align:center;color:#888'>{hr:.0%}</td>"
-                    f"<td style='padding:5px 8px'>"
-                    f"<div style='display:flex;align-items:center;gap:6px'>"
-                    f"<div style='background:{bar_c};width:{bar_w}px;height:8px;border-radius:2px'></div>"
-                    f"<span style='color:{pnl_c};font-weight:bold;font-size:0.84em'>{pnl:+.1f} j</span>"
-                    f"</div></td>"
-                    f"</tr>"
-                )
-            st.markdown(
-                f"<div style='border-radius:8px;border:1px solid #2a2a3a;overflow:hidden'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#555;font-size:0.72em;text-transform:uppercase'>"
-                f"<th style='padding:6px 10px;text-align:left'>EV bucket</th>"
-                f"<th style='padding:6px 8px;text-align:center'>N typów</th>"
-                f"<th style='padding:6px 8px;text-align:center'>Hit Rate</th>"
-                f"<th style='padding:6px 8px;text-align:left'>PnL (j)</th>"
-                f"</tr></thead><tbody>{''.join(_ed_rows)}</tbody></table></div>",
-                unsafe_allow_html=True)
-
-        # Legenda kolumn per-rynek
-        st.markdown(
-            "<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;font-size:0.73em;color:#555'>"
-            "<span><b style='color:#888'>N</b> – liczba typów</span>"
-            "<span><b style='color:#888'>Hit%</b> – % trafnych</span>"
-            "<span><b style='color:#888'>P mod.</b> – śr. p modelu</span>"
-            "<span><b style='color:#888'>Fair</b> – śr. kurs fair</span>"
-            "<span><b style='color:#888'>ROI</b> = (traf×(kurs−1)−chyb)/N na fair odds</span>"
-            "<span><b style='color:#4CAF50'>🟢 > 0%</b>"
-            " <b style='color:#FF9800'>🟡 ±2%</b>"
-            " <b style='color:#F44336'>🔴 < −2%</b></span>"
-            "</div>",
-            unsafe_allow_html=True)
-        stats_df = statystyki_skutecznosci(wybrana_liga)
-
-        if not stats_df.empty:
-            stats_df["ROI_value"] = stats_df["ROI"].str.replace("+","").str.replace("%","").astype(float)
-
-            mg = metryki_globalne(wybrana_liga)
-            total_typow   = int(stats_df["Typów"].sum())
-            total_trafion = int(stats_df["Trafione"].sum())
-            avg_skut      = total_trafion / total_typow if total_typow > 0 else 0
-            w_roi_raw     = (stats_df["ROI_value"] * stats_df["Typów"]).sum() / total_typow if total_typow > 0 else 0
-
-            with st.container(border=True):
-                st.caption("⚡ Metryki rynków alternatywnych (Gole, BTTS, Rożne, Kartki)")
-                # Pobierz statystyki alt z bazy (z tabeli zdarzenia, rynek != 1X2)
-                try:
-                    _con_alt_tab4 = sqlite3.connect(DB_FILE)
-                    _alt_tab4_df  = pd.read_sql_query(
-                        """SELECT rynek, COUNT(*) as n,
-                                  SUM(trafione) as traf,
-                                  AVG(CASE WHEN p_model IS NOT NULL THEN p_model END) as p_avg
-                           FROM zdarzenia
-                           WHERE liga=? AND trafione IS NOT NULL AND rynek != '1X2'
-                           GROUP BY rynek
-                           ORDER BY n DESC""",
-                        _con_alt_tab4, params=(wybrana_liga,))
-                    _con_alt_tab4.close()
-                except Exception:
-                    _alt_tab4_df = pd.DataFrame()
-
-                if not _alt_tab4_df.empty:
-                    _alt_cols4 = st.columns(min(len(_alt_tab4_df), 5))
-                    for _ai4, (_, _ar4) in enumerate(_alt_tab4_df.iterrows()):
-                        _an4   = int(_ar4["n"])
-                        _at4   = int(_ar4["traf"] or 0)
-                        _ahr4  = _at4 / _an4 if _an4 > 0 else 0
-                        _ap4   = float(_ar4["p_avg"] or 0)
-                        _acol4 = "#4CAF50" if _ahr4 >= _ap4 - 0.03 else ("#FF9800" if _ahr4 >= _ap4 - 0.08 else "#F44336")
-                        _alt_cols4[_ai4 % len(_alt_cols4)].markdown(
-                            f"<div style='text-align:center;padding:6px 4px'>"
-                            f"<div style='font-size:0.72em;color:#666;margin-bottom:2px'>{_ar4['rynek']}</div>"
-                            f"<div style='font-size:1.3em;font-weight:700;color:{_acol4}'>{_ahr4:.0%}</div>"
-                            f"<div style='font-size:0.7em;color:#555'>n={_an4} · p̄={_ap4:.0%}</div>"
-                            f"</div>", unsafe_allow_html=True)
-                else:
-                    _ma, _mb, _mc, _md = st.columns(4)
-                    for _col4, _lbl4 in zip([_ma,_mb,_mc,_md], ["Gole","BTTS","Rożne","Kartki"]):
-                        _col4.metric(_lbl4, "–", help="Brak danych alt markets w tej lidze")
-
-            sort_by = st.radio("Sortuj po", ["ROI ↓", "Brier ↑", "Typów ↓"],
-                               horizontal=True, key="sort_tab4")
-            if sort_by == "ROI ↓":
-                stats_sorted = stats_df.sort_values("_roi_v", ascending=False)
-            elif sort_by == "Brier ↑":
-                stats_sorted = stats_df.sort_values("_brier_v", ascending=True)
-            else:
-                stats_sorted = stats_df.sort_values("Typów", ascending=False)
-
-            cat_col4 = {"1X2":"#4CAF50","Gole":"#2196F3","BTTS":"#9C27B0","Rożne":"#FF9800","Kartki":"#F44336"}
-
-            rows_s4 = []
-            for _, row in stats_sorted.iterrows():
-                roi_v   = row["_roi_v"]
-                brier_v = row["_brier_v"]
-                skill_v = row["Skill"]
-                roi_col = "#4CAF50" if roi_v > 0.03 else ("#F44336" if roi_v < -0.03 else "#FF9800")
-                roi_bg  = "#1a2e1a" if roi_v > 0.03 else ("#2e1a1a" if roi_v < -0.03 else "transparent")
-                skut_v  = row["_skut_v"]
-                bw_s    = int(skut_v * 100)
-                rynek_n = row["Rynek"]
-                kat4    = next((k for k in cat_col4 if k in rynek_n), "Gole")
-                kc4     = cat_col4.get(kat4, "#888")
-                bc4 = "#4CAF50" if brier_v < 0.20 else ("#FF9800" if brier_v < 0.25 else "#F44336")
-                sk_c = "#4CAF50" if skill_v > 0.05 else ("#888" if skill_v > -0.05 else "#F44336")
-                rows_s4.append(
-                    f"<tr style='background:{roi_bg}'>"
-                    f"<td style='padding:6px 8px;font-weight:bold;font-size:0.86em;white-space:nowrap'>{rynek_n}</td>"
-                    f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.84em'>{row['Typów']}</td>"
-                    f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.84em'>{row['Trafione']}</td>"
-                    f"<td style='padding:6px 8px;width:90px'>"
-                    f"<div style='display:flex;align-items:center;gap:4px'>"
-                    f"<div style='flex:1;background:#333;border-radius:3px;height:4px'>"
-                    f"<div style='background:{kc4};width:{bw_s}%;height:4px;border-radius:3px'></div></div>"
-                    f"<span style='color:{kc4};font-size:0.8em;min-width:30px'>{row['Skuteczność']}</span></div></td>"
-                    f"<td style='padding:6px 8px;text-align:center;color:#888;font-size:0.82em'>{row['Śr. P model']}</td>"
-                    f"<td style='padding:6px 8px;text-align:center;color:#aaa;font-size:0.82em'>{row['Śr. Fair']}</td>"
-                    f"<td style='padding:6px 8px;text-align:right;font-weight:bold;font-size:0.9em;color:{roi_col}'>{row['ROI']}</td>"
-                    f"<td style='padding:6px 8px;text-align:center;font-size:0.84em'>{row['Kolor']}</td>"
-                    f"</tr>"
-                )
-            st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #333'>"
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
-                f"<thead><tr style='background:#1e1e2e;color:#666;font-size:0.72em;text-transform:uppercase'>"
-                f"<th style='padding:6px 8px;text-align:left'>Rynek</th>"
-                f"<th style='padding:6px 8px;text-align:center'>N</th>"
-                f"<th style='padding:6px 8px;text-align:center'>Traf.</th>"
-                f"<th style='padding:6px 8px;text-align:left'>Hit%</th>"
-                f"<th style='padding:6px 8px;text-align:center'>P mod.</th>"
-                f"<th style='padding:6px 8px;text-align:center'>Fair</th>"
-                f"<th style='padding:6px 8px;text-align:right'>ROI</th>"
-                f"<th style='padding:6px 8px;text-align:center'>OK?</th>"
-                f"</tr></thead><tbody>{''.join(rows_s4)}</tbody></table></div>",
-                unsafe_allow_html=True,
-            )
-
-            st.divider()
-            st.markdown("**📊 ROI per rynek** *(fair odds, bez marży)*")
-            chart_sorted = stats_sorted.sort_values("ROI_value")
-            W4, H4, pad4 = 600, max(200, len(chart_sorted) * 32 + 60), 50
-            bar_max = max(abs(chart_sorted["ROI_value"].max()), abs(chart_sorted["ROI_value"].min()), 5)
-            zero_x  = pad4 + (0 + bar_max) / (2 * bar_max) * (W4 - 2 * pad4)
-            bars4   = []
-            for i, (_, row4) in enumerate(chart_sorted.iterrows()):
-                y4    = pad4 + i * 32
-                rv    = row4["ROI_value"]
-                blen  = abs(rv) / bar_max * (W4 - 2 * pad4) / 2
-                bc4   = "#4CAF50" if rv >= 0 else "#F44336"
-                bx4   = zero_x if rv >= 0 else zero_x - blen
-                bars4.append(
-                    f"<rect x='{bx4:.0f}' y='{y4+8:.0f}' width='{blen:.0f}' height='16' "
-                    f"fill='{bc4}' fill-opacity='0.8' rx='3'/>"
-                    f"<text x='{pad4-4:.0f}' y='{y4+20:.0f}' text-anchor='end' "
-                    f"font-size='10' fill='#aaa' font-family='sans-serif'>{row4['Rynek'][:16]}</text>"
-                    f"<text x='{(bx4+blen+4) if rv>=0 else (bx4-4):.0f}' y='{y4+20:.0f}' "
-                    f"text-anchor='{'start' if rv>=0 else 'end'}' "
-                    f"font-size='10' fill='{bc4}' font-family='sans-serif' font-weight='bold'>{rv:+.1f}%</text>"
-                )
-            svg4 = (
-                f'<svg width="{W4}" height="{H4}" '
-                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
-                f'<line x1="{zero_x:.0f}" y1="{pad4-10}" x2="{zero_x:.0f}" y2="{H4-10}" '
-                f'stroke="#444" stroke-width="1" stroke-dasharray="4,3"/>'
-                f'<text x="{zero_x:.0f}" y="{pad4-14}" text-anchor="middle" '
-                f'font-size="9" fill="#555" font-family="sans-serif">0%</text>'
-                f'{"".join(bars4)}</svg>'
-            )
-            st.markdown(svg4, unsafe_allow_html=True)
-            st.caption("ROI = (trafione × (fair−1) − chybione) / wszystkie. Symulacja na fair odds (bez marży bukmachera).")
-
-            internal_cols = [c for c in stats_df.columns if c.startswith("_") or c in ["ROI_value","Kolor"]]
-            st.download_button("⬇️ Pobierz statystyki (CSV)",
-                               data=stats_df.drop(columns=internal_cols, errors="ignore")
-                                   .to_csv(index=False, decimal=","),
-                               file_name="skutecznosc_modelu.csv", mime="text/csv")
-        else:
-            st.info("📭 Brak danych do analizy skuteczności.")
-            with st.container(border=True):
-                st.markdown("#### 🚀 Jak zacząć zbierać dane?")
-                st.markdown("""
-**1️⃣ Przejdź do zakładki ⚽ Analiza Meczu**  
-Otwórz dowolny mecz z listy – zobaczysz predykcje modelu.
-
-**2️⃣ Włącz przełącznik 💾 Zapisz zdarzenia**  
-Model zapisze wszystkie predykcje do lokalnej bazy danych.
-
-**3️⃣ Poczekaj na rozegranie meczów**  
-Dane historyczne są pobierane automatycznie z football-data.co.uk.
-
-**4️⃣ Kliknij 🔄 Aktualizuj wyniki**  
-System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
-
-**5️⃣ Wróć tutaj** – zobaczysz Brier Score, ROI i tabelę per rynek.
-                """)
-
-
-
         # ── Kalibracja (połączone z Skutecznością) ─────────────────────
         st.divider()
-        st.subheader("📉 Kalibracja modelu & Rolling Performance")
         st.subheader("📉 Kalibracja modelu & Rolling Performance")
         st.caption("Kalibracja: czy model mówi 65% → trafia ~65%? Rolling: jak ewoluuje jakość modelu w czasie.")
 
