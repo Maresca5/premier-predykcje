@@ -3755,7 +3755,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     k = r["kurs_buk"]
                     if k is None or pd.isna(k): return None
                     k = float(k)
-                    if not (1.30 <= k <= _KMAX_ODDS): return None
+                    if not (1.35 <= k <= _KMAX_ODDS): return None
                     return float(r["p_model"]) * k - 1.0
                 except Exception:
                     return None
@@ -3807,7 +3807,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             st.markdown(
                 "<div class='section-header'>💰 Symulacja Kelly – bieżący sezon"
                 "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
-                "top 3 typy/kolejkę · Pinnacle/B365 1.30–3.50 · Conservative Kelly"
+                "top 3 typy/kolejkę · Pinnacle/B365 1.35–3.50 · Conservative Kelly"
                 "</span></div>",
                 unsafe_allow_html=True)
 
@@ -3845,7 +3845,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     lambda g: g["kurs_buk"].isna().all()).sum()
                 _kols_total = _eq_df["kolejnosc"].nunique()
                 st.caption(
-                    f"Start: 1 000 zł · {_kelly_typy} typów z EV≥5% · kurs 1.30–3.50 · "
+                    f"Start: 1 000 zł · {_kelly_typy} typów z EV≥5% · kurs 1.35–3.50 · "
                     f"PnL Kelly: {_kelly_pnl:+.0f} zł · "
                     f"Flat (fair odds, bez marży): {_roi_flat:+.1f}%"
                 )
@@ -4364,6 +4364,150 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                 st.markdown("**📭 Brak danych do reliability curve.**")
                 st.markdown("Potrzebne są co najmniej **30 zdarzeń z wynikami** w każdym przedziale p. Wróć po kilku kolejkach trackingu.")
 
+    # ── EV vs Actual Yield ───────────────────────────────────────────────────
+    st.divider()
+    st.markdown(
+        "<div class='section-header'>📈 EV vs Actual Yield – sprzężenie zwrotne modelu"
+        "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
+        "czy model faktycznie ma edge tam gdzie widzi EV?"
+        "</span></div>",
+        unsafe_allow_html=True)
+    st.caption(
+        "Dla każdego przedziału EV: ile model obiecywał vs ile faktycznie zarobiono "
+        "(fair odds). Jeśli Actual Yield < 0 przy EV > 15% → zwiększ próg EV dla tej ligi.")
+
+    try:
+        import sqlite3 as _sq3, pandas as _pd_ev
+        _db_ev = _sq3.connect(DB_PATH)
+        _ev_df = _pd_ev.read_sql_query(
+            """SELECT p_model, fair_odds, trafione, typ, kolejnosc
+               FROM zdarzenia
+               WHERE sezon = ? AND liga = ?
+                 AND trafione IS NOT NULL
+                 AND fair_odds IS NOT NULL
+                 AND p_model IS NOT NULL
+                 AND fair_odds >= 1.35""",
+            _db_ev, params=(AKTUALNY_SEZON, wybrana_liga))
+        _db_ev.close()
+
+        if len(_ev_df) < 20:
+            st.info("📭 Za mało danych (minimum 20 typów z wynikami). Wróć po kolejnych kolejkach.")
+        else:
+            # Oblicz EV przewidywany (fair odds)
+            _ev_df["ev_pred"] = _ev_df["p_model"].astype(float) * _ev_df["fair_odds"].astype(float) - 1
+            # Oblicz rzeczywisty yield na fair odds
+            _ev_df["yield_act"] = _ev_df.apply(
+                lambda r: float(r["fair_odds"]) - 1 if int(r["trafione"]) == 1 else -1.0, axis=1)
+            # trafione może być 0/1 lub "TAK"/"NIE"
+            _ev_df["hit"] = _ev_df["trafione"].apply(
+                lambda x: 1 if x in (1, True, "TAK", "1", 1.0) else 0)
+            _ev_df["yield_act"] = _ev_df.apply(
+                lambda r: float(r["fair_odds"]) - 1 if r["hit"] == 1 else -1.0, axis=1)
+
+            # Biny EV
+            _bins   = [(-0.50, 0.00, "< 0%"),
+                       (0.00,  0.04, "0–4%"),
+                       (0.04,  0.08, "4–8%"),
+                       (0.08,  0.12, "8–12%"),
+                       (0.12,  0.20, "12–20%"),
+                       (0.20,  0.35, "20–35%"),
+                       (0.35,  9.99, "> 35%")]
+
+            _rows = []
+            for lo, hi, label in _bins:
+                _sub = _ev_df[(_ev_df["ev_pred"] >= lo) & (_ev_df["ev_pred"] < hi)]
+                if len(_sub) == 0: continue
+                _rows.append({
+                    "EV bin": label,
+                    "N":      len(_sub),
+                    "Avg EV": _sub["ev_pred"].mean(),
+                    "Yield":  _sub["yield_act"].mean(),
+                    "Hit%":   _sub["hit"].mean(),
+                })
+            _ev_bin_df = _pd_ev.DataFrame(_rows)
+
+            if len(_ev_bin_df) >= 2:
+                _ec1, _ec2 = st.columns([3, 2])
+
+                with _ec1:
+                    # Wykres słupkowy EV vs Yield
+                    import altair as _alt_ev
+                    _chart_data = _pd_ev.DataFrame({
+                        "EV bin":   _ev_bin_df["EV bin"].tolist() * 2,
+                        "Wartość":  _ev_bin_df["Avg EV"].tolist() + _ev_bin_df["Yield"].tolist(),
+                        "Seria":    ["Avg EV (model)"] * len(_ev_bin_df) + ["Actual Yield (fair)"] * len(_ev_bin_df),
+                        "N":        _ev_bin_df["N"].tolist() * 2,
+                    })
+                    _color_scale = _alt_ev.Scale(
+                        domain=["Avg EV (model)", "Actual Yield (fair)"],
+                        range=["#4A90D9", "#E8602C"])
+                    _ev_chart = (
+                        _alt_ev.Chart(_chart_data)
+                        .mark_bar(opacity=0.85)
+                        .encode(
+                            x=_alt_ev.X("EV bin:N", sort=[r[2] for r in _bins],
+                                        axis=_alt_ev.Axis(labelAngle=0)),
+                            y=_alt_ev.Y("Wartość:Q", axis=_alt_ev.Axis(format=".0%"),
+                                        title="EV / Yield"),
+                            color=_alt_ev.Color("Seria:N", scale=_color_scale,
+                                                legend=_alt_ev.Legend(orient="top")),
+                            xOffset="Seria:N",
+                            tooltip=["EV bin", "Seria",
+                                     _alt_ev.Tooltip("Wartość:Q", format=".1%"),
+                                     _alt_ev.Tooltip("N:Q", title="Liczba typów")],
+                        )
+                        .properties(height=260,
+                                    title="EV przewidywany vs rzeczywisty yield (fair odds)")
+                    )
+                    # Linia zerowa
+                    _zero_line = (_alt_ev.Chart(_pd_ev.DataFrame({"y": [0]}))
+                                  .mark_rule(color="#888", strokeDash=[4,4])
+                                  .encode(y="y:Q"))
+                    st.altair_chart(_ev_chart + _zero_line, use_container_width=True)
+
+                with _ec2:
+                    # Tabela z oceną
+                    st.markdown("**Tabela per bin EV**")
+                    for _, _row in _ev_bin_df.iterrows():
+                        _diff = _row["Yield"] - _row["Avg EV"]
+                        if _row["Yield"] >= 0.02:
+                            _ocena = "✅ Edge"
+                            _col   = "#4CAF50"
+                        elif _row["Yield"] >= -0.05:
+                            _ocena = "🟡 Neutral"
+                            _col   = "#FF9800"
+                        else:
+                            _ocena = "🔴 Brak edge"
+                            _col   = "#F44336"
+                        st.markdown(
+                            f"<div style='background:#1a1a2e;border-radius:8px;padding:8px 12px;"
+                            f"margin-bottom:6px;border-left:3px solid {_col}'>"
+                            f"<b>{_row['EV bin']}</b> · N={int(_row['N'])} · "
+                            f"EV={_row['Avg EV']:+.1%} → Yield={_row['Yield']:+.1%} "
+                            f"<span style='color:{_col}'>{_ocena}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True)
+
+                # Wniosek automatyczny
+                _best_bin = _ev_bin_df.loc[_ev_bin_df["Yield"].idxmax()]
+                _worst_bin = _ev_bin_df.loc[_ev_bin_df["Yield"].idxmin()]
+                _profitable = _ev_bin_df[_ev_bin_df["Yield"] >= 0.02]
+                if len(_profitable) > 0:
+                    _min_ev_edge = _profitable["Avg EV"].min()
+                    st.success(
+                        f"💡 **Rzeczywisty edge zaczyna się od EV ≥ {_min_ev_edge:.0%}** "
+                        f"(bin '{_best_bin['EV bin']}': yield {_best_bin['Yield']:+.1%} na {int(_best_bin['N'])} typach). "
+                        f"Rozważ podniesienie filtru EV do {_min_ev_edge:.0%} dla tej ligi.")
+                else:
+                    st.warning(
+                        f"⚠️ Żaden bin EV nie pokazuje dodatniego yieldu na fair odds. "
+                        f"Model jest overconfident – shrinkage pomógłby. "
+                        f"Najlepszy bin: '{_best_bin['EV bin']}' (yield {_best_bin['Yield']:+.1%}).")
+            else:
+                st.info("Za mało różnych przedziałów EV żeby zbudować wykres.")
+    except Exception as _e_ev:
+        st.caption(f"EV vs Yield: {_e_ev}")
+
     # =========================================================================
     # TAB 5 – LABORATORIUM (Bet Builder)
     # =========================================================================
@@ -4558,7 +4702,7 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
             # ── Bankroll Kelly per liga ──────────────────────────────────────────
             st.markdown("### Bankroll Kelly per liga i globalnie")
             st.caption("Identyczna logika co zakladka Skutecznosc: top 3 typy/kolejke wg EV, Pinnacle/B365 1.30-3.50, Kelly 1/8, start 1000 zl per liga.")
-            _ML_KS=1000.0;_ML_KF=0.125;_ML_KMAX_EXP=0.05;_ML_KEV=0.05;_ML_KMIN_ODD=1.30;_ML_KMAX_ODD=3.50
+            _ML_KS=1000.0;_ML_KF=0.125;_ML_KMAX_EXP=0.05;_ML_KEV=0.05;_ML_KMIN_ODD=1.35;_ML_KMAX_ODD=3.50
             _ml_colors={"Premier League":"#00d4ff","La Liga":"#ff6b35","Bundesliga":"#ffd700","Serie A":"#4CAF50","Ligue 1":"#b44aff"}
             _ml_results={}
             _ml_prog=st.progress(0,text="Laduje dane lig...")
@@ -4954,7 +5098,7 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                         "<span style='background:#14161c;border:1px solid #1e2028;"
                         "border-radius:4px;padding:2px 8px'>Pinnacle/B365</span>"
                         "<span style='background:#14161c;border:1px solid #1e2028;"
-                        "border-radius:4px;padding:2px 8px'>Kurs 1.30–3.50</span>"
+                        "border-radius:4px;padding:2px 8px'>Kurs 1.35–3.50</span>"
                         "<span style='background:#14161c;border:1px solid #1e2028;"
                         "border-radius:4px;padding:2px 8px'>EV 5–15% (cap)</span>"
                         "<span style='background:#14161c;border:1px solid #1e2028;"
