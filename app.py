@@ -2193,6 +2193,63 @@ if not historical.empty:
         pozycja = wszystkie_kolejki.index(aktualna_kolejka) + 1 if aktualna_kolejka in wszystkie_kolejki else 0
         st.sidebar.caption(f"📅 Kolejka **#{aktualna_kolejka}** · sezon 25/26 · {n_biezacy} meczów")
         st.sidebar.progress(pozycja / len(wszystkie_kolejki), text=f"{pozycja}/{len(wszystkie_kolejki)}")
+
+        # ── Auto-backfill predykcji dla wszystkich minionych kolejek ─────────
+        # Przy każdej zmianie danych (nowe mecze w CSV) sprawdź które kolejki
+        # nie mają predykcji i wypełnij brakujące. Dzięki temu symulacja Kelly
+        # obejmuje cały sezon bez ręcznego klikania "Aktualizuj wyniki".
+        _bf_key = f"backfill_{wybrana_liga}_{len(historical)}_{aktualna_kolejka}"
+        if _bf_key not in st.session_state and not srednie_df.empty:
+            _dzisiaj_bf = datetime.now().date()
+            _n_bf = 0
+            init_db()
+            for _runda_bf in sorted(schedule["round"].unique()):
+                if _runda_bf >= aktualna_kolejka:
+                    continue  # tylko minione kolejki
+                _mecze_rundy_bf = schedule[schedule["round"] == _runda_bf]
+                # Czy ta kolejka ma już predykcje w DB?
+                _con_bf = sqlite3.connect(DB_FILE)
+                _existing = _con_bf.execute(
+                    "SELECT COUNT(*) FROM zdarzenia WHERE liga=? AND kolejnosc=? AND rynek='1X2'",
+                    (wybrana_liga, int(_runda_bf))).fetchone()[0]
+                _con_bf.close()
+                if _existing > 0:
+                    continue  # już jest – pomiń
+                # Brakuje – generuj i zapisz predykcje
+                for _, _mr_bf in _mecze_rundy_bf.iterrows():
+                    _hbf = map_nazwa(_mr_bf["home_team"])
+                    _abf = map_nazwa(_mr_bf["away_team"])
+                    if _hbf not in srednie_df.index or _abf not in srednie_df.index:
+                        continue
+                    try:
+                        _lhbf, _labf, _lrbf, _lkbf, _, _lsbf = oblicz_lambdy(
+                            _hbf, _abf, srednie_df, srednie_lig, forma_dict,
+                            csv_code=LIGI[wybrana_liga]["csv_code"])
+                        _pbf = predykcja_meczu(_lhbf, _labf, rho=rho,
+                                               csv_code=LIGI[wybrana_liga]["csv_code"],
+                                               n_train=n_biezacy)
+                        _mbf = f"{_hbf} – {_abf}"
+                        zapisz_zdarzenia(wybrana_liga, int(_runda_bf), _mbf,
+                                         _hbf, _abf, "1X2", _pbf["typ"], 0.0,
+                                         _pbf["p_typ"], _pbf["fo_typ"])
+                        for _em, _nz, _pz, _foz, _kz, _lz in alternatywne_zdarzenia(
+                                _lhbf, _labf, _lrbf, _lkbf, rho, lam_sot=_lsbf):
+                            zapisz_zdarzenia(wybrana_liga, int(_runda_bf), _mbf,
+                                             _hbf, _abf, _kz, _nz, _lz, _pz, _foz)
+                        _n_bf += 1
+                    except Exception:
+                        continue
+            # Zaktualizuj wyniki dla nowo dodanych predykcji
+            if _n_bf > 0:
+                _con_bf2 = sqlite3.connect(DB_FILE)
+                _nowe_mecze = _con_bf2.execute(
+                    "SELECT DISTINCT home, away FROM zdarzenia WHERE liga=? AND trafione IS NULL",
+                    (wybrana_liga,)).fetchall()
+                _con_bf2.close()
+                for _hbf2, _abf2 in _nowe_mecze:
+                    aktualizuj_wynik_zdarzenia(_hbf2, _abf2, historical)
+                st.toast(f"📦 Uzupełniono predykcje dla {_n_bf} meczów z poprzednich kolejek", icon="📊")
+            st.session_state[_bf_key] = _n_bf
     _shrink_now   = _get_shrink(LIGI[wybrana_liga]["csv_code"], n_biezacy)
     _shrink_base  = KALIBRACJA_PER_LIGA.get(LIGI[wybrana_liga]["csv_code"], SHRINK_ALPHA)
     _shrink_bonus = _shrink_now - _shrink_base
