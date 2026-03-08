@@ -4289,290 +4289,290 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 st.markdown("**📭 Brak danych do reliability curve.**")
                 st.markdown("Potrzebne są co najmniej **30 zdarzeń z wynikami** w każdym przedziale p. Wróć po kilku kolejkach trackingu.")
 
-    # ── EV vs Actual Yield ───────────────────────────────────────────────────
-    st.divider()
-    st.markdown(
-        "<div class='section-header'>📈 EV vs Actual Yield – sprzężenie zwrotne modelu"
-        "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
-        "czy model faktycznie ma edge tam gdzie widzi EV?"
-        "</span></div>",
-        unsafe_allow_html=True)
-    st.caption(
-        "Dla każdego przedziału EV: ile model obiecywał vs ile faktycznie zarobiono "
-        "(fair odds). Jeśli Actual Yield < 0 przy EV > 15% → zwiększ próg EV dla tej ligi.")
+        # ── EV vs Actual Yield ───────────────────────────────────────────────────
+        st.divider()
+        st.markdown(
+            "<div class='section-header'>📈 EV vs Actual Yield – sprzężenie zwrotne modelu"
+            "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
+            "czy model faktycznie ma edge tam gdzie widzi EV?"
+            "</span></div>",
+            unsafe_allow_html=True)
+        st.caption(
+            "Dla każdego przedziału EV: ile model obiecywał vs ile faktycznie zarobiono "
+            "(fair odds). Jeśli Actual Yield < 0 przy EV > 15% → zwiększ próg EV dla tej ligi.")
 
-    try:
-        import sqlite3 as _sq3, pandas as _pd_ev
-        _db_ev = _sq3.connect(DB_FILE)
-        _ev_df = _pd_ev.read_sql_query(
-            """SELECT p_model, fair_odds, trafione, typ, kolejnosc
-               FROM zdarzenia
-               WHERE liga = ?
-                 AND rynek = '1X2'
-                 AND trafione IS NOT NULL
-                 AND fair_odds IS NOT NULL
-                 AND p_model IS NOT NULL
-                 AND fair_odds >= 1.35""",
-            _db_ev, params=(wybrana_liga,))
-        _db_ev.close()
+        try:
+            import sqlite3 as _sq3, pandas as _pd_ev
+            _db_ev = _sq3.connect(DB_FILE)
+            _ev_df = _pd_ev.read_sql_query(
+                """SELECT p_model, fair_odds, trafione, typ, kolejnosc
+                   FROM zdarzenia
+                   WHERE liga = ?
+                     AND rynek = '1X2'
+                     AND trafione IS NOT NULL
+                     AND fair_odds IS NOT NULL
+                     AND p_model IS NOT NULL
+                     AND fair_odds >= 1.35""",
+                _db_ev, params=(wybrana_liga,))
+            _db_ev.close()
 
-        if len(_ev_df) < 20:
-            st.info("📭 Za mało danych (minimum 20 typów z wynikami). Wróć po kolejnych kolejkach.")
-        else:
-            # Oblicz EV przewidywany (fair odds)
-            _ev_df["ev_pred"] = _ev_df["p_model"].astype(float) * _ev_df["fair_odds"].astype(float) - 1
-            # Oblicz rzeczywisty yield na fair odds
-            _ev_df["yield_act"] = _ev_df.apply(
-                lambda r: float(r["fair_odds"]) - 1 if int(r["trafione"]) == 1 else -1.0, axis=1)
-            # trafione może być 0/1 lub "TAK"/"NIE"
-            _ev_df["hit"] = _ev_df["trafione"].apply(
-                lambda x: 1 if x in (1, True, "TAK", "1", 1.0) else 0)
-            _ev_df["yield_act"] = _ev_df.apply(
-                lambda r: float(r["fair_odds"]) - 1 if r["hit"] == 1 else -1.0, axis=1)
+            if len(_ev_df) < 20:
+                st.info("📭 Za mało danych (minimum 20 typów z wynikami). Wróć po kolejnych kolejkach.")
+            else:
+                # Oblicz EV przewidywany (fair odds)
+                _ev_df["ev_pred"] = _ev_df["p_model"].astype(float) * _ev_df["fair_odds"].astype(float) - 1
+                # Oblicz rzeczywisty yield na fair odds
+                _ev_df["yield_act"] = _ev_df.apply(
+                    lambda r: float(r["fair_odds"]) - 1 if int(r["trafione"]) == 1 else -1.0, axis=1)
+                # trafione może być 0/1 lub "TAK"/"NIE"
+                _ev_df["hit"] = _ev_df["trafione"].apply(
+                    lambda x: 1 if x in (1, True, "TAK", "1", 1.0) else 0)
+                _ev_df["yield_act"] = _ev_df.apply(
+                    lambda r: float(r["fair_odds"]) - 1 if r["hit"] == 1 else -1.0, axis=1)
 
-            # Biny EV
-            _bins   = [(-0.50, 0.00, "< 0%"),
-                       (0.00,  0.04, "0–4%"),
-                       (0.04,  0.08, "4–8%"),
-                       (0.08,  0.12, "8–12%"),
-                       (0.12,  0.20, "12–20%"),
-                       (0.20,  0.35, "20–35%"),
-                       (0.35,  9.99, "> 35%")]
+                # Biny EV
+                _bins   = [(-0.50, 0.00, "< 0%"),
+                           (0.00,  0.04, "0–4%"),
+                           (0.04,  0.08, "4–8%"),
+                           (0.08,  0.12, "8–12%"),
+                           (0.12,  0.20, "12–20%"),
+                           (0.20,  0.35, "20–35%"),
+                           (0.35,  9.99, "> 35%")]
 
-            _rows = []
-            for lo, hi, label in _bins:
-                _sub = _ev_df[(_ev_df["ev_pred"] >= lo) & (_ev_df["ev_pred"] < hi)]
-                if len(_sub) == 0: continue
-                _rows.append({
-                    "EV bin": label,
-                    "N":      len(_sub),
-                    "Avg EV": _sub["ev_pred"].mean(),
-                    "Yield":  _sub["yield_act"].mean(),
-                    "Hit%":   _sub["hit"].mean(),
-                })
-            _ev_bin_df = _pd_ev.DataFrame(_rows)
-
-            if len(_ev_bin_df) >= 2:
-                _ec1, _ec2 = st.columns([3, 2])
-
-                with _ec1:
-                    # Wykres słupkowy EV vs Yield
-                    import altair as _alt_ev
-                    _chart_data = _pd_ev.DataFrame({
-                        "EV bin":   _ev_bin_df["EV bin"].tolist() * 2,
-                        "Wartość":  _ev_bin_df["Avg EV"].tolist() + _ev_bin_df["Yield"].tolist(),
-                        "Seria":    ["Avg EV (model)"] * len(_ev_bin_df) + ["Actual Yield (fair)"] * len(_ev_bin_df),
-                        "N":        _ev_bin_df["N"].tolist() * 2,
+                _rows = []
+                for lo, hi, label in _bins:
+                    _sub = _ev_df[(_ev_df["ev_pred"] >= lo) & (_ev_df["ev_pred"] < hi)]
+                    if len(_sub) == 0: continue
+                    _rows.append({
+                        "EV bin": label,
+                        "N":      len(_sub),
+                        "Avg EV": _sub["ev_pred"].mean(),
+                        "Yield":  _sub["yield_act"].mean(),
+                        "Hit%":   _sub["hit"].mean(),
                     })
-                    _color_scale = _alt_ev.Scale(
-                        domain=["Avg EV (model)", "Actual Yield (fair)"],
-                        range=["#4A90D9", "#E8602C"])
-                    _ev_chart = (
-                        _alt_ev.Chart(_chart_data)
-                        .mark_bar(opacity=0.85)
-                        .encode(
-                            x=_alt_ev.X("EV bin:N", sort=[r[2] for r in _bins],
-                                        axis=_alt_ev.Axis(labelAngle=0)),
-                            y=_alt_ev.Y("Wartość:Q", axis=_alt_ev.Axis(format=".0%"),
-                                        title="EV / Yield"),
-                            color=_alt_ev.Color("Seria:N", scale=_color_scale,
-                                                legend=_alt_ev.Legend(orient="top")),
-                            xOffset="Seria:N",
-                            tooltip=["EV bin", "Seria",
-                                     _alt_ev.Tooltip("Wartość:Q", format=".1%"),
-                                     _alt_ev.Tooltip("N:Q", title="Liczba typów")],
+                _ev_bin_df = _pd_ev.DataFrame(_rows)
+
+                if len(_ev_bin_df) >= 2:
+                    _ec1, _ec2 = st.columns([3, 2])
+
+                    with _ec1:
+                        # Wykres słupkowy EV vs Yield
+                        import altair as _alt_ev
+                        _chart_data = _pd_ev.DataFrame({
+                            "EV bin":   _ev_bin_df["EV bin"].tolist() * 2,
+                            "Wartość":  _ev_bin_df["Avg EV"].tolist() + _ev_bin_df["Yield"].tolist(),
+                            "Seria":    ["Avg EV (model)"] * len(_ev_bin_df) + ["Actual Yield (fair)"] * len(_ev_bin_df),
+                            "N":        _ev_bin_df["N"].tolist() * 2,
+                        })
+                        _color_scale = _alt_ev.Scale(
+                            domain=["Avg EV (model)", "Actual Yield (fair)"],
+                            range=["#4A90D9", "#E8602C"])
+                        _ev_chart = (
+                            _alt_ev.Chart(_chart_data)
+                            .mark_bar(opacity=0.85)
+                            .encode(
+                                x=_alt_ev.X("EV bin:N", sort=[r[2] for r in _bins],
+                                            axis=_alt_ev.Axis(labelAngle=0)),
+                                y=_alt_ev.Y("Wartość:Q", axis=_alt_ev.Axis(format=".0%"),
+                                            title="EV / Yield"),
+                                color=_alt_ev.Color("Seria:N", scale=_color_scale,
+                                                    legend=_alt_ev.Legend(orient="top")),
+                                xOffset="Seria:N",
+                                tooltip=["EV bin", "Seria",
+                                         _alt_ev.Tooltip("Wartość:Q", format=".1%"),
+                                         _alt_ev.Tooltip("N:Q", title="Liczba typów")],
+                            )
+                            .properties(height=260,
+                                        title="EV przewidywany vs rzeczywisty yield (fair odds)")
                         )
-                        .properties(height=260,
-                                    title="EV przewidywany vs rzeczywisty yield (fair odds)")
-                    )
-                    # Linia zerowa
-                    _zero_line = (_alt_ev.Chart(_pd_ev.DataFrame({"y": [0]}))
-                                  .mark_rule(color="#888", strokeDash=[4,4])
+                        # Linia zerowa
+                        _zero_line = (_alt_ev.Chart(_pd_ev.DataFrame({"y": [0]}))
+                                      .mark_rule(color="#888", strokeDash=[4,4])
+                                      .encode(y="y:Q"))
+                        st.altair_chart(_ev_chart + _zero_line, use_container_width=True)
+
+                    with _ec2:
+                        # Tabela z oceną
+                        st.markdown("**Tabela per bin EV**")
+                        for _, _row in _ev_bin_df.iterrows():
+                            _diff = _row["Yield"] - _row["Avg EV"]
+                            if _row["Yield"] >= 0.02:
+                                _ocena = "✅ Edge"
+                                _col   = "#4CAF50"
+                            elif _row["Yield"] >= -0.05:
+                                _ocena = "🟡 Neutral"
+                                _col   = "#FF9800"
+                            else:
+                                _ocena = "🔴 Brak edge"
+                                _col   = "#F44336"
+                            st.markdown(
+                                f"<div style='background:#1a1a2e;border-radius:8px;padding:8px 12px;"
+                                f"margin-bottom:6px;border-left:3px solid {_col}'>"
+                                f"<b>{_row['EV bin']}</b> · N={int(_row['N'])} · "
+                                f"EV={_row['Avg EV']:+.1%} → Yield={_row['Yield']:+.1%} "
+                                f"<span style='color:{_col}'>{_ocena}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True)
+
+                    # Wniosek automatyczny
+                    _best_bin = _ev_bin_df.loc[_ev_bin_df["Yield"].idxmax()]
+                    _worst_bin = _ev_bin_df.loc[_ev_bin_df["Yield"].idxmin()]
+                    _profitable = _ev_bin_df[_ev_bin_df["Yield"] >= 0.02]
+                    if len(_profitable) > 0:
+                        _min_ev_edge = _profitable["Avg EV"].min()
+                        st.success(
+                            f"💡 **Rzeczywisty edge zaczyna się od EV ≥ {_min_ev_edge:.0%}** "
+                            f"(bin '{_best_bin['EV bin']}': yield {_best_bin['Yield']:+.1%} na {int(_best_bin['N'])} typach). "
+                            f"Rozważ podniesienie filtru EV do {_min_ev_edge:.0%} dla tej ligi.")
+                    else:
+                        st.warning(
+                            f"⚠️ Żaden bin EV nie pokazuje dodatniego yieldu na fair odds. "
+                            f"Model jest overconfident – shrinkage pomógłby. "
+                            f"Najlepszy bin: '{_best_bin['EV bin']}' (yield {_best_bin['Yield']:+.1%}).")
+                else:
+                    st.info("Za mało różnych przedziałów EV żeby zbudować wykres.")
+        except Exception as _e_ev:
+            st.caption(f"EV vs Yield: {_e_ev}")
+
+        # ── Value Distribution – Yield per przedział kursowy ────────────────────
+        st.divider()
+        st.markdown(
+            "<div class='section-header'>📊 Value Distribution – Yield per przedział kursowy"
+            "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
+            "gdzie model faktycznie zarabia?"
+            "</span></div>",
+            unsafe_allow_html=True)
+        st.caption("Histogram pokazuje skuteczność i yield dla każdego przedziału kursowego. "
+                   "Zielony = dodatni yield na fair odds. Pomaga wybrać optymalny zakres kursów do gry.")
+
+        try:
+            import sqlite3 as _sq3v, pandas as _pdv
+            _dbv = _sq3v.connect(DB_FILE)
+            _vdf = _pdv.read_sql_query(
+                """SELECT p_model, fair_odds, trafione, typ
+                   FROM zdarzenia
+                   WHERE liga = ?
+                     AND rynek = '1X2'
+                     AND trafione IS NOT NULL
+                     AND fair_odds IS NOT NULL
+                     AND fair_odds >= 1.10""",
+                _dbv, params=(wybrana_liga,))
+            _dbv.close()
+
+            if len(_vdf) < 20:
+                st.info("📭 Za mało danych. Wróć po kilku kolejkach trackingu.")
+            else:
+                _vdf["hit"] = _vdf["trafione"].apply(
+                    lambda x: 1 if x in (1, True, "TAK", "1", 1.0) else 0)
+                _vdf["yield_act"] = _vdf.apply(
+                    lambda r: float(r["fair_odds"]) - 1 if r["hit"] == 1 else -1.0, axis=1)
+                _vdf["fair_odds"] = _vdf["fair_odds"].astype(float)
+
+                # Biny kursowe
+                _kurs_bins = [
+                    (1.10, 1.35, "1.10–1.35"),
+                    (1.35, 1.50, "1.35–1.50"),
+                    (1.50, 1.65, "1.50–1.65"),
+                    (1.65, 1.85, "1.65–1.85"),
+                    (1.85, 2.10, "1.85–2.10"),
+                    (2.10, 2.50, "2.10–2.50"),
+                    (2.50, 9.99, "2.50+"),
+                ]
+                _vrows = []
+                for lo, hi, label in _kurs_bins:
+                    _sub = _vdf[(_vdf["fair_odds"] >= lo) & (_vdf["fair_odds"] < hi)]
+                    if len(_sub) < 3: continue
+                    _vrows.append({
+                        "Kurs bin":   label,
+                        "N":          len(_sub),
+                        "Hit%":       _sub["hit"].mean(),
+                        "Yield":      _sub["yield_act"].mean(),
+                        "Avg kurs":   _sub["fair_odds"].mean(),
+                    })
+                _vbin_df = _pdv.DataFrame(_vrows)
+
+                if len(_vbin_df) >= 2:
+                    import altair as _altv
+
+                    _vc1, _vc2 = st.columns([3, 2])
+
+                    with _vc1:
+                        # Wykres: dwie serie – Hit% i Yield – grouped bars
+                        _vcd = _pdv.DataFrame({
+                            "Kurs bin": _vbin_df["Kurs bin"].tolist() * 2,
+                            "Wartość":  _vbin_df["Hit%"].tolist() + _vbin_df["Yield"].tolist(),
+                            "Seria":    ["Hit Rate"] * len(_vbin_df) + ["Yield (fair)"] * len(_vbin_df),
+                            "N":        _vbin_df["N"].tolist() * 2,
+                        })
+                        _vcolor = _altv.Scale(
+                            domain=["Hit Rate", "Yield (fair)"],
+                            range=["#4A90D9", "#E8602C"])
+                        _vbars = (
+                            _altv.Chart(_vcd)
+                            .mark_bar(opacity=0.85)
+                            .encode(
+                                x=_altv.X("Kurs bin:N",
+                                          sort=[r[2] for r in _kurs_bins],
+                                          axis=_altv.Axis(labelAngle=0)),
+                                y=_altv.Y("Wartość:Q",
+                                          axis=_altv.Axis(format=".0%"),
+                                          title="Hit Rate / Yield"),
+                                color=_altv.Color("Seria:N", scale=_vcolor,
+                                                  legend=_altv.Legend(orient="top")),
+                                xOffset="Seria:N",
+                                tooltip=["Kurs bin", "Seria",
+                                         _altv.Tooltip("Wartość:Q", format=".1%"),
+                                         _altv.Tooltip("N:Q", title="Liczba typów")],
+                            )
+                            .properties(height=260,
+                                        title="Hit Rate i Yield per przedział kursowy")
+                        )
+                        _vzero = (_altv.Chart(_pdv.DataFrame({"y": [0]}))
+                                  .mark_rule(color="#888", strokeDash=[4, 4])
                                   .encode(y="y:Q"))
-                    st.altair_chart(_ev_chart + _zero_line, use_container_width=True)
+                        st.altair_chart(_vbars + _vzero, use_container_width=True)
 
-                with _ec2:
-                    # Tabela z oceną
-                    st.markdown("**Tabela per bin EV**")
-                    for _, _row in _ev_bin_df.iterrows():
-                        _diff = _row["Yield"] - _row["Avg EV"]
-                        if _row["Yield"] >= 0.02:
-                            _ocena = "✅ Edge"
-                            _col   = "#4CAF50"
-                        elif _row["Yield"] >= -0.05:
-                            _ocena = "🟡 Neutral"
-                            _col   = "#FF9800"
-                        else:
-                            _ocena = "🔴 Brak edge"
-                            _col   = "#F44336"
-                        st.markdown(
-                            f"<div style='background:#1a1a2e;border-radius:8px;padding:8px 12px;"
-                            f"margin-bottom:6px;border-left:3px solid {_col}'>"
-                            f"<b>{_row['EV bin']}</b> · N={int(_row['N'])} · "
-                            f"EV={_row['Avg EV']:+.1%} → Yield={_row['Yield']:+.1%} "
-                            f"<span style='color:{_col}'>{_ocena}</span>"
-                            f"</div>",
-                            unsafe_allow_html=True)
+                    with _vc2:
+                        st.markdown("**Tabela per przedział**")
+                        _best_yield_bin = _vbin_df.loc[_vbin_df["Yield"].idxmax()]
+                        for _, _vr in _vbin_df.iterrows():
+                            _yc = "#4CAF50" if _vr["Yield"] >= 0.02 else ("#FF9800" if _vr["Yield"] >= -0.05 else "#F44336")
+                            _star = " ⭐" if _vr["Kurs bin"] == _best_yield_bin["Kurs bin"] else ""
+                            st.markdown(
+                                f"<div style='background:#1a1a2e;border-radius:8px;padding:7px 12px;"
+                                f"margin-bottom:5px;border-left:3px solid {_yc}'>"
+                                f"<b>{_vr['Kurs bin']}</b>{_star} · N={int(_vr['N'])} · "
+                                f"Hit={_vr['Hit%']:.0%} · "
+                                f"Yield=<span style='color:{_yc}'>{_vr['Yield']:+.1%}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True)
 
-                # Wniosek automatyczny
-                _best_bin = _ev_bin_df.loc[_ev_bin_df["Yield"].idxmax()]
-                _worst_bin = _ev_bin_df.loc[_ev_bin_df["Yield"].idxmin()]
-                _profitable = _ev_bin_df[_ev_bin_df["Yield"] >= 0.02]
-                if len(_profitable) > 0:
-                    _min_ev_edge = _profitable["Avg EV"].min()
-                    st.success(
-                        f"💡 **Rzeczywisty edge zaczyna się od EV ≥ {_min_ev_edge:.0%}** "
-                        f"(bin '{_best_bin['EV bin']}': yield {_best_bin['Yield']:+.1%} na {int(_best_bin['N'])} typach). "
-                        f"Rozważ podniesienie filtru EV do {_min_ev_edge:.0%} dla tej ligi.")
+                    # Automatyczny wniosek
+                    _pos_bins = _vbin_df[_vbin_df["Yield"] >= 0.02]
+                    _neg_bins  = _vbin_df[_vbin_df["Yield"] < -0.10]
+                    if len(_pos_bins) > 0 and len(_neg_bins) > 0:
+                        _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
+                        _neg_labels = ", ".join(_neg_bins["Kurs bin"].tolist())
+                        st.success(
+                            f"💡 **Edge w kursach {_pos_labels}** "
+                            f"(yield {_pos_bins['Yield'].max():+.1%}). "
+                            f"Unikaj kursów {_neg_labels} — yield {_neg_bins['Yield'].min():+.1%} na fair odds.")
+                    elif len(_pos_bins) > 0:
+                        _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
+                        st.success(f"💡 Dodatni yield w zakresach: **{_pos_labels}**. "
+                                   f"Pozostałe przedziały neutralne.")
+                    else:
+                        st.warning("⚠️ Brak przedziału kursowego z trwale dodatnim yieldem. "
+                                   "Model generuje straty na fair odds we wszystkich zakresach — "
+                                   "sprawdź kalibrację lub poczekaj na więcej danych.")
                 else:
-                    st.warning(
-                        f"⚠️ Żaden bin EV nie pokazuje dodatniego yieldu na fair odds. "
-                        f"Model jest overconfident – shrinkage pomógłby. "
-                        f"Najlepszy bin: '{_best_bin['EV bin']}' (yield {_best_bin['Yield']:+.1%}).")
-            else:
-                st.info("Za mało różnych przedziałów EV żeby zbudować wykres.")
-    except Exception as _e_ev:
-        st.caption(f"EV vs Yield: {_e_ev}")
+                    st.info("Za mało różnych przedziałów kursowych w danych.")
+        except Exception as _e_vd:
+            st.caption(f"Value Distribution: {_e_vd}")
 
-    # ── Value Distribution – Yield per przedział kursowy ────────────────────
-    st.divider()
-    st.markdown(
-        "<div class='section-header'>📊 Value Distribution – Yield per przedział kursowy"
-        "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
-        "gdzie model faktycznie zarabia?"
-        "</span></div>",
-        unsafe_allow_html=True)
-    st.caption("Histogram pokazuje skuteczność i yield dla każdego przedziału kursowego. "
-               "Zielony = dodatni yield na fair odds. Pomaga wybrać optymalny zakres kursów do gry.")
-
-    try:
-        import sqlite3 as _sq3v, pandas as _pdv
-        _dbv = _sq3v.connect(DB_FILE)
-        _vdf = _pdv.read_sql_query(
-            """SELECT p_model, fair_odds, trafione, typ
-               FROM zdarzenia
-               WHERE liga = ?
-                 AND rynek = '1X2'
-                 AND trafione IS NOT NULL
-                 AND fair_odds IS NOT NULL
-                 AND fair_odds >= 1.10""",
-            _dbv, params=(wybrana_liga,))
-        _dbv.close()
-
-        if len(_vdf) < 20:
-            st.info("📭 Za mało danych. Wróć po kilku kolejkach trackingu.")
-        else:
-            _vdf["hit"] = _vdf["trafione"].apply(
-                lambda x: 1 if x in (1, True, "TAK", "1", 1.0) else 0)
-            _vdf["yield_act"] = _vdf.apply(
-                lambda r: float(r["fair_odds"]) - 1 if r["hit"] == 1 else -1.0, axis=1)
-            _vdf["fair_odds"] = _vdf["fair_odds"].astype(float)
-
-            # Biny kursowe
-            _kurs_bins = [
-                (1.10, 1.35, "1.10–1.35"),
-                (1.35, 1.50, "1.35–1.50"),
-                (1.50, 1.65, "1.50–1.65"),
-                (1.65, 1.85, "1.65–1.85"),
-                (1.85, 2.10, "1.85–2.10"),
-                (2.10, 2.50, "2.10–2.50"),
-                (2.50, 9.99, "2.50+"),
-            ]
-            _vrows = []
-            for lo, hi, label in _kurs_bins:
-                _sub = _vdf[(_vdf["fair_odds"] >= lo) & (_vdf["fair_odds"] < hi)]
-                if len(_sub) < 3: continue
-                _vrows.append({
-                    "Kurs bin":   label,
-                    "N":          len(_sub),
-                    "Hit%":       _sub["hit"].mean(),
-                    "Yield":      _sub["yield_act"].mean(),
-                    "Avg kurs":   _sub["fair_odds"].mean(),
-                })
-            _vbin_df = _pdv.DataFrame(_vrows)
-
-            if len(_vbin_df) >= 2:
-                import altair as _altv
-
-                _vc1, _vc2 = st.columns([3, 2])
-
-                with _vc1:
-                    # Wykres: dwie serie – Hit% i Yield – grouped bars
-                    _vcd = _pdv.DataFrame({
-                        "Kurs bin": _vbin_df["Kurs bin"].tolist() * 2,
-                        "Wartość":  _vbin_df["Hit%"].tolist() + _vbin_df["Yield"].tolist(),
-                        "Seria":    ["Hit Rate"] * len(_vbin_df) + ["Yield (fair)"] * len(_vbin_df),
-                        "N":        _vbin_df["N"].tolist() * 2,
-                    })
-                    _vcolor = _altv.Scale(
-                        domain=["Hit Rate", "Yield (fair)"],
-                        range=["#4A90D9", "#E8602C"])
-                    _vbars = (
-                        _altv.Chart(_vcd)
-                        .mark_bar(opacity=0.85)
-                        .encode(
-                            x=_altv.X("Kurs bin:N",
-                                      sort=[r[2] for r in _kurs_bins],
-                                      axis=_altv.Axis(labelAngle=0)),
-                            y=_altv.Y("Wartość:Q",
-                                      axis=_altv.Axis(format=".0%"),
-                                      title="Hit Rate / Yield"),
-                            color=_altv.Color("Seria:N", scale=_vcolor,
-                                              legend=_altv.Legend(orient="top")),
-                            xOffset="Seria:N",
-                            tooltip=["Kurs bin", "Seria",
-                                     _altv.Tooltip("Wartość:Q", format=".1%"),
-                                     _altv.Tooltip("N:Q", title="Liczba typów")],
-                        )
-                        .properties(height=260,
-                                    title="Hit Rate i Yield per przedział kursowy")
-                    )
-                    _vzero = (_altv.Chart(_pdv.DataFrame({"y": [0]}))
-                              .mark_rule(color="#888", strokeDash=[4, 4])
-                              .encode(y="y:Q"))
-                    st.altair_chart(_vbars + _vzero, use_container_width=True)
-
-                with _vc2:
-                    st.markdown("**Tabela per przedział**")
-                    _best_yield_bin = _vbin_df.loc[_vbin_df["Yield"].idxmax()]
-                    for _, _vr in _vbin_df.iterrows():
-                        _yc = "#4CAF50" if _vr["Yield"] >= 0.02 else ("#FF9800" if _vr["Yield"] >= -0.05 else "#F44336")
-                        _star = " ⭐" if _vr["Kurs bin"] == _best_yield_bin["Kurs bin"] else ""
-                        st.markdown(
-                            f"<div style='background:#1a1a2e;border-radius:8px;padding:7px 12px;"
-                            f"margin-bottom:5px;border-left:3px solid {_yc}'>"
-                            f"<b>{_vr['Kurs bin']}</b>{_star} · N={int(_vr['N'])} · "
-                            f"Hit={_vr['Hit%']:.0%} · "
-                            f"Yield=<span style='color:{_yc}'>{_vr['Yield']:+.1%}</span>"
-                            f"</div>",
-                            unsafe_allow_html=True)
-
-                # Automatyczny wniosek
-                _pos_bins = _vbin_df[_vbin_df["Yield"] >= 0.02]
-                _neg_bins  = _vbin_df[_vbin_df["Yield"] < -0.10]
-                if len(_pos_bins) > 0 and len(_neg_bins) > 0:
-                    _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
-                    _neg_labels = ", ".join(_neg_bins["Kurs bin"].tolist())
-                    st.success(
-                        f"💡 **Edge w kursach {_pos_labels}** "
-                        f"(yield {_pos_bins['Yield'].max():+.1%}). "
-                        f"Unikaj kursów {_neg_labels} — yield {_neg_bins['Yield'].min():+.1%} na fair odds.")
-                elif len(_pos_bins) > 0:
-                    _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
-                    st.success(f"💡 Dodatni yield w zakresach: **{_pos_labels}**. "
-                               f"Pozostałe przedziały neutralne.")
-                else:
-                    st.warning("⚠️ Brak przedziału kursowego z trwale dodatnim yieldem. "
-                               "Model generuje straty na fair odds we wszystkich zakresach — "
-                               "sprawdź kalibrację lub poczekaj na więcej danych.")
-            else:
-                st.info("Za mało różnych przedziałów kursowych w danych.")
-    except Exception as _e_vd:
-        st.caption(f"Value Distribution: {_e_vd}")
-
-    # =========================================================================
-    # TAB 5 – LABORATORIUM (Bet Builder)
-    # =========================================================================
+        # =========================================================================
+        # TAB 5 – LABORATORIUM (Bet Builder)
+        # =========================================================================
     with tab5:
         st.subheader("🎛️ Laboratorium modelu")
 
