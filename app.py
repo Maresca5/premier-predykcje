@@ -3745,10 +3745,12 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     k = _calc(m.get("B365H"), m.get("B365D"), m.get("B365A"))
                 return k
 
-            # Kelly parametry – Conservative Kelly (zsynchronizowane z oblicz_kelly())
-            # KELLY_PROB_SCALE=0.85 (-15% nadwyżki), KELLY_FRAC_SCALE=0.50 (Half-Kelly)
-            _KS    = 1000.0
-            _KF    = 0.125 * KELLY_FRAC_SCALE   # Half-Kelly: 0.0625
+            # Kelly parametry – z sidebara (bankroll + poziom ryzyka)
+            # KELLY_PROB_SCALE=0.85 (-15% nadwyżki) stosowany zawsze
+            # _KF pochodzi z suwaka ryzyka → zmiana w sidebarze odświeża wykres
+            _KS    = float(st.session_state.get("bankroll", 1000.0))
+            _KF_base = float(st.session_state.get("kelly_frac", 0.125))
+            _KF    = _KF_base * KELLY_FRAC_SCALE   # Half-Kelly na wyjście
             _KMAX  = 0.05; _KEV = 0.05; _KMAX_ODDS = 3.50; _KEV_CAP = None
 
             def _conservative_p(p):
@@ -4389,12 +4391,13 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
         _ev_df = _pd_ev.read_sql_query(
             """SELECT p_model, fair_odds, trafione, typ, kolejnosc
                FROM zdarzenia
-               WHERE sezon = ? AND liga = ?
+               WHERE liga = ?
+                 AND rynek = '1X2'
                  AND trafione IS NOT NULL
                  AND fair_odds IS NOT NULL
                  AND p_model IS NOT NULL
                  AND fair_odds >= 1.35""",
-            _db_ev, params=(AKTUALNY_SEZON, wybrana_liga))
+            _db_ev, params=(wybrana_liga,))
         _db_ev.close()
 
         if len(_ev_df) < 20:
