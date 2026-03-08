@@ -4518,6 +4518,142 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
     except Exception as _e_ev:
         st.caption(f"EV vs Yield: {_e_ev}")
 
+    # ── Value Distribution – Yield per przedział kursowy ────────────────────
+    st.divider()
+    st.markdown(
+        "<div class='section-header'>📊 Value Distribution – Yield per przedział kursowy"
+        "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
+        "gdzie model faktycznie zarabia?"
+        "</span></div>",
+        unsafe_allow_html=True)
+    st.caption("Histogram pokazuje skuteczność i yield dla każdego przedziału kursowego. "
+               "Zielony = dodatni yield na fair odds. Pomaga wybrać optymalny zakres kursów do gry.")
+
+    try:
+        import sqlite3 as _sq3v, pandas as _pdv
+        _dbv = _sq3v.connect(DB_FILE)
+        _vdf = _pdv.read_sql_query(
+            """SELECT p_model, fair_odds, trafione, typ
+               FROM zdarzenia
+               WHERE liga = ?
+                 AND rynek = '1X2'
+                 AND trafione IS NOT NULL
+                 AND fair_odds IS NOT NULL
+                 AND fair_odds >= 1.10""",
+            _dbv, params=(wybrana_liga,))
+        _dbv.close()
+
+        if len(_vdf) < 20:
+            st.info("📭 Za mało danych. Wróć po kilku kolejkach trackingu.")
+        else:
+            _vdf["hit"] = _vdf["trafione"].apply(
+                lambda x: 1 if x in (1, True, "TAK", "1", 1.0) else 0)
+            _vdf["yield_act"] = _vdf.apply(
+                lambda r: float(r["fair_odds"]) - 1 if r["hit"] == 1 else -1.0, axis=1)
+            _vdf["fair_odds"] = _vdf["fair_odds"].astype(float)
+
+            # Biny kursowe
+            _kurs_bins = [
+                (1.10, 1.35, "1.10–1.35"),
+                (1.35, 1.50, "1.35–1.50"),
+                (1.50, 1.65, "1.50–1.65"),
+                (1.65, 1.85, "1.65–1.85"),
+                (1.85, 2.10, "1.85–2.10"),
+                (2.10, 2.50, "2.10–2.50"),
+                (2.50, 9.99, "2.50+"),
+            ]
+            _vrows = []
+            for lo, hi, label in _kurs_bins:
+                _sub = _vdf[(_vdf["fair_odds"] >= lo) & (_vdf["fair_odds"] < hi)]
+                if len(_sub) < 3: continue
+                _vrows.append({
+                    "Kurs bin":   label,
+                    "N":          len(_sub),
+                    "Hit%":       _sub["hit"].mean(),
+                    "Yield":      _sub["yield_act"].mean(),
+                    "Avg kurs":   _sub["fair_odds"].mean(),
+                })
+            _vbin_df = _pdv.DataFrame(_vrows)
+
+            if len(_vbin_df) >= 2:
+                import altair as _altv
+
+                _vc1, _vc2 = st.columns([3, 2])
+
+                with _vc1:
+                    # Wykres: dwie serie – Hit% i Yield – grouped bars
+                    _vcd = _pdv.DataFrame({
+                        "Kurs bin": _vbin_df["Kurs bin"].tolist() * 2,
+                        "Wartość":  _vbin_df["Hit%"].tolist() + _vbin_df["Yield"].tolist(),
+                        "Seria":    ["Hit Rate"] * len(_vbin_df) + ["Yield (fair)"] * len(_vbin_df),
+                        "N":        _vbin_df["N"].tolist() * 2,
+                    })
+                    _vcolor = _altv.Scale(
+                        domain=["Hit Rate", "Yield (fair)"],
+                        range=["#4A90D9", "#E8602C"])
+                    _vbars = (
+                        _altv.Chart(_vcd)
+                        .mark_bar(opacity=0.85)
+                        .encode(
+                            x=_altv.X("Kurs bin:N",
+                                      sort=[r[2] for r in _kurs_bins],
+                                      axis=_altv.Axis(labelAngle=0)),
+                            y=_altv.Y("Wartość:Q",
+                                      axis=_altv.Axis(format=".0%"),
+                                      title="Hit Rate / Yield"),
+                            color=_altv.Color("Seria:N", scale=_vcolor,
+                                              legend=_altv.Legend(orient="top")),
+                            xOffset="Seria:N",
+                            tooltip=["Kurs bin", "Seria",
+                                     _altv.Tooltip("Wartość:Q", format=".1%"),
+                                     _altv.Tooltip("N:Q", title="Liczba typów")],
+                        )
+                        .properties(height=260,
+                                    title="Hit Rate i Yield per przedział kursowy")
+                    )
+                    _vzero = (_altv.Chart(_pdv.DataFrame({"y": [0]}))
+                              .mark_rule(color="#888", strokeDash=[4, 4])
+                              .encode(y="y:Q"))
+                    st.altair_chart(_vbars + _vzero, use_container_width=True)
+
+                with _vc2:
+                    st.markdown("**Tabela per przedział**")
+                    _best_yield_bin = _vbin_df.loc[_vbin_df["Yield"].idxmax()]
+                    for _, _vr in _vbin_df.iterrows():
+                        _yc = "#4CAF50" if _vr["Yield"] >= 0.02 else ("#FF9800" if _vr["Yield"] >= -0.05 else "#F44336")
+                        _star = " ⭐" if _vr["Kurs bin"] == _best_yield_bin["Kurs bin"] else ""
+                        st.markdown(
+                            f"<div style='background:#1a1a2e;border-radius:8px;padding:7px 12px;"
+                            f"margin-bottom:5px;border-left:3px solid {_yc}'>"
+                            f"<b>{_vr['Kurs bin']}</b>{_star} · N={int(_vr['N'])} · "
+                            f"Hit={_vr['Hit%']:.0%} · "
+                            f"Yield=<span style='color:{_yc}'>{_vr['Yield']:+.1%}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True)
+
+                # Automatyczny wniosek
+                _pos_bins = _vbin_df[_vbin_df["Yield"] >= 0.02]
+                _neg_bins  = _vbin_df[_vbin_df["Yield"] < -0.10]
+                if len(_pos_bins) > 0 and len(_neg_bins) > 0:
+                    _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
+                    _neg_labels = ", ".join(_neg_bins["Kurs bin"].tolist())
+                    st.success(
+                        f"💡 **Edge w kursach {_pos_labels}** "
+                        f"(yield {_pos_bins['Yield'].max():+.1%}). "
+                        f"Unikaj kursów {_neg_labels} — yield {_neg_bins['Yield'].min():+.1%} na fair odds.")
+                elif len(_pos_bins) > 0:
+                    _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
+                    st.success(f"💡 Dodatni yield w zakresach: **{_pos_labels}**. "
+                               f"Pozostałe przedziały neutralne.")
+                else:
+                    st.warning("⚠️ Brak przedziału kursowego z trwale dodatnim yieldem. "
+                               "Model generuje straty na fair odds we wszystkich zakresach — "
+                               "sprawdź kalibrację lub poczekaj na więcej danych.")
+            else:
+                st.info("Za mało różnych przedziałów kursowych w danych.")
+    except Exception as _e_vd:
+        st.caption(f"Value Distribution: {_e_vd}")
+
     # =========================================================================
     # TAB 5 – LABORATORIUM (Bet Builder)
     # =========================================================================
@@ -4711,8 +4847,14 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
 
             # ── Bankroll Kelly per liga ──────────────────────────────────────────
             st.markdown("### Bankroll Kelly per liga i globalnie")
-            st.caption("Identyczna logika co zakladka Skutecznosc: top 3 typy/kolejke wg EV, Pinnacle/B365 1.30-3.50, Kelly 1/8, start 1000 zl per liga.")
-            _ML_KS=1000.0;_ML_KF=0.125;_ML_KMAX_EXP=0.05;_ML_KEV=0.05;_ML_KMIN_ODD=1.35;_ML_KMAX_ODD=3.50
+            _ML_KS = float(st.session_state.get("bankroll", 1000.0))
+            _ML_KF_base = float(st.session_state.get("kelly_frac", 0.125))
+            _ML_KF = _ML_KF_base * KELLY_FRAC_SCALE   # Half-Kelly identycznie jak tab4
+            _ML_KMAX_EXP=0.05;_ML_KEV=0.05;_ML_KMIN_ODD=1.35;_ML_KMAX_ODD=3.50
+            st.caption(
+                f"Identyczna logika co zakładka Skuteczność: Conservative Kelly "
+                f"(p×{KELLY_PROB_SCALE}, KF={_ML_KF:.4f}), "
+                f"top 3 typy/kolejkę · Pinnacle/B365 1.35–3.50 · start {_ML_KS:.0f} zł/ligę")
             _ml_colors={"Premier League":"#00d4ff","La Liga":"#ff6b35","Bundesliga":"#ffd700","Serie A":"#4CAF50","Ligue 1":"#b44aff"}
             _ml_results={}
             _ml_prog=st.progress(0,text="Laduje dane lig...")
@@ -4761,7 +4903,8 @@ System dopasuje predykcje z wynikami i wyliczy skuteczność per rynek.
                             _ml_bk_flat+=float(_r["fair_odds"])-1 if _r["trafione"]==1 else -1
                         _cand=_grp[_grp["ev"].notna()&(_grp["ev"]>=_ML_KEV)].nlargest(3,"ev")
                         for _,_r in _cand.iterrows():
-                            _pt=float(_r["p_model"]);_k=float(_r["kurs_buk"]);_b=_k-1
+                            _pt=0.5+(float(_r["p_model"])-0.5)*KELLY_PROB_SCALE  # Conservative -15%
+                            _k=float(_r["kurs_buk"]);_b=_k-1
                             _f=min(max((_pt*_b-(1-_pt))/_b,0.0)*_ML_KF,_ML_KMAX_EXP)
                             _st=round(_ml_bk*_f,2)
                             if _st>0:
