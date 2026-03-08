@@ -431,12 +431,8 @@ def _pobierz_csv(league_code: str, sezon: str) -> pd.DataFrame:
         df["total_rozne"]  = df["HC"] + df["AC"]
         df["HST"] = pd.to_numeric(df["HST"], errors="coerce")
         df["AST"] = pd.to_numeric(df["AST"], errors="coerce")
-        # Kursy bukmacherów – zachowaj B365, Pinnacle, Max i Avg do analizy ROI i line movement
-        for col in ["B365H","B365D","B365A","PSH","PSD","PSA",
-                    "PSCH","PSCD","PSCA",               # Pinnacle closing (line movement)
-                    "MaxCH","MaxCD","MaxCA",             # Max closing (best fair odds)
-                    "AvgCH","AvgCD","AvgCA",             # Avg closing (market consensus)
-                    "BbAvH","BbAvD","BbAvA"]:
+        # Kursy bukmacherów – zachowaj B365 i Pinnacle do analizy ROI
+        for col in ["B365H","B365D","B365A","PSH","PSD","PSA","BbAvH","BbAvD","BbAvA"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             else:
@@ -2201,10 +2197,7 @@ if not historical.empty:
         # ── Auto-backfill predykcji dla wszystkich minionych kolejek ─────────
         # Odpala się gdy zmieni się liczba meczów w CSV (nowy gameweek w football-data)
         # Uzupełnia kolejki gdzie brakuje predykcji LUB brakuje wyników
-        # Klucz time-based (co 30 min) żeby odpalał się nawet gdy CSV nie zmienił rozmiaru
-        import time as _time
-        _bf_slot = int(_time.time() // 1800)  # nowy slot co 30 min
-        _bf_key = f"backfill_{wybrana_liga}_{aktualna_kolejka}_{_bf_slot}"
+        _bf_key = f"backfill_{wybrana_liga}_{len(historical)}_{aktualna_kolejka}"
         if _bf_key not in st.session_state and not srednie_df.empty:
             _dzisiaj_bf = datetime.now().date()
             _n_bf = 0
@@ -2422,27 +2415,6 @@ if not historical.empty:
                         if _o_r:
                             _kurs_live_1x2 = _o_r
 
-                    # Line movement signal (PSH→PSCH z historical)
-                    # Mocny steam na favoryta = rynek skrócił kurs o >0.25 → ostrzeżenie
-                    _lm_signal = None
-                    try:
-                        _hist_lm = historical[historical["_sezon"] == "biezacy"] \
-                            if "_sezon" in historical.columns else historical
-                        _lm_row = _hist_lm[
-                            (_hist_lm["HomeTeam"] == h) & (_hist_lm["AwayTeam"] == a)
-                        ]
-                        if not _lm_row.empty:
-                            _lr = _lm_row.iloc[-1]
-                            _psh = _lr.get("PSH"); _psch = _lr.get("PSCH")
-                            if _psh and _psch and not (pd.isna(_psh) or pd.isna(_psch)):
-                                _move = float(_psh) - float(_psch)  # + = kurs wzrósł (steam away), - = steam home
-                                if _move < -0.25:
-                                    _lm_signal = ("home", abs(_move))
-                                elif _move > 0.25:
-                                    _lm_signal = ("away", abs(_move))
-                    except Exception:
-                        pass
-
                     # Typ główny – dopisz kurs live i kelly
                     # Śledź ekspozycję per mecz od 1X2
                     _br_mecz2 = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
@@ -2466,8 +2438,7 @@ if not historical.empty:
                             "Kelly_capped": _kel.get("capped", False),
                             "Kelly_frac_used": _kel.get("fraction_used", 0.125),
                             "p_kelly_used": _kel.get("p_kelly"),
-                            "Kelly_unverified": False, "Kategoria": "1X2",
-                            "LineMovement": _lm_signal,
+                            "Kelly_unverified": False, "Kategoria": "1X2"
                         })
 
                     # Alternatywne zdarzenia – z per-rynek frakcją Kelly i max exposure
@@ -2557,16 +2528,6 @@ if not historical.empty:
                                 f"{_ki} {_ks:.0f} zł · f={_frac:.3f}</span>")
                         else:
                             _kelly_html = ""
-                        _lm = row.get("LineMovement")
-                        _lm_html = ""
-                        if _lm:
-                            _lm_dir, _lm_size = _lm
-                            _lm_team = row["Mecz"].split(" – ")[0] if _lm_dir == "home" else row["Mecz"].split(" – ")[-1]
-                            _lm_html = (
-                                f"<div style='font-size:0.74em;color:#FF9800;margin-top:3px'>"
-                                f"⚡ Steam: rynek shortuje <b>{_lm_team}</b> "
-                                f"({_lm_size:.2f} pkt) · sprawdź skład/kontuzje"
-                                f"</div>")
                         st.markdown(
                             f"<div style='background:#0a1628;border-left:3px solid {_ec};"
                             f"border-radius:6px;padding:8px 12px;margin:3px 0'>"
@@ -2578,9 +2539,7 @@ if not historical.empty:
                             f"<span style='color:#aaa;font-size:0.82em'>"
                             f"{row['P']:.0%} @ {_kd} · "
                             f"<b style='color:{_ec}'>EV {row['EV']:+.3f}</b></span>"
-                            f"{_kelly_html}</div></div>"
-                            f"{_lm_html}"
-                            f"</div>",
+                            f"{_kelly_html}</div></div></div>",
                             unsafe_allow_html=True)
                 else:
                     st.info("Brak value bets w tej kolejce")
@@ -3845,17 +3804,12 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             # Bez filtrowania: historical zawiera 2425+2526 → match.iloc[-1] może brać zły kurs
             _hist_curr = historical[historical["_sezon"] == "biezacy"] \
                 if "_sezon" in historical.columns else historical
-            _maxc_cols = ["MaxCH","MaxCD","MaxCA"]
-            _avgc_cols = ["AvgCH","AvgCD","AvgCA"]
-            _ps_cols   = ["PSH","PSD","PSA","PSCH","PSCD","PSCA"]
-            _b365_cols = ["B365H","B365D","B365A"]
-            _all_odds  = _maxc_cols + _avgc_cols + _ps_cols + _b365_cols
-            _base_cols = ["HomeTeam","AwayTeam"]
-            _hist_odds = _hist_curr[_base_cols + [c for c in _all_odds if c in _hist_curr.columns]].copy()
+            _hist_odds = _hist_curr[["HomeTeam","AwayTeam","PSH","PSD","PSA","B365H","B365D","B365A"]].copy() \
+                if all(c in _hist_curr.columns for c in ["PSH","PSD","PSA","B365H","B365D","B365A"]) \
+                else _hist_curr[["HomeTeam","AwayTeam"]].copy()
 
             def _kurs_live(row):
-                """Kurs bukmachera dla wybranego typu z historical.
-                Priorytet: MaxC (100% dostępność) > Pinnacle closing > B365"""
+                """Kurs bukmachera dla wybranego typu z historical."""
                 match = _hist_odds[
                     (_hist_odds["HomeTeam"] == row["home"]) &
                     (_hist_odds["AwayTeam"] == row["away"])
@@ -3876,13 +3830,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         if t == "1X": return round(1/(ih+id_), 3)
                         if t == "X2": return round(1/(id_+ia), 3)
                     except Exception: return None
-                # MaxC → najlepszy kurs rynkowy closing (100% dostępność)
-                k = _calc(m.get("MaxCH"), m.get("MaxCD"), m.get("MaxCA"))
-                # Pinnacle closing fallback
-                if not k:
-                    k = _calc(m.get("PSCH"), m.get("PSCD"), m.get("PSCA"))
-                # B365 fallback
-                if not k:
+                k = None
+                if "PSH" in m.index:
+                    k = _calc(m.get("PSH"), m.get("PSD"), m.get("PSA"))
+                if not k and "B365H" in m.index:
                     k = _calc(m.get("B365H"), m.get("B365D"), m.get("B365A"))
                 return k
 
