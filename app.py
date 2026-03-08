@@ -3742,10 +3742,13 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
         if len(_eq_df) >= 3 and not historical.empty:
             _eq_df = _eq_df.copy()
 
-            # Pobierz kursy bukmachera z historical (PSH/PSA/PSD primary, B365 fallback)
-            _hist_odds = historical[["HomeTeam","AwayTeam","PSH","PSD","PSA","B365H","B365D","B365A"]].copy() \
-                if all(c in historical.columns for c in ["PSH","PSD","PSA","B365H","B365D","B365A"]) \
-                else historical[["HomeTeam","AwayTeam"]].copy()
+            # Pobierz kursy bukmachera TYLKO z bieżącego sezonu (2526)
+            # Bez filtrowania: historical zawiera 2425+2526 → match.iloc[-1] może brać zły kurs
+            _hist_curr = historical[historical["_sezon"] == "biezacy"] \
+                if "_sezon" in historical.columns else historical
+            _hist_odds = _hist_curr[["HomeTeam","AwayTeam","PSH","PSD","PSA","B365H","B365D","B365A"]].copy() \
+                if all(c in _hist_curr.columns for c in ["PSH","PSD","PSA","B365H","B365D","B365A"]) \
+                else _hist_curr[["HomeTeam","AwayTeam"]].copy()
 
             def _kurs_live(row):
                 """Kurs bukmachera dla wybranego typu z historical."""
@@ -3790,9 +3793,22 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
 
             _eq_df["kurs_buk"] = _eq_df.apply(_kurs_live, axis=1)
 
+            # Fallback: gdy brak kursu bukmachera → użyj fair_odds
+            # Powód: football-data aktualizuje kursy z opóźnieniem ~24-48h po meczu
+            # bez fallbacku kolejki z brakującymi kursami wypadają z symulacji całkowicie
+            def _kurs_efektywny(row):
+                k = row["kurs_buk"]
+                if k is not None and not pd.isna(k):
+                    return float(k)
+                fo = row.get("fair_odds")
+                if fo is not None and not pd.isna(fo):
+                    return float(fo)
+                return None
+            _eq_df["kurs_eff"] = _eq_df.apply(_kurs_efektywny, axis=1)
+
             def _calc_ev(r):
                 try:
-                    k = r["kurs_buk"]
+                    k = r["kurs_eff"]
                     if k is None or pd.isna(k): return None
                     k = float(k)
                     if not (1.35 <= k <= _KMAX_ODDS): return None
@@ -3820,7 +3836,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 _cand = _grp[_grp["ev"].notna() & (_grp["ev"] >= _KEV)].nlargest(3, "ev")
                 for _, _r in _cand.iterrows():
                     _pt  = _conservative_p(_r["p_model"])   # shrinkage -15%
-                    _k   = float(_r["kurs_buk"])
+                    _k   = float(_r["kurs_eff"])
                     _b   = _k - 1
                     _f   = min(max((_pt*_b-(1-_pt))/_b, 0.0) * _KF, _KMAX)
                     _stw = round(_bk * _f, 2)
@@ -3843,6 +3859,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _fc = "#888" if _bk_flat >= _KS else "#F44336"
 
             # Wykres Kelly per kolejka
+            _n_fair_fallback = int(_eq_df["kurs_buk"].isna().sum())
             _kelly_hr = f"{_kelly_traf/_kelly_typy:.0%}" if _kelly_typy else "–"
             st.markdown(
                 "<div class='section-header'>💰 Symulacja Kelly – bieżący sezon"
@@ -3850,6 +3867,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 "top 3 typy/kolejkę · Pinnacle/B365 1.35–3.50 · Conservative Kelly"
                 "</span></div>",
                 unsafe_allow_html=True)
+            if _n_fair_fallback > 0:
+                st.caption(
+                    f"ℹ️ {_n_fair_fallback} meczów bez kursu Pinnacle/B365 w football-data "
+                    f"→ użyto fair odds modelu jako przybliżenie kursu.")
 
             _ek1, _ek2, _ek3, _ek4 = st.columns(4)
             _ek1.metric("💰 Bankroll", f"{_bk:.0f} zł",
