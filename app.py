@@ -2390,7 +2390,12 @@ def deep_data_stats(df_json: str, druzyny_ligi: set = None) -> tuple:
 # ŁADOWANIE DANYCH I SIDEBAR
 # ===========================================================================
 # ── SIDEBAR ─────────────────────────────────────────────────────────────────
-wybrana_liga = st.sidebar.selectbox("🌍 Liga", list(LIGI.keys()))
+_liga_list = list(LIGI.keys())
+if "._liga_override" in str(st.session_state):
+    pass
+_liga_default_idx = _liga_list.index(st.session_state.get("_liga_override", _liga_list[0])) \
+    if st.session_state.get("_liga_override") in _liga_list else 0
+wybrana_liga = st.sidebar.selectbox("🌍 Liga", _liga_list, index=_liga_default_idx)
 debug_mode   = False  # ustawiane w expander Parametry niżej
 
 # ── Kursy live (The Odds API) ─────────────────────────────────────────────
@@ -2558,12 +2563,48 @@ if not historical.empty:
     if _n_updated > 0:
         st.toast(f"✅ Auto-zaktualizowano wyniki {_n_updated} meczów z football-data.co.uk", icon="⚽")
 
+# ── Liga Switcher (szybka nawigacja) ────────────────────────────────────────
+_LIGA_FLAGS = {
+    "Premier League": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    "La Liga":        "🇪🇸",
+    "Bundesliga":     "🇩🇪",
+    "Serie A":        "🇮🇹",
+    "Ligue 1":        "🇫🇷",
+}
+_ls_cols = st.columns(len(LIGI))
+for _li, (_ln, _lc) in enumerate(zip(LIGI.keys(), _ls_cols)):
+    _flag = _LIGA_FLAGS.get(_ln, "🌍")
+    _active = _ln == wybrana_liga
+    _bg    = "#1e3a5f" if _active else "#0d1117"
+    _border = "#4CAF50" if _active else "#1e2028"
+    _col   = "#fff" if _active else "#555"
+    with _lc:
+        if st.button(
+            f"{_flag}",
+            key=f"_ls_{_li}",
+            use_container_width=True,
+            help=_ln,
+        ):
+            st.session_state["_liga_override"] = _ln
+            st.rerun()
+        st.markdown(
+            f"<div style='text-align:center;font-size:0.62em;color:{_col};"
+            f"margin-top:-8px;margin-bottom:4px;font-weight:{'700' if _active else '400'}'>"
+            f"{'<u>' if _active else ''}{_ln.replace(' ', chr(160))}{'</u>' if _active else ''}"
+            f"</div>",
+            unsafe_allow_html=True)
+
+# Zastosuj override ligi z switcher
+if "._liga_override" in str(st.session_state):
+    pass  # handled via selectbox sync below
+
 # ── Hero Header ────────────────────────────────────────────────────────────
 _hc1, _hc2, _hc3 = st.columns([5, 2, 2])
 with _hc1:
+    _flag_h = _LIGA_FLAGS.get(wybrana_liga, "🌍")
     st.markdown(
         f"<h1 style='margin:0 0 2px 0;font-size:1.9em;font-weight:800;color:#fff'>"
-        f"⚽ {wybrana_liga}</h1>"
+        f"{_flag_h} {wybrana_liga}</h1>"
         f"<p style='margin:0;color:#444;font-size:0.8em;letter-spacing:0.04em'>"
         f"DIXON-COLES MODEL · SOT BLEND · WALK-FORWARD BACKTEST</p>",
         unsafe_allow_html=True)
@@ -3057,18 +3098,45 @@ if not historical.empty:
                             _fw_html = (
                                 f"<div style='font-size:0.74em;color:#FF5722;margin-top:3px'>"
                                 f"⚠️ Forma vs model: {_fw}</div>")
+                        # Herby dla value bets
+                        _vb_teams = row["Mecz"].split(" – ")
+                        _vb_h = _vb_teams[0] if len(_vb_teams) > 0 else ""
+                        _vb_a = _vb_teams[1] if len(_vb_teams) > 1 else ""
+                        _vb_h_crest = _sbn.get(_vb_h, {}).get("crest", "")
+                        _vb_a_crest = _sbn.get(_vb_a, {}).get("crest", "")
+                        _vb_h_img = (f"<img src='{_vb_h_crest}' style='width:20px;height:20px;"
+                                     f"object-fit:contain;vertical-align:middle;margin-right:5px' "
+                                     f"onerror=\"this.style.display='none'\">") if _vb_h_crest else ""
+                        _vb_a_img = (f"<img src='{_vb_a_crest}' style='width:20px;height:20px;"
+                                     f"object-fit:contain;vertical-align:middle;margin-left:5px' "
+                                     f"onerror=\"this.style.display='none'\">") if _vb_a_crest else ""
+                        _typ_badge_color = {"1":"#1b5e20","X":"#4a3000","2":"#0d2a4a"}.get(row["Typ"],"#1a1a2e")
+                        _typ_text_color  = {"1":"#4CAF50","X":"#FFC107","2":"#42a5f5"}.get(row["Typ"],"#aaa")
                         st.markdown(
                             f"<div style='background:#0a1628;border-left:3px solid {_ec};"
-                            f"border-radius:6px;padding:8px 12px;margin:3px 0'>"
-                            f"<div style='display:flex;justify-content:space-between;align-items:flex-start'>"
-                            f"<div><b style='color:#fff;font-size:0.88em'>{row['Mecz']}</b>"
-                            f"<span style='color:#666;font-size:0.78em'> · {row['Typ']} "
-                            f"<code>{row['Rynek']}</code></span></div>"
-                            f"<div style='text-align:right;flex-shrink:0;margin-left:12px'>"
-                            f"<span style='color:#aaa;font-size:0.82em'>"
-                            f"{row['P']:.0%} @ {_kd} · "
-                            f"<b style='color:{_ec}'>EV {row['EV']:+.3f}</b></span>"
-                            f"{_kelly_html}</div></div>"
+                            f"border-radius:8px;padding:10px 14px;margin:5px 0'>"
+                            # Wiersz 1: herby + nazwy drużyn + badge typu
+                            f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:5px'>"
+                            f"<div style='display:flex;align-items:center;gap:4px;flex:1;min-width:0'>"
+                            f"{_vb_h_img}"
+                            f"<b style='color:#fff;font-size:0.92em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{_vb_h}</b>"
+                            f"<span style='color:#555;font-size:0.8em;margin:0 4px'>–</span>"
+                            f"<b style='color:#fff;font-size:0.92em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{_vb_a}</b>"
+                            f"{_vb_a_img}"
+                            f"</div>"
+                            f"<span style='background:{_typ_badge_color};color:{_typ_text_color};"
+                            f"font-size:0.78em;font-weight:700;padding:2px 8px;border-radius:12px;"
+                            f"margin-left:8px;flex-shrink:0'>{row['Typ']} · <code style='background:none'>{row['Rynek']}</code></span>"
+                            f"</div>"
+                            # Wiersz 2: prawdopodobieństwo · kurs · EV · Kelly
+                            f"<div style='display:flex;align-items:center;justify-content:space-between'>"
+                            f"<span style='color:#888;font-size:0.8em'>"
+                            f"<span style='color:#aaa'>p</span> {row['P']:.0%}"
+                            f" &nbsp;·&nbsp; <span style='color:#aaa'>kurs</span> <b style='color:#fff'>{_kd}</b>"
+                            f" &nbsp;·&nbsp; <b style='color:{_ec}'>EV {row['EV']:+.3f}</b>"
+                            f"</span>"
+                            f"{_kelly_html}"
+                            f"</div>"
                             f"{_form_html}"
                             f"{_lm_html}"
                             f"{_fw_html}"
@@ -3309,11 +3377,17 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
                         sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
 
-                        # Confidence: czysty label, pasek wewnątrz
+                        # Pro Match Header – czysty label dla expandera
+                        _conf_pct_l = {"High": 82, "Medium": 55, "Coinflip": 35}.get(pred["conf_level"], 40)
+                        _conf_icon  = {"High": "🟢", "Medium": "🟡", "Coinflip": "🔴"}.get(pred["conf_level"], "⚪")
+                        _typ_color  = {"1": "#4CAF50", "X": "#FF9800", "2": "#2196F3"}.get(pred["typ"], "#888")
+                        # Bar unicode dla confidence (10 bloków)
+                        _bar_filled = round(_conf_pct_l / 10)
+                        _bar_str    = "█" * _bar_filled + "░" * (10 - _bar_filled)
                         label_t2 = (
                             f"{h}  –  {a}"
+                            f"   {_conf_icon} {pred['typ']} @ {pred['fo_typ']:.2f}"
                             f"   {data_meczu}"
-                            f"   {ikony_t.get(pred['typ'],'⚪')} {pred['typ']} @ {pred['fo_typ']:.2f}"
                         )
                         with kolumna:
                             with st.expander(label_t2, expanded=False):
