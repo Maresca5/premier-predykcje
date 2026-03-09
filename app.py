@@ -2388,6 +2388,36 @@ with st.spinner(f"⚙️ Model Dixon-Coles analizuje dane {wybrana_liga}..."):
     historical = load_historical(LIGI[wybrana_liga]["csv_code"])
     schedule   = load_schedule(LIGI[wybrana_liga]["fd_org_id"], LIGI[wybrana_liga]["file"])
 
+# ── Debug mapowania nazw ────────────────────────────────────────────────────
+# Porównaj nazwy z terminarza (fd.org) z nazwami z historycznych CSV (co.uk)
+# Pokaż tylko gdy debug_mode LUB są niezgodności
+if not schedule.empty and not historical.empty:
+    _couk_teams = set()
+    for _col in ["HomeTeam", "AwayTeam"]:
+        if _col in historical.columns:
+            _couk_teams.update(historical[_col].dropna().unique())
+    _sch_teams = set()
+    for _col in ["home_team", "away_team"]:
+        if _col in schedule.columns:
+            _sch_teams.update(schedule[_col].dropna().unique())
+    # Nazwy z terminarza których NIE MA w CSV
+    _missing_in_csv = sorted(_sch_teams - _couk_teams)
+    if _missing_in_csv:
+        st.warning(
+            f"⚠️ **Mapowanie nazw [{wybrana_liga}]** — "
+            f"{len(_missing_in_csv)} nazw z terminarza nie pasuje do CSV. "
+            f"Predykcje dla tych meczów będą niepełne.")
+        with st.expander("🔍 Pokaż niezgodności", expanded=True):
+            _dc1, _dc2 = st.columns(2)
+            _dc1.markdown("**Nazwa z fd.org (terminarz)**")
+            _dc2.markdown("**Najbliższe w co.uk CSV**")
+            for _bad in _missing_in_csv:
+                # Znajdź najbliższe dopasowanie z co.uk
+                from difflib import get_close_matches
+                _close = get_close_matches(_bad, _couk_teams, n=2, cutoff=0.4)
+                _dc1.code(_bad)
+                _dc2.code(", ".join(_close) if _close else "— brak podobnych —")
+
 # Auto-aktualizacja wynikow: przy każdym wczytaniu synchronizuj trafione
 # BEZ session_state cache - odpala się zawsze gdy są mecze bez wyników
 # (szybkie: tylko SELECT + UPDATE dla meczów z trafione IS NULL)
