@@ -44,13 +44,13 @@ def _kurs_dc_live(typ, oh, od, oa):
 # ===========================================================================
 LIGI = {
     # tau: dni time-decay; fw: form_weight krok per W/L
-    # EPL: wyrównana liga, wolniejszy decay, ostrożny form_weight
-    # Ligue 1: bardziej przewidywalna, szybszy decay + silniejszy form
-    "Premier League": {"csv_code": "E0",  "file": "terminarz_premier_2025.csv",  "tau": 30.0, "fw": 0.03},
-    "La Liga":        {"csv_code": "SP1", "file": "terminarz_la_liga_2025.csv",  "tau": 28.0, "fw": 0.04},
-    "Bundesliga":     {"csv_code": "D1",  "file": "terminarz_bundesliga_2025.csv","tau": 28.0, "fw": 0.04},
-    "Serie A":        {"csv_code": "I1",  "file": "terminarz_serie_a_2025.csv",  "tau": 28.0, "fw": 0.04},
-    "Ligue 1":        {"csv_code": "F1",  "file": "terminarz_ligue_1_2025.csv",  "tau": 21.0, "fw": 0.05},
+    # fd_org_id: ID ligi w football-data.org API
+    # cup_ids: ID rozgrywek pucharowych dla fatigue (UCL/UEL/UECL/krajowe puchary)
+    "Premier League": {"csv_code": "E0",  "fd_org_id": 2021, "cup_ids": [2001,2002,2139,2021], "file": "terminarz_premier_2025.csv",  "tau": 30.0, "fw": 0.03},
+    "La Liga":        {"csv_code": "SP1", "fd_org_id": 2014, "cup_ids": [2001,2002,2079],       "file": "terminarz_la_liga_2025.csv",  "tau": 28.0, "fw": 0.04},
+    "Bundesliga":     {"csv_code": "D1",  "fd_org_id": 2002, "cup_ids": [2001,2002,2011],       "file": "terminarz_bundesliga_2025.csv","tau": 28.0, "fw": 0.04},
+    "Serie A":        {"csv_code": "I1",  "fd_org_id": 2019, "cup_ids": [2001,2002,2080],       "file": "terminarz_serie_a_2025.csv",  "tau": 28.0, "fw": 0.04},
+    "Ligue 1":        {"csv_code": "F1",  "fd_org_id": 2015, "cup_ids": [2001,2002,2081],       "file": "terminarz_ligue_1_2025.csv",  "tau": 21.0, "fw": 0.05},
 }
 
 DB_FILE    = "predykcje.db"
@@ -195,7 +195,7 @@ def normalize_name(name: str) -> str:
     return name.strip()
 
 NAZWY_MAP = {
-    # PREMIER LEAGUE
+    # PREMIER LEAGUE – pełne nazwy (football-data.co.uk)
     "Brighton & Hove Albion":  "Brighton",
     "West Ham United":         "West Ham",
     "Newcastle United":        "Newcastle",
@@ -208,6 +208,24 @@ NAZWY_MAP = {
     "Wolverhampton":           "Wolves",
     "Leicester City":          "Leicester",
     "Sheffield United":        "Sheffield Utd",
+    # PREMIER LEAGUE – shortName z football-data.org API
+    "Nottm Forest":            "Nott'm Forest",
+    "Newcastle Utd":           "Newcastle",
+    "Spurs":                   "Tottenham",
+    "Man Utd":                 "Man United",
+    "Ipswich":                 "Ipswich",
+    "Ipswich Town":            "Ipswich",
+    "AFC Bournemouth":         "Bournemouth",
+    "Brentford FC":            "Brentford",
+    "Brighton & Hove Albion FC": "Brighton",
+    "Chelsea FC":              "Chelsea",
+    "Crystal Palace FC":       "Crystal Palace",
+    "Everton FC":              "Everton",
+    "Fulham FC":               "Fulham",
+    "Arsenal FC":              "Arsenal",
+    "Aston Villa FC":          "Aston Villa",
+    "Liverpool FC":            "Liverpool",
+    "Sunderland AFC":          "Sunderland",
     # LA LIGA
     "Girona FC":               "Girona",
     "Rayo Vallecano":          "Vallecano",
@@ -239,15 +257,18 @@ NAZWY_MAP = {
     # BUNDESLIGA
     "FC Bayern München":              "Bayern Munich",
     "Bayern":                         "Bayern Munich",
+    "FC Bayern Munich":               "Bayern Munich",
     "Borussia Dortmund":              "Dortmund",
     "Leipzig":                        "RB Leipzig",
+    "RB Leipzig":                     "RB Leipzig",
     "Bayer 04 Leverkusen":            "Leverkusen",
+    "Bayer Leverkusen":               "Leverkusen",
     "Eintracht Frankfurt":            "Ein Frankfurt",
     "VfB Stuttgart":                  "Stuttgart",
     "VfL Wolfsburg":                  "Wolfsburg",
     "Borussia Mönchengladbach":       "M'gladbach",
     "Borussia Monchengladbach":       "M'gladbach",
-"Borussia M'gladbach": "M'gladbach",
+    "Borussia M'gladbach":            "M'gladbach",
     "1. FC Union Berlin":             "Union Berlin",
     "SC Freiburg":                    "Freiburg",
     "1. FC Köln":                     "FC Koln",
@@ -255,6 +276,7 @@ NAZWY_MAP = {
     "1. FSV Mainz 05":                "Mainz",
     "FSV Mainz 05":                   "Mainz",
     "TSG Hoffenheim":                 "Hoffenheim",
+    "TSG 1899 Hoffenheim":            "Hoffenheim",
     "SV Werder Bremen":               "Werder Bremen",
     "VfL Bochum":                     "Bochum",
     "FC Augsburg":                    "Augsburg",
@@ -262,22 +284,48 @@ NAZWY_MAP = {
     "St. Pauli":                      "St Pauli",
     "1. FC Heidenheim":               "Heidenheim",
     "Hamburger SV":                   "Hamburg",
+    "Holstein Kiel":                  "Kiel",
     # SERIE A
     "AC Milan":               "Milan",
     "Internazionale":         "Inter",
+    "FC Internazionale Milano": "Inter",
     "AS Roma":                "Roma",
     "Hellas Verona":          "Verona",
+    "Hellas Verona FC":       "Verona",
+    "SSC Napoli":             "Napoli",
+    "Juventus FC":            "Juventus",
+    "SS Lazio":               "Lazio",
+    "Atalanta BC":            "Atalanta",
+    "ACF Fiorentina":         "Fiorentina",
+    "Torino FC":              "Torino",
+    "Udinese Calcio":         "Udinese",
+    "Bologna FC 1909":        "Bologna",
+    "Empoli FC":              "Empoli",
+    "US Lecce":               "Lecce",
+    "Genoa CFC":              "Genoa",
+    "Cagliari Calcio":        "Cagliari",
+    "Venezia FC":             "Venezia",
+    "Parma Calcio 1913":      "Parma",
+    "Como 1907":              "Como",
+    "US Salernitana 1919":    "Salernitana",
+    "AC Monza":               "Monza",
+    "Frosinone Calcio":       "Frosinone",
     # LIGUE 1
     "Paris Saint-Germain":    "Paris SG",
+    "Paris Saint-Germain FC": "Paris SG",
     "PSG":                    "Paris SG",
     "Olympique de Marseille": "Marseille",
     "AS Monaco":              "Monaco",
+    "AS Monaco FC":           "Monaco",
     "Olympique Lyonnais":     "Lyon",
+    "Olympique Lyonnais FC":  "Lyon",
     "LOSC Lille":             "Lille",
     "Stade Rennais":          "Rennes",
+    "Stade Rennais FC":       "Rennes",
     "OGC Nice":               "Nice",
     "RC Lens":                "Lens",
     "RC Strasbourg":          "Strasbourg",
+    "RC Strasbourg Alsace":   "Strasbourg",
     "FC Nantes":              "Nantes",
     "Montpellier HSC":        "Montpellier",
     "FC Toulouse":            "Toulouse",
@@ -288,6 +336,10 @@ NAZWY_MAP = {
     "AJ Auxerre":             "Auxerre",
     "Le Havre AC":            "Le Havre",
     "FC Metz":                "Metz",
+    "Saint-Etienne":          "St Etienne",
+    "AS Saint-Étienne":       "St Etienne",
+    "Angers SCO":             "Angers",
+    "Havre AC":               "Le Havre",
 }
 
 _niezmapowane: set = set()
@@ -464,33 +516,80 @@ def load_historical(league_code: str) -> pd.DataFrame:
     df_now["_sezon"] = "biezacy"
     return pd.concat([df_prev_s, df_now], ignore_index=True).sort_values("Date")
 
-@st.cache_data(ttl=86400)
-def load_schedule(filename: str) -> pd.DataFrame:
-    """Ładuje terminarz z pliku CSV i używa istniejącej kolumny round"""
+def _get_fd_api_key() -> str | None:
+    """Pobiera klucz football-data.org z secrets lub session_state."""
+    try:
+        return st.secrets["FOOTBALL_DATA_API_KEY"]
+    except Exception:
+        return st.session_state.get("_fd_api_key")
+
+@st.cache_data(ttl=3600)
+def load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
+    """Ładuje terminarz z football-data.org API (TTL 1h).
+    Fallback na lokalny CSV jeśli brak klucza lub błąd API."""
+
+    api_key = _get_fd_api_key()
+
+    if api_key:
+        try:
+            import requests as _req
+            url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season=2024"
+            resp = _req.get(url, headers={"X-Auth-Token": api_key}, timeout=10)
+            resp.raise_for_status()
+            matches = resp.json().get("matches", [])
+            rows = []
+            for m in matches:
+                ht_name = m["homeTeam"].get("shortName") or m["homeTeam"].get("name", "")
+                at_name = m["awayTeam"].get("shortName") or m["awayTeam"].get("name", "")
+                ht = map_nazwa(ht_name)
+                at = map_nazwa(at_name)
+                dt = pd.to_datetime(m["utcDate"]).tz_localize(None) if not m["utcDate"].endswith("Z") \
+                    else pd.to_datetime(m["utcDate"]).tz_convert(None)
+                status = m.get("status", "")
+                is_played = status == "FINISHED"
+                score = m.get("score", {}).get("fullTime", {})
+                wynik_h = score.get("home")
+                wynik_a = score.get("away")
+                rows.append({
+                    "round":     m.get("matchday", 0),
+                    "date":      dt,
+                    "home_team": ht,
+                    "away_team": at,
+                    "is_played": is_played,
+                    "status":    status,
+                    "wynik_h":   wynik_h,
+                    "wynik_a":   wynik_a,
+                    "fd_id":     m.get("id"),
+                })
+            if not rows:
+                raise ValueError("Pusta odpowiedź API")
+            df = pd.DataFrame(rows)
+            df["round"] = pd.to_numeric(df["round"], errors="coerce").fillna(0).astype(int)
+            return df.sort_values("date").reset_index(drop=True)
+        except Exception as _e:
+            # Cicha degradacja do fallback CSV
+            pass
+
+    # ── Fallback: lokalny CSV (stare zachowanie) ──────────────────────
     try:
         df = pd.read_csv(filename)
         df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
-        
-        # Sprawdź czy kolumna 'round' istnieje w pliku
         if "round" in df.columns:
-            # Użyj istniejącej kolumny round, upewnij się że to liczby całkowite
             df["round"] = pd.to_numeric(df["round"], errors="coerce").fillna(0).astype(int)
         else:
-            # Jeśli nie ma kolumny 'round', wygeneruj ją (awaryjnie)
-            st.warning(f"⚠️ Brak kolumny round w pliku {filename}, generuję automatycznie")
             df = df.sort_values("date")
             df["date_only"] = df["date"].dt.date
             unique_dates = sorted(df["date_only"].unique())
-            date_to_round = {date: i+1 for i, date in enumerate(unique_dates)}
+            date_to_round = {d: i+1 for i, d in enumerate(unique_dates)}
             df["round"] = df["date_only"].map(date_to_round)
             df = df.drop("date_only", axis=1)
-        
-        # Sortuj według daty dla pewności
-        df = df.sort_values("date").reset_index(drop=True)
-        
-        return df.dropna(subset=["date"])
+        # Dodaj brakujące kolumny dla kompatybilności
+        for col in ["is_played", "wynik_h", "wynik_a", "status", "fd_id"]:
+            if col not in df.columns:
+                df[col] = None
+        return df.sort_values("date").reset_index(drop=True)
     except Exception as e:
-        st.error(f"Problem z plikiem terminarza {filename}: {e}")
+        st.error(f"Problem z terminarza {filename}: {e}")
         return pd.DataFrame()
 
 # ===========================================================================
@@ -2039,6 +2138,23 @@ def _oa_get_key():
 
 _oa_key = _oa_get_key()
 
+with st.sidebar.expander("📅 Terminarz (football-data.org)", expanded=not bool(_get_fd_api_key())):
+    _fd_key = _get_fd_api_key()
+    if not _fd_key:
+        _fd_mk = st.text_input("Klucz football-data.org", type="password",
+            placeholder="lub dodaj FOOTBALL_DATA_API_KEY do secrets", key="_fd_key_inp")
+        if _fd_mk:
+            st.session_state["_fd_api_key"] = _fd_mk
+            st.rerun()
+    else:
+        st.markdown(
+            "<div style='font-size:0.78em;color:#4CAF50'>✅ Klucz aktywny – terminarz z API</div>"
+            "<div style='font-size:0.72em;color:#555;margin-top:2px'>Odświeżanie co 1h · fallback na CSV</div>",
+            unsafe_allow_html=True)
+        if st.button("🔄 Wyczyść cache terminarza", use_container_width=True, key="_fd_clear"):
+            load_schedule.clear()
+            st.success("Cache wyczyszczony")
+
 with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key)):
     if not _oa_key:
         _mk = st.text_input("Klucz The Odds API", type="password",
@@ -2106,7 +2222,7 @@ with st.sidebar.expander("💼 Kelly & Bankroll", expanded=True):
 
 with st.spinner(f"⚙️ Model Dixon-Coles analizuje dane {wybrana_liga}..."):
     historical = load_historical(LIGI[wybrana_liga]["csv_code"])
-    schedule   = load_schedule(LIGI[wybrana_liga]["file"])
+    schedule   = load_schedule(LIGI[wybrana_liga]["fd_org_id"], LIGI[wybrana_liga]["file"])
 
 # Auto-aktualizacja wynikow: przy każdym wczytaniu synchronizuj trafione
 # BEZ session_state cache - odpala się zawsze gdy są mecze bez wyników
