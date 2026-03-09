@@ -217,7 +217,7 @@ NAZWY_MAP = {
     "Wolverhampton":           "Wolves",
     "Leicester City":          "Leicester",
     "Sheffield United":        "Sheffield Utd",
-    # PREMIER LEAGUE – shortName z football-data.org API
+    # PREMIER LEAGUE – shortName z football-data.org API (EPL 2024/25 i 2025/26)
     "Nottm Forest":            "Nott'm Forest",
     "Newcastle Utd":           "Newcastle",
     "Spurs":                   "Tottenham",
@@ -235,6 +235,18 @@ NAZWY_MAP = {
     "Aston Villa FC":          "Aston Villa",
     "Liverpool FC":            "Liverpool",
     "Sunderland AFC":          "Sunderland",
+    "Southampton FC":          "Southampton",
+    "Leicester City FC":       "Leicester",
+    "Leeds Utd":               "Leeds",
+    "Sheffield Utd":           "Sheffield Utd",
+    "Burnley FC":              "Burnley",
+    "West Ham Utd":            "West Ham",
+    "Wolverhampton":           "Wolves",
+    "Wolves FC":               "Wolves",
+    "Watford FC":              "Watford",
+    "Norwich City":            "Norwich",
+    "Norwich City FC":         "Norwich",
+    "Middlesbrough FC":        "Middlesbrough",
     # LA LIGA
     "Girona FC":               "Girona",
     "Rayo Vallecano":          "Vallecano",
@@ -2214,6 +2226,14 @@ with st.sidebar.expander("📅 Terminarz (football-data.org)", expanded=not bool
         if st.button("🔄 Wyczyść cache terminarza", use_container_width=True, key="_fd_clear"):
             load_schedule.clear()
             st.success("Cache wyczyszczony – odświeżam...")
+        # Debug: pokaż niezmapowane nazwy z API
+        if _niezmapowane:
+            st.markdown(
+                "<div style='font-size:0.72em;color:#FF9800;margin-top:6px'>"
+                "⚠️ Niezmapowane nazwy z API – dodaj do NAZWY_MAP:</div>",
+                unsafe_allow_html=True)
+            for _nm in sorted(_niezmapowane):
+                st.code(_nm, language=None)
 
 with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key)):
     if not _oa_key:
