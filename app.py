@@ -2571,32 +2571,22 @@ _LIGA_FLAGS = {
     "Serie A":        "🇮🇹",
     "Ligue 1":        "🇫🇷",
 }
+# ── Liga Switcher – poziomy pasek ───────────────────────────────────────────
 _ls_cols = st.columns(len(LIGI))
 for _li, (_ln, _lc) in enumerate(zip(LIGI.keys(), _ls_cols)):
-    _flag = _LIGA_FLAGS.get(_ln, "🌍")
+    _flag   = _LIGA_FLAGS.get(_ln, "🌍")
     _active = _ln == wybrana_liga
-    _bg    = "#1e3a5f" if _active else "#0d1117"
-    _border = "#4CAF50" if _active else "#1e2028"
-    _col   = "#fff" if _active else "#555"
     with _lc:
         if st.button(
-            f"{_flag}",
+            f"{_flag} {_ln}",
             key=f"_ls_{_li}",
             use_container_width=True,
+            type="primary" if _active else "secondary",
             help=_ln,
         ):
             st.session_state["_liga_override"] = _ln
             st.rerun()
-        st.markdown(
-            f"<div style='text-align:center;font-size:0.62em;color:{_col};"
-            f"margin-top:-8px;margin-bottom:4px;font-weight:{'700' if _active else '400'}'>"
-            f"{'<u>' if _active else ''}{_ln.replace(' ', chr(160))}{'</u>' if _active else ''}"
-            f"</div>",
-            unsafe_allow_html=True)
 
-# Zastosuj override ligi z switcher
-if "._liga_override" in str(st.session_state):
-    pass  # handled via selectbox sync below
 
 # ── Hero Header ────────────────────────────────────────────────────────────
 _hc1, _hc2, _hc3 = st.columns([5, 2, 2])
@@ -3098,39 +3088,21 @@ if not historical.empty:
                             _fw_html = (
                                 f"<div style='font-size:0.74em;color:#FF5722;margin-top:3px'>"
                                 f"⚠️ Forma vs model: {_fw}</div>")
-                        # Herby dla value bets
-                        _vb_teams = row["Mecz"].split(" – ")
-                        _vb_h = _vb_teams[0] if len(_vb_teams) > 0 else ""
-                        _vb_a = _vb_teams[1] if len(_vb_teams) > 1 else ""
-                        _vb_h_crest = _sbn.get(_vb_h, {}).get("crest", "")
-                        _vb_a_crest = _sbn.get(_vb_a, {}).get("crest", "")
-                        _vb_h_img = (f"<img src='{_vb_h_crest}' style='width:20px;height:20px;"
-                                     f"object-fit:contain;vertical-align:middle;margin-right:5px' "
-                                     f"onerror=\"this.style.display='none'\">") if _vb_h_crest else ""
-                        _vb_a_img = (f"<img src='{_vb_a_crest}' style='width:20px;height:20px;"
-                                     f"object-fit:contain;vertical-align:middle;margin-left:5px' "
-                                     f"onerror=\"this.style.display='none'\">") if _vb_a_crest else ""
                         _typ_badge_color = {"1":"#1b5e20","X":"#4a3000","2":"#0d2a4a"}.get(row["Typ"],"#1a1a2e")
                         _typ_text_color  = {"1":"#4CAF50","X":"#FFC107","2":"#42a5f5"}.get(row["Typ"],"#aaa")
                         st.markdown(
                             f"<div style='background:#0a1628;border-left:3px solid {_ec};"
                             f"border-radius:8px;padding:10px 14px;margin:5px 0'>"
-                            # Wiersz 1: herby + nazwy drużyn + badge typu
+                            # Wiersz 1: mecz + badge typu
                             f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:5px'>"
-                            f"<div style='display:flex;align-items:center;gap:4px;flex:1;min-width:0'>"
-                            f"{_vb_h_img}"
-                            f"<b style='color:#fff;font-size:0.92em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{_vb_h}</b>"
-                            f"<span style='color:#555;font-size:0.8em;margin:0 4px'>–</span>"
-                            f"<b style='color:#fff;font-size:0.92em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{_vb_a}</b>"
-                            f"{_vb_a_img}"
-                            f"</div>"
+                            f"<b style='color:#fff;font-size:0.90em'>{row['Mecz']}</b>"
                             f"<span style='background:{_typ_badge_color};color:{_typ_text_color};"
-                            f"font-size:0.78em;font-weight:700;padding:2px 8px;border-radius:12px;"
-                            f"margin-left:8px;flex-shrink:0'>{row['Typ']} · <code style='background:none'>{row['Rynek']}</code></span>"
+                            f"font-size:0.76em;font-weight:700;padding:2px 9px;border-radius:12px;"
+                            f"margin-left:8px;flex-shrink:0'>{row['Typ']} · {row['Rynek']}</span>"
                             f"</div>"
-                            # Wiersz 2: prawdopodobieństwo · kurs · EV · Kelly
+                            # Wiersz 2: p · kurs · EV · Kelly
                             f"<div style='display:flex;align-items:center;justify-content:space-between'>"
-                            f"<span style='color:#888;font-size:0.8em'>"
+                            f"<span style='color:#888;font-size:0.80em'>"
                             f"<span style='color:#aaa'>p</span> {row['P']:.0%}"
                             f" &nbsp;·&nbsp; <span style='color:#aaa'>kurs</span> <b style='color:#fff'>{_kd}</b>"
                             f" &nbsp;·&nbsp; <b style='color:{_ec}'>EV {row['EV']:+.3f}</b>"
@@ -3377,23 +3349,58 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         sedzia = mecz.get("Referee", "Nieznany") if "Referee" in mecz else "Nieznany"
                         sedzia_ostr = ostrzezenie_sedziego(sedzia, sedziowie_df)
 
-                        # Pro Match Header – czysty label dla expandera
+                        # Pro Match Card
                         _conf_pct_l = {"High": 82, "Medium": 55, "Coinflip": 35}.get(pred["conf_level"], 40)
+                        _conf_col_l = {"High": "#4CAF50", "Medium": "#FF9800", "Coinflip": "#F44336"}.get(pred["conf_level"], "#888")
                         _conf_icon  = {"High": "🟢", "Medium": "🟡", "Coinflip": "🔴"}.get(pred["conf_level"], "⚪")
-                        _typ_color  = {"1": "#4CAF50", "X": "#FF9800", "2": "#2196F3"}.get(pred["typ"], "#888")
-                        # Bar unicode dla confidence (10 bloków)
-                        _bar_filled = round(_conf_pct_l / 10)
-                        _bar_str    = "█" * _bar_filled + "░" * (10 - _bar_filled)
-                        label_t2 = (
-                            f"{h}  –  {a}"
-                            f"   {_conf_icon} {pred['typ']} @ {pred['fo_typ']:.2f}"
-                            f"   {data_meczu}"
-                        )
+                        _typ_bg     = {"1": "#1b5e20", "X": "#4a3000", "2": "#0d2a4a"}.get(pred["typ"], "#1a1a2e")
+                        _typ_fg     = {"1": "#4CAF50", "X": "#FFC107", "2": "#42a5f5"}.get(pred["typ"], "#aaa")
+                        # Herby z standings
+                        _mc_h_crest = _sbn.get(h, {}).get("crest", "")
+                        _mc_a_crest = _sbn.get(a, {}).get("crest", "")
+                        _mc_h_img = (f"<img src='{_mc_h_crest}' style='width:28px;height:28px;"
+                                     f"object-fit:contain;vertical-align:middle' "
+                                     f"onerror=\"this.style.display='none'\">") if _mc_h_crest else "🏟️"
+                        _mc_a_img = (f"<img src='{_mc_a_crest}' style='width:28px;height:28px;"
+                                     f"object-fit:contain;vertical-align:middle' "
+                                     f"onerror=\"this.style.display='none'\">") if _mc_a_crest else "🏟️"
+                        label_t2 = f"{h} – {a}   {_conf_icon} {pred['typ']} @ {pred['fo_typ']:.2f}"
                         with kolumna:
-                            with st.expander(label_t2, expanded=False):
-                                # ── Confidence Meter ──────────────────────
-                                _conf_pct = {"High": 82, "Medium": 55, "Coinflip": 35}.get(pred["conf_level"], 40)
-                                _conf_col = {"High": "#4CAF50", "Medium": "#FF9800", "Coinflip": "#F44336"}.get(pred["conf_level"], "#888")
+                            # Karta przed expanderem
+                            st.markdown(
+                                f"<div style='background:#0d1117;border:1px solid #1e2028;"
+                                f"border-top:2px solid {_conf_col_l};"
+                                f"border-radius:10px;padding:10px 14px;margin-bottom:2px'>"
+                                # Herby + nazwy
+                                f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:6px'>"
+                                f"<div style='display:flex;align-items:center;gap:7px;flex:1'>"
+                                f"{_mc_h_img}"
+                                f"<b style='color:#fff;font-size:0.95em'>{h}</b>"
+                                f"</div>"
+                                f"<div style='text-align:center;padding:0 8px'>"
+                                f"<span style='color:#555;font-size:0.75em'>{data_meczu}</span>"
+                                f"</div>"
+                                f"<div style='display:flex;align-items:center;gap:7px;flex:1;justify-content:flex-end'>"
+                                f"<b style='color:#fff;font-size:0.95em'>{a}</b>"
+                                f"{_mc_a_img}"
+                                f"</div>"
+                                f"</div>"
+                                # Typ badge + confidence bar
+                                f"<div style='display:flex;align-items:center;gap:8px'>"
+                                f"<span style='background:{_typ_bg};color:{_typ_fg};"
+                                f"font-size:0.78em;font-weight:700;padding:2px 10px;border-radius:12px'>"
+                                f"{pred['typ']} @ {pred['fo_typ']:.2f}</span>"
+                                f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:4px'>"
+                                f"<div style='background:{_conf_col_l};width:{_conf_pct_l}%;"
+                                f"height:4px;border-radius:3px'></div></div>"
+                                f"<span style='color:{_conf_col_l};font-size:0.72em;font-weight:600'>{_conf_pct_l}%</span>"
+                                f"</div>"
+                                f"</div>",
+                                unsafe_allow_html=True)
+                            with st.expander("▸ Szczegóły analizy", expanded=False):
+                                # ── Confidence Meter (wewnątrz) ───────────
+                                _conf_pct = _conf_pct_l
+                                _conf_col = _conf_col_l
                                 _conf_lbl = {"High": "Wysoka pewność", "Medium": "Umiarkowana", "Coinflip": "Wyrównany"}.get(pred["conf_level"], "")
                                 st.markdown(
                                     f"<div style='margin:0 0 8px 0'>"
