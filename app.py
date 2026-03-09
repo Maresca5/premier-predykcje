@@ -5775,4 +5775,4 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     st.caption("Zbieznosc linii = dobra kalibracja. Niebieska nad pomaranczowa = model niedoszacowuje.")
 
 else:
-    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
+    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.") 
