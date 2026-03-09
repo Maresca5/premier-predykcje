@@ -535,19 +535,37 @@ def load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
             import requests as _req
             headers = {"X-Auth-Token": api_key}
 
-            # Krok 1: pobierz aktualny sezon z competition endpoint
-            comp_resp = _req.get(
-                f"https://api.football-data.org/v4/competitions/{fd_org_id}",
-                headers=headers, timeout=10)
-            comp_resp.raise_for_status()
-            comp_data = comp_resp.json()
-            current_season_year = comp_data.get("currentSeason", {}).get("startDate", "2024-01-01")[:4]
+            # Wyznacz rok sezonu na podstawie daty:
+            # Europejskie ligi startują w lipcu/sierpniu → sezon X/X+1
+            # Jeśli jesteśmy po lipcu → bieżący sezon startował w tym roku
+            # Jeśli jesteśmy przed lipcem → bieżący sezon startował rok temu
+            from datetime import date as _date
+            _today = _date.today()
+            _target_year = _today.year if _today.month >= 7 else _today.year - 1
 
-            # Krok 2: pobierz mecze bieżącego sezonu
-            url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season={current_season_year}"
+            # Pobierz mecze dla wyznaczonego roku sezonu
+            url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season={_target_year}"
             resp = _req.get(url, headers=headers, timeout=10)
+
+            # Jeśli 404 lub brak danych → cofnij o rok (sezon jeszcze nie opublikowany)
+            if resp.status_code == 404:
+                _target_year -= 1
+                url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season={_target_year}"
+                resp = _req.get(url, headers=headers, timeout=10)
+
             resp.raise_for_status()
             matches = resp.json().get("matches", [])
+
+            # Jeśli pusty wynik → cofnij rok
+            if not matches:
+                _target_year -= 1
+                url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season={_target_year}"
+                resp = _req.get(url, headers=headers, timeout=10)
+                resp.raise_for_status()
+                matches = resp.json().get("matches", [])
+
+            if not matches:
+                raise ValueError(f"Brak meczów dla sezonu {_target_year} i {_target_year-1}")
 
             rows = []
             for m in matches:
@@ -572,15 +590,14 @@ def load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
                     "wynik_h":   wynik_h,
                     "wynik_a":   wynik_a,
                     "fd_id":     m.get("id"),
-                    "_season":   current_season_year,
+                    "_season":   str(_target_year),
                 })
-            if not rows:
-                raise ValueError("Pusta odpowiedź API")
+
             df = pd.DataFrame(rows)
             df["round"] = pd.to_numeric(df["round"], errors="coerce").fillna(0).astype(int)
             # Zapisz info o sezonie do session_state dla sidebara
             try:
-                st.session_state["_fd_season_debug"] = current_season_year + "/" + str(int(current_season_year)+1)[2:]
+                st.session_state["_fd_season_debug"] = f"{_target_year}/{str(_target_year+1)[2:]}"
             except Exception:
                 pass
             return df.sort_values("date").reset_index(drop=True)
