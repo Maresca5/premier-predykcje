@@ -3965,6 +3965,19 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _kc = "#4CAF50" if _bk >= _KS else "#F44336"
             _fc = "#888" if _bk_flat >= _KS else "#F44336"
 
+            # Zapisz końcowy bankroll do session_state → Multi-Liga go odczyta
+            _ss_ml_key = f"ml_bk_{wybrana_liga}"
+            st.session_state[_ss_ml_key] = {
+                "bk": round(_bk, 2),
+                "bk_flat": round(_bk_flat, 2),
+                "roi": round(_roi_kelly, 2),
+                "roi_flat": round(_roi_flat, 2),
+                "n": _kelly_typy,
+                "dd": round(_max_dd_k, 2),
+                "bk_vals": _bk_vals,
+                "kol_nums": list(_kol_nums),
+            }
+
             # Wykres Kelly per kolejka
             _n_fair_fallback = int(_eq_df["kurs_buk"].isna().sum())
             _kelly_hr = f"{_kelly_traf/_kelly_typy:.0%}" if _kelly_typy else "–"
@@ -4081,6 +4094,137 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
 
 
         st.divider()
+
+        st.divider()
+
+        # ── Skuteczność rynków alternatywnych ──────────────────────────────
+        st.markdown(
+            "<div class='section-header'>🎯 Skuteczność – rynki alternatywne"
+            "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
+            "bez 1/X/2/1X/X2 · gole, BTTS, rożne, kartki, SOT"
+            "</span></div>",
+            unsafe_allow_html=True)
+        try:
+            _alt_con = sqlite3.connect(DB_FILE)
+            _alt_df = pd.read_sql_query(
+                """SELECT rynek, typ, p_model, fair_odds, trafione
+                   FROM zdarzenia
+                   WHERE liga=? AND rynek != '1X2' AND trafione IS NOT NULL
+                   ORDER BY id""",
+                _alt_con, params=(wybrana_liga,))
+            _alt_con.close()
+
+            if len(_alt_df) < 5:
+                st.info("Za mało danych rynków alternatywnych (minimum 5 rozliczonych zdarzeń).")
+            else:
+                # Grupuj per rynek
+                _alt_summary = []
+                for _kat, _grp in _alt_df.groupby("rynek"):
+                    _n    = len(_grp)
+                    _traf = int(_grp["trafione"].sum())
+                    _hr   = _traf / _n
+                    _avg_fo = _grp["fair_odds"].mean()
+                    # Flat PnL (stawka 1 jednostka)
+                    _pnl_flat = sum(
+                        float(r["fair_odds"]) - 1 if r["trafione"] == 1 else -1
+                        for _, r in _grp.iterrows()
+                    )
+                    _yield_flat = _pnl_flat / _n * 100
+                    # Avg prob modelu
+                    _avg_p = _grp["p_model"].mean()
+                    # Brier score (kalibracja)
+                    _brier = (((_grp["p_model"] - _grp["trafione"]) ** 2).mean())
+                    _alt_summary.append({
+                        "Rynek": _kat,
+                        "n": _n,
+                        "Hit%": _hr,
+                        "AvgP": _avg_p,
+                        "AvgFO": _avg_fo,
+                        "Yield%": _yield_flat,
+                        "PnL": _pnl_flat,
+                        "Brier": _brier,
+                    })
+
+                if not _alt_summary:
+                    st.info("Brak danych.")
+                else:
+                    _alt_summary.sort(key=lambda x: -x["n"])
+
+                    # KPI wiersz – łącznie
+                    _alt_total_n    = sum(r["n"] for r in _alt_summary)
+                    _alt_total_traf = sum(int(r["Hit%"] * r["n"]) for r in _alt_summary)
+                    _alt_total_pnl  = sum(r["PnL"] for r in _alt_summary)
+                    _alt_total_yield = _alt_total_pnl / _alt_total_n * 100 if _alt_total_n else 0
+
+                    _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+                    _ac1.metric("Łącznie typów", f"{_alt_total_n}")
+                    _ac2.metric("Hit rate", f"{_alt_total_traf/_alt_total_n:.1%}" if _alt_total_n else "–")
+                    _alt_pnl_c = "normal" if _alt_total_pnl >= 0 else "inverse"
+                    _ac3.metric("PnL (flat)", f"{_alt_total_pnl:+.1f} j.", delta_color=_alt_pnl_c)
+                    _ac4.metric("Yield", f"{_alt_total_yield:+.1f}%", delta_color=_alt_pnl_c)
+
+                    # Tabela per rynek
+                    _alt_rows = []
+                    for r in _alt_summary:
+                        _yc = "#4CAF50" if r["Yield%"] >= 0 else "#F44336"
+                        _hc = "#4CAF50" if r["Hit%"] >= (1 / r["AvgFO"]) else "#aaa"
+                        _alt_rows.append(
+                            f"<tr>"
+                            f"<td style='padding:9px 12px;font-weight:600;color:#ddd'>{r['Rynek']}</td>"
+                            f"<td style='padding:9px 10px;text-align:center;color:#888'>{r['n']}</td>"
+                            f"<td style='padding:9px 10px;text-align:center;color:{_hc};font-weight:700'>{r['Hit%']:.1%}</td>"
+                            f"<td style='padding:9px 10px;text-align:center;color:#888'>{r['AvgP']:.1%}</td>"
+                            f"<td style='padding:9px 10px;text-align:center;color:#888'>{r['AvgFO']:.2f}</td>"
+                            f"<td style='padding:9px 10px;text-align:center;color:{_yc};font-weight:700'>{r['Yield%']:+.1f}%</td>"
+                            f"<td style='padding:9px 10px;text-align:center;color:{_yc}'>{r['PnL']:+.1f}</td>"
+                            f"<td style='padding:9px 10px;text-align:center;color:#555;font-size:0.82em'>{r['Brier']:.3f}</td>"
+                            f"</tr>"
+                        )
+                    st.markdown(
+                        "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028;margin-top:8px'>"
+                        "<table style='width:100%;border-collapse:collapse'>"
+                        "<thead><tr style='background:#13141c;color:#444;font-size:0.7em;text-transform:uppercase'>"
+                        "<th style='padding:8px 12px'>Rynek</th>"
+                        "<th style='padding:8px 12px;text-align:center'>Typów</th>"
+                        "<th style='padding:8px 12px;text-align:center'>Hit%</th>"
+                        "<th style='padding:8px 12px;text-align:center'>Avg P</th>"
+                        "<th style='padding:8px 12px;text-align:center'>Avg FO</th>"
+                        "<th style='padding:8px 12px;text-align:center'>Yield (flat)</th>"
+                        "<th style='padding:8px 12px;text-align:center'>PnL</th>"
+                        "<th style='padding:8px 12px;text-align:center'>Brier ↓</th>"
+                        f"</tr></thead><tbody>{''.join(_alt_rows)}</tbody></table></div>",
+                        unsafe_allow_html=True)
+                    st.caption("Hit% zielony = powyżej break-even (1/AvgFO). PnL w jednostkach flat (stawka 1/typ). Brier: im niższy tym lepiej skalibrowany model.")
+
+                    # Mini wykres: Hit% vs Break-even per rynek
+                    try:
+                        import plotly.graph_objects as _go_alt
+                        _fig_alt = _go_alt.Figure()
+                        _rynki_sorted = sorted(_alt_summary, key=lambda x: x["Yield%"], reverse=True)
+                        _labels = [r["Rynek"] for r in _rynki_sorted]
+                        _yields = [r["Yield%"] for r in _rynki_sorted]
+                        _colors_alt = ["#4CAF50" if y >= 0 else "#F44336" for y in _yields]
+                        _fig_alt.add_trace(_go_alt.Bar(
+                            x=_labels, y=_yields,
+                            marker_color=_colors_alt,
+                            text=[f"{y:+.1f}%" for y in _yields],
+                            textposition="outside",
+                            hovertemplate="<b>%{x}</b><br>Yield: %{y:+.1f}%<extra></extra>"
+                        ))
+                        _fig_alt.add_hline(y=0, line_dash="dot", line_color="#444", line_width=1)
+                        _fig_alt.update_layout(
+                            paper_bgcolor="#0d0f14", plot_bgcolor="#0d0f14",
+                            height=220, margin=dict(l=30, r=20, t=20, b=60),
+                            xaxis=dict(color="#555", gridcolor="#1a1c24", tickangle=-20),
+                            yaxis=dict(title="Yield %", color="#555", gridcolor="#1a1c24"),
+                            font=dict(color="#888"), showlegend=False)
+                        st.plotly_chart(_fig_alt, use_container_width=True,
+                                        config={"displayModeBar": False})
+                    except Exception:
+                        pass  # wykres opcjonalny
+
+        except Exception as _e_alt:
+            st.caption(f"Błąd sekcji alt rynków: {_e_alt}")
 
         # ── Kalibracja (połączone z Skutecznością) ─────────────────────
         st.divider()
@@ -4773,9 +4917,33 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 f"top 3 typy/kolejkę · Pinnacle/B365 1.35–3.50 · start {_ML_KS:.0f} zł/ligę")
             _ml_colors={"Premier League":"#00d4ff","La Liga":"#ff6b35","Bundesliga":"#ffd700","Serie A":"#4CAF50","Ligue 1":"#b44aff"}
             _ml_results={}
-            _ml_prog=st.progress(0,text="Laduje dane lig...")
-            for _ml_i,_ml_liga in enumerate(list(LIGI.keys())):
-                _ml_prog.progress(_ml_i/len(LIGI),text=f"Obliczam Kelly - {_ml_liga}...")
+
+            # Sprawdź ile lig ma dane z tab4 w session_state
+            _ml_from_ss = {liga: st.session_state[f"ml_bk_{liga}"]
+                           for liga in LIGI.keys() if f"ml_bk_{liga}" in st.session_state}
+            _ml_to_compute = [liga for liga in LIGI.keys() if liga not in _ml_from_ss]
+
+            if _ml_from_ss:
+                _ss_info = ", ".join(_ml_from_ss.keys())
+                st.caption(f"⚡ Wyniki z zakładki Skuteczność (live): {_ss_info}"
+                           + (f" · obliczam osobno: {', '.join(_ml_to_compute)}" if _ml_to_compute else ""))
+                for _liga_ss, _data_ss in _ml_from_ss.items():
+                    _ml_results[_liga_ss] = {
+                        "bk":       _data_ss["bk"],
+                        "bk_flat":  _data_ss["bk_flat"],
+                        "roi":      _data_ss["roi"],
+                        "roi_flat": _data_ss["roi_flat"],
+                        "dd":       _data_ss["dd"],
+                        "n":        _data_ss["n"],
+                        "hr":       0,  # brak w cache – nie wyświetlamy
+                        "bk_vals":  _data_ss["bk_vals"],
+                        "flat_vals":[],
+                        "kol_nums": _data_ss["kol_nums"],
+                    }
+
+            _ml_prog=st.progress(0,text="Laduje dane lig...") if _ml_to_compute else None
+            for _ml_i,_ml_liga in enumerate(_ml_to_compute):
+                if _ml_prog: _ml_prog.progress(_ml_i/max(len(_ml_to_compute),1),text=f"Obliczam Kelly - {_ml_liga}...")
                 try:
                     _ml_csv=LIGI[_ml_liga]["csv_code"]
                     _ml_con2=sqlite3.connect(DB_FILE)
@@ -4786,7 +4954,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     if len(_ml_eq)<3: continue
                     _ml_hist=load_historical(_ml_csv)
                     if _ml_hist.empty: continue
-                    _ml_ho=_ml_hist[[c for c in ["HomeTeam","AwayTeam","PSH","PSD","PSA","B365H","B365D","B365A"] if c in _ml_hist.columns]].copy()
+                    _ml_hc = _ml_hist[_ml_hist["_sezon"]=="biezacy"] if "_sezon" in _ml_hist.columns else _ml_hist
+                    _ml_ho=_ml_hc[[c for c in ["HomeTeam","AwayTeam","MaxCH","MaxCD","MaxCA","PSCH","PSCD","PSCA","B365H","B365D","B365A"] if c in _ml_hc.columns]].copy()
                     def _ml_kb(row,ho=_ml_ho):
                         m=ho[(ho["HomeTeam"]==row["home"])&(ho["AwayTeam"]==row["away"])]
                         if m.empty: return None
@@ -4803,9 +4972,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 if t=="1X": return round(1/(ih+id_),3)
                                 if t=="X2": return round(1/(id_+ia),3)
                             except: return None
-                        k=None
-                        if "PSH" in r.index: k=_c(r.get("PSH"),r.get("PSD"),r.get("PSA"))
-                        if not k and "B365H" in r.index: k=_c(r.get("B365H"),r.get("B365D"),r.get("B365A"))
+                        k=_c(r.get("MaxCH"),r.get("MaxCD"),r.get("MaxCA"))
+                        if not k: k=_c(r.get("PSCH"),r.get("PSCD"),r.get("PSCA"))
+                        if not k: k=_c(r.get("B365H"),r.get("B365D"),r.get("B365A"))
                         return k
                     _ml_eq["kurs_buk"]=_ml_eq.apply(_ml_kb,axis=1)
                     _ml_eq["ev"]=_ml_eq.apply(
@@ -4837,7 +5006,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         "dd":_ml_dd,"n":_ml_n,"hr":_ml_traf/_ml_n if _ml_n else 0,
                         "bk_vals":_ml_bk_vals,"flat_vals":_ml_flat_vals,"kol_nums":_ml_kol_nums}
                 except Exception: continue
-            _ml_prog.empty()
+            if _ml_prog: _ml_prog.empty()
             if not _ml_results:
                 st.info("Brak danych Kelly per liga.")
             else:
