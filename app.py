@@ -648,6 +648,23 @@ def load_historical(league_code: str) -> pd.DataFrame:
     df_now["_sezon"] = "biezacy"
     return pd.concat([df_prev_s, df_now], ignore_index=True).sort_values("Date")
 
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_h2h_csv(league_code: str, n_seasons: int = 4) -> pd.DataFrame:
+    """Ładuje ostatnie n_seasons sezonów CSV dla potrzeb H2H (bez ważenia).
+    Sezony: 2526, 2425, 2324, 2223."""
+    sezony = ["2526", "2425", "2324", "2223"][:n_seasons]
+    frames = []
+    for s in sezony:
+        df = _pobierz_csv(league_code, s)
+        if not df.empty:
+            df = df.copy()
+            df["_sezon_h2h"] = s
+            frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).sort_values("Date", ascending=False)
+
 def _get_fd_api_key() -> str | None:
     """Pobiera klucz football-data.org z secrets lub session_state."""
     try:
@@ -2623,19 +2640,35 @@ for _li, (_ln, _lc) in enumerate(zip(LIGI.keys(), _ls_cols)):
     _flag   = _LIGA_FLAGS.get(_ln, "🌍")
     _active = _ln == wybrana_liga
     with _lc:
-        # CSS: ukryj ramkę przycisku, nadaj styl pill aktywny/nieaktywny
-        _btn_style = (
-            "primary" if _active else "secondary"
-        )
+        _btn_style = "primary" if _active else "secondary"
         if st.button(
-            f"{_flag} {_ln}",
+            f"{_flag}",
             key=f"_lsw_{_li}",
             use_container_width=True,
             type=_btn_style,
+            help=_ln,
         ):
             st.session_state["_liga_override"] = _ln
             st.rerun()
 
+# Nakładka HTML z nazwami lig pod przyciskami (tylko etykiety, nie klikalne)
+_ls_labels = []
+for _ln in LIGI.keys():
+    _active = _ln == wybrana_liga
+    _col = "#ffffff" if _active else "#6b7280"
+    _fw  = "600" if _active else "400"
+    # Skróć nazwę do 2 słów max
+    _short = _ln.replace("Premier League","EPL").replace("La Liga","La Liga").replace("Bundesliga","Bund.").replace("Serie A","Serie A").replace("Ligue 1","Ligue 1")
+    _ls_labels.append(
+        f"<div style='flex:1;text-align:center;font-size:0.68em;color:{_col};"
+        f"font-weight:{_fw};margin-top:-8px;padding-bottom:4px;"
+        f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{_short}</div>"
+    )
+st.markdown(
+    "<div style='display:flex;flex-direction:row;gap:0;margin-bottom:6px;margin-top:-8px'>"
+    + "".join(_ls_labels) +
+    "</div>",
+    unsafe_allow_html=True)
 
 # ── Hero Header ────────────────────────────────────────────────────────────
 _hc1, _hc2, _hc3 = st.columns([5, 2, 2])
@@ -3643,10 +3676,13 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                             "score_h": _hg, "score_a": _ag,
                                         })
                                 else:
-                                    # Fallback: CSV historical
-                                    _h2h_csv = historical[
-                                        ((historical["HomeTeam"]==h) & (historical["AwayTeam"]==a)) |
-                                        ((historical["HomeTeam"]==a) & (historical["AwayTeam"]==h))
+                                    # Fallback: CSV z 4 sezonów dla lepszego H2H
+                                    _h2h_all = load_h2h_csv(LIGI[wybrana_liga]["csv_code"], n_seasons=4)
+                                    if _h2h_all.empty:
+                                        _h2h_all = historical  # ostateczny fallback
+                                    _h2h_csv = _h2h_all[
+                                        (((_h2h_all["HomeTeam"]==h) & (_h2h_all["AwayTeam"]==a)) |
+                                         ((_h2h_all["HomeTeam"]==a) & (_h2h_all["AwayTeam"]==h)))
                                     ].sort_values("Date", ascending=False).head(5)
                                     for _, _cm in _h2h_csv.iterrows():
                                         _h2h_unified.append({
