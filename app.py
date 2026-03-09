@@ -831,6 +831,50 @@ def _standings_by_name(standings: dict) -> dict:
     return by_name
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_h2h_api(team_id_h: int, team_id_a: int, api_key: str, n: int = 5) -> list:
+    """Pobiera ostatnie n bezpośrednich spotkań dwóch drużyn z fd.org API.
+    Używa endpointu /v4/teams/{id}/matches z filtrem na rywala.
+    Zwraca listę dict: {date, home, away, score_h, score_a, winner}
+    """
+    if not api_key or not team_id_h or not team_id_a:
+        return []
+    try:
+        import requests as _req
+        headers = {"X-Auth-Token": api_key}
+        # Pobierz mecze drużyny domowej (ostatnie 30, status=FINISHED)
+        url = (f"https://api.football-data.org/v4/teams/{team_id_h}/matches"
+               f"?status=FINISHED&limit=30")
+        resp = _req.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        matches = resp.json().get("matches", [])
+        # Filtruj tylko mecze z rywalem = team_id_a
+        h2h_matches = []
+        for m in matches:
+            ht_id = m.get("homeTeam", {}).get("id")
+            at_id = m.get("awayTeam", {}).get("id")
+            if team_id_a in (ht_id, at_id):
+                score = m.get("score", {}).get("fullTime", {})
+                sh = score.get("home")
+                sa = score.get("away")
+                if sh is None or sa is None:
+                    continue
+                h2h_matches.append({
+                    "date":    m.get("utcDate", "")[:10],
+                    "home":    m.get("homeTeam", {}).get("shortName") or m.get("homeTeam", {}).get("name", "?"),
+                    "away":    m.get("awayTeam", {}).get("shortName") or m.get("awayTeam", {}).get("name", "?"),
+                    "home_id": ht_id,
+                    "away_id": at_id,
+                    "score_h": int(sh),
+                    "score_a": int(sa),
+                })
+        # Posortuj malejąco po dacie, weź n ostatnich
+        h2h_matches.sort(key=lambda x: x["date"], reverse=True)
+        return h2h_matches[:n]
+    except Exception:
+        return []
+
+
 def _forma_warning(h_form: list, a_form: list,
                    h_pos: int, a_pos: int, pred_typ: str) -> str | None:
     """Zwraca tekst ostrzeżenia jeśli forma przeczy predykcji modelu.
@@ -2571,59 +2615,26 @@ _LIGA_FLAGS = {
     "Serie A":        "🇮🇹",
     "Ligue 1":        "🇫🇷",
 }
-# ── Liga Switcher – poziomy pasek (scrollowalny) ────────────────────────────
-_ls_items_html = []
-for _li, _ln in enumerate(LIGI.keys()):
+# ── Liga Switcher – poziomy pasek ───────────────────────────────────────────
+# Używamy st.columns + st.button żeby nie otwierało nowej karty
+_ls_n = len(LIGI)
+_ls_cols = st.columns(_ls_n)
+for _li, (_ln, _lc) in enumerate(zip(LIGI.keys(), _ls_cols)):
     _flag   = _LIGA_FLAGS.get(_ln, "🌍")
     _active = _ln == wybrana_liga
-    _bg     = "#1e3a5f" if _active else "#111827"
-    _border = "#4CAF50" if _active else "#1f2937"
-    _col    = "#ffffff" if _active else "#6b7280"
-    _fw     = "700"     if _active else "400"
-    _ls_items_html.append(
-        f"<button onclick=\"window._ligaSwitch('{_ln}')\" "
-        f"style='display:inline-flex;align-items:center;gap:5px;"
-        f"padding:6px 14px;border-radius:20px;border:1px solid {_border};"
-        f"background:{_bg};color:{_col};font-size:0.80em;font-weight:{_fw};"
-        f"cursor:pointer;white-space:nowrap;flex-shrink:0'>"
-        f"{_flag} {_ln}</button>"
-    )
-
-# Streamlit query_params approach: render HTML switcher + native backup buttons hidden
-_qs_ls = st.query_params.get("_ls")
-if _qs_ls is not None:
-    try:
-        _qs_liga = list(LIGI.keys())[int(_qs_ls)]
-        if _qs_liga != wybrana_liga:
-            st.session_state["_liga_override"] = _qs_liga
-            st.query_params.clear()
+    with _lc:
+        # CSS: ukryj ramkę przycisku, nadaj styl pill aktywny/nieaktywny
+        _btn_style = (
+            "primary" if _active else "secondary"
+        )
+        if st.button(
+            f"{_flag} {_ln}",
+            key=f"_lsw_{_li}",
+            use_container_width=True,
+            type=_btn_style,
+        ):
+            st.session_state["_liga_override"] = _ln
             st.rerun()
-    except (IndexError, ValueError):
-        pass
-
-# HTML pill row (nie wymaga JS - używa query param)
-_ls_links = []
-for _li, _ln in enumerate(LIGI.keys()):
-    _flag   = _LIGA_FLAGS.get(_ln, "🌍")
-    _active = _ln == wybrana_liga
-    _bg     = "#1e3a5f" if _active else "#111827"
-    _border = "#4CAF50" if _active else "#1f2937"
-    _col    = "#ffffff" if _active else "#6b7280"
-    _fw     = "700"     if _active else "400"
-    _ls_links.append(
-        f"<a href='?_ls={_li}' style='display:inline-flex;align-items:center;gap:5px;"
-        f"padding:6px 14px;border-radius:20px;border:1px solid {_border};"
-        f"background:{_bg};color:{_col};font-size:0.80em;font-weight:{_fw};"
-        f"text-decoration:none;white-space:nowrap;flex-shrink:0'>"
-        f"{_flag}&nbsp;{_ln}</a>"
-    )
-st.markdown(
-    "<div style='display:flex;flex-direction:row;flex-wrap:nowrap;"
-    "overflow-x:auto;gap:6px;margin-bottom:14px;padding-bottom:4px;"
-    "-webkit-overflow-scrolling:touch'>"
-    + "".join(_ls_links) +
-    "</div>",
-    unsafe_allow_html=True)
 
 
 # ── Hero Header ────────────────────────────────────────────────────────────
@@ -3380,6 +3391,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         a = map_nazwa(mecz["away_team"])
                         if h not in srednie_df.index or a not in srednie_df.index:
                             continue
+                        # ID drużyn z terminarza (potrzebne do H2H API)
+                        _mecz_h_id = mecz.get("home_id")
+                        _mecz_a_id = mecz.get("away_id")
 
                         lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
                                                                     csv_code=LIGI[wybrana_liga]["csv_code"])
@@ -3603,45 +3617,81 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     pass
 
                                 # ── Head-to-Head ─────────────────────────
-                                _h2h = historical[
-                                    ((historical["HomeTeam"]==h) & (historical["AwayTeam"]==a)) |
-                                    ((historical["HomeTeam"]==a) & (historical["AwayTeam"]==h))
-                                ].sort_values("Date", ascending=False).head(5)
-                                if not _h2h.empty:
-                                    with st.expander(f"⚔️ H2H – ostatnie {len(_h2h)} spotkania", expanded=False):
+                                # Próbuj API fd.org (do 5 sezonów wstecz), fallback CSV
+                                _h2h_api = []
+                                _h2h_source = "csv"
+                                _fd_key_h2h = st.session_state.get("fd_api_key", "")
+                                if _fd_key_h2h and _mecz_h_id and _mecz_a_id:
+                                    try:
+                                        _h2h_api = load_h2h_api(
+                                            int(_mecz_h_id), int(_mecz_a_id),
+                                            _fd_key_h2h, n=5)
+                                        if _h2h_api:
+                                            _h2h_source = "api"
+                                    except Exception:
+                                        pass
+
+                                # Zbuduj zunifikowaną listę meczów
+                                _h2h_unified = []
+                                if _h2h_source == "api" and _h2h_api:
+                                    for _am in _h2h_api:
+                                        _hg, _ag = _am["score_h"], _am["score_a"]
+                                        _hw, _aw = _am["home"], _am["away"]
+                                        _h2h_unified.append({
+                                            "date": _am["date"],
+                                            "home": _hw, "away": _aw,
+                                            "score_h": _hg, "score_a": _ag,
+                                        })
+                                else:
+                                    # Fallback: CSV historical
+                                    _h2h_csv = historical[
+                                        ((historical["HomeTeam"]==h) & (historical["AwayTeam"]==a)) |
+                                        ((historical["HomeTeam"]==a) & (historical["AwayTeam"]==h))
+                                    ].sort_values("Date", ascending=False).head(5)
+                                    for _, _cm in _h2h_csv.iterrows():
+                                        _h2h_unified.append({
+                                            "date": _cm["Date"].strftime("%Y-%m-%d") if pd.notna(_cm["Date"]) else "?",
+                                            "home": _cm["HomeTeam"], "away": _cm["AwayTeam"],
+                                            "score_h": int(_cm["FTHG"]), "score_a": int(_cm["FTAG"]),
+                                        })
+
+                                if _h2h_unified:
+                                    # Policz bilans (z perspektywy h = gospodarz bieżącego meczu)
+                                    _h_wins = sum(1 for m in _h2h_unified
+                                                  if (m["home"]==h and m["score_h"]>m["score_a"]) or
+                                                     (m["away"]==h and m["score_a"]>m["score_h"]))
+                                    _draws  = sum(1 for m in _h2h_unified if m["score_h"]==m["score_a"])
+                                    _a_wins = len(_h2h_unified) - _h_wins - _draws
+                                    _src_badge = "🌐 API" if _h2h_source == "api" else "📂 CSV"
+                                    with st.expander(f"⚔️ H2H – {len(_h2h_unified)} spotkań  {_src_badge}", expanded=False):
                                         _h2h_rows = []
-                                        for _, _hm in _h2h.iterrows():
-                                            _hg = int(_hm["FTHG"]); _ag = int(_hm["FTAG"])
-                                            _hw = _hm["HomeTeam"]; _aw = _hm["AwayTeam"]
-                                            _dt = _hm["Date"].strftime("%d.%m.%Y") if pd.notna(_hm["Date"]) else "?"
+                                        for _hm in _h2h_unified:
+                                            _hg, _ag = _hm["score_h"], _hm["score_a"]
+                                            _hw, _aw = _hm["home"], _hm["away"]
+                                            _dt = _hm["date"][:7] if len(_hm["date"]) >= 7 else _hm["date"]
                                             if _hg > _ag:
-                                                _res_c, _res = "#4CAF50", f"{_hg}:{_ag}"
+                                                _res_c = "#4CAF50"
                                             elif _hg < _ag:
-                                                _res_c, _res = "#F44336", f"{_hg}:{_ag}"
+                                                _res_c = "#F44336"
                                             else:
-                                                _res_c, _res = "#FF9800", f"{_hg}:{_ag}"
-                                            _bold_h = "font-weight:bold" if _hw == h else ""
-                                            _bold_a = "font-weight:bold" if _aw == h else ""
+                                                _res_c = "#FF9800"
+                                            _bold_h = "font-weight:700;color:#fff" if _hw == h else "color:#aaa"
+                                            _bold_a = "font-weight:700;color:#fff" if _aw == h else "color:#aaa"
                                             _h2h_rows.append(
-                                                f"<tr style='border-bottom:1px solid #1a1a2e'>"
-                                                f"<td style='padding:4px 8px;color:#666;font-size:0.78em'>{_dt}</td>"
-                                                f"<td style='padding:4px 8px;color:#ccc;font-size:0.82em;{_bold_h}'>{_hw}</td>"
-                                                f"<td style='padding:4px 8px;text-align:center;color:{_res_c};"
-                                                f"font-weight:bold;font-size:0.88em'>{_res}</td>"
-                                                f"<td style='padding:4px 8px;color:#ccc;font-size:0.82em;{_bold_a}'>{_aw}</td>"
+                                                f"<tr style='border-bottom:1px solid #111827'>"
+                                                f"<td style='padding:5px 6px;color:#4b5563;font-size:0.75em'>{_dt}</td>"
+                                                f"<td style='padding:5px 6px;font-size:0.80em;{_bold_h};text-align:right'>{_hw}</td>"
+                                                f"<td style='padding:5px 8px;text-align:center;color:{_res_c};"
+                                                f"font-weight:700;font-size:0.88em;white-space:nowrap'>{_hg}:{_ag}</td>"
+                                                f"<td style='padding:5px 6px;font-size:0.80em;{_bold_a}'>{_aw}</td>"
                                                 f"</tr>"
                                             )
-                                        # Bilans
-                                        _h_wins = sum(1 for _, m in _h2h.iterrows()
-                                                      if (m["HomeTeam"]==h and m["FTHG"]>m["FTAG"]) or
-                                                         (m["AwayTeam"]==h and m["FTAG"]>m["FTHG"]))
-                                        _draws  = sum(1 for _, m in _h2h.iterrows() if m["FTHG"]==m["FTAG"])
-                                        _a_wins = len(_h2h) - _h_wins - _draws
                                         st.markdown(
-                                            f"<div style='font-size:0.76em;color:#888;margin-bottom:4px'>"
-                                            f"Bilans: <b style='color:#4CAF50'>{h} {_h_wins}W</b> · "
-                                            f"<b style='color:#FF9800'>{_draws}D</b> · "
-                                            f"<b style='color:#F44336'>{_a_wins}W {a}</b></div>"
+                                            f"<div style='font-size:0.74em;margin-bottom:6px;display:flex;gap:12px'>"
+                                            f"<span style='color:#4CAF50'>● {h[:10]} {_h_wins}W</span>"
+                                            f"<span style='color:#FF9800'>● {_draws}R</span>"
+                                            f"<span style='color:#F44336'>● {_a_wins}W {a[:10]}</span>"
+                                            f"</div>"
                                             f"<table style='width:100%;border-collapse:collapse'>"
                                             f"{''.join(_h2h_rows)}</table>",
                                             unsafe_allow_html=True)
