@@ -3408,31 +3408,37 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         _mc_a_img = (f"<img src='{_mc_a_crest}' style='width:28px;height:28px;"
                                      f"object-fit:contain;vertical-align:middle' "
                                      f"onerror=\"this.style.display='none'\">") if _mc_a_crest else "🏟️"
-                        label_t2 = f"{h} – {a}   {_conf_icon} {pred['typ']} @ {pred['fo_typ']:.2f}"
                         with kolumna:
-                            with st.expander(label_t2, expanded=False):
-                                # ── Mini karta nagłówkowa (wewnątrz expandera) ──
-                                st.markdown(
-                                    f"<div style='background:#0d1117;border:1px solid #1e2028;"
-                                    f"border-top:2px solid {_conf_col_l};"
-                                    f"border-radius:8px;padding:10px 14px;margin-bottom:10px'>"
-                                    f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:6px'>"
-                                    f"<div style='display:flex;align-items:center;gap:6px;flex:1'>"
-                                    f"{_mc_h_img}<b style='color:#fff;font-size:0.93em'>{h}</b>"
-                                    f"</div>"
-                                    f"<span style='color:#555;font-size:0.73em;padding:0 8px'>{data_meczu}</span>"
-                                    f"<div style='display:flex;align-items:center;gap:6px;flex:1;justify-content:flex-end'>"
-                                    f"<b style='color:#fff;font-size:0.93em'>{a}</b>{_mc_a_img}"
-                                    f"</div></div>"
-                                    f"<div style='display:flex;align-items:center;gap:8px'>"
-                                    f"<span style='background:{_typ_bg};color:{_typ_fg};font-size:0.76em;"
-                                    f"font-weight:700;padding:2px 10px;border-radius:12px'>{pred['typ']} @ {pred['fo_typ']:.2f}</span>"
-                                    f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:4px'>"
-                                    f"<div style='background:{_conf_col_l};width:{_conf_pct_l}%;height:4px;border-radius:3px'></div></div>"
-                                    f"<span style='color:{_conf_col_l};font-size:0.70em;font-weight:600'>{_conf_pct_l}%</span>"
-                                    f"</div></div>",
-                                    unsafe_allow_html=True)
-
+                            # ── Karta nagłówkowa – zawsze widoczna ──────
+                            st.markdown(
+                                f"<div style='background:#0d1117;border:1px solid #1e2028;"
+                                f"border-top:3px solid {_conf_col_l};"
+                                f"border-radius:10px 10px 0 0;padding:11px 14px 10px'>"
+                                # Wiersz 1: herb + nazwa | data | nazwa + herb
+                                f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:7px'>"
+                                f"<div style='display:flex;align-items:center;gap:7px;flex:1;min-width:0'>"
+                                f"{_mc_h_img}"
+                                f"<b style='color:#fff;font-size:0.93em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{h}</b>"
+                                f"</div>"
+                                f"<span style='color:#4b5563;font-size:0.70em;padding:0 6px;flex-shrink:0'>{data_meczu}</span>"
+                                f"<div style='display:flex;align-items:center;gap:7px;flex:1;min-width:0;justify-content:flex-end'>"
+                                f"<b style='color:#fff;font-size:0.93em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl'>{a}</b>"
+                                f"{_mc_a_img}"
+                                f"</div>"
+                                f"</div>"
+                                # Wiersz 2: badge typ + pasek confidence + %
+                                f"<div style='display:flex;align-items:center;gap:8px'>"
+                                f"<span style='background:{_typ_bg};color:{_typ_fg};font-size:0.75em;"
+                                f"font-weight:700;padding:3px 11px;border-radius:12px;flex-shrink:0'>"
+                                f"{pred['typ']} @ {pred['fo_typ']:.2f}</span>"
+                                f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:4px'>"
+                                f"<div style='background:{_conf_col_l};width:{_conf_pct_l}%;height:4px;border-radius:3px'></div></div>"
+                                f"<span style='color:{_conf_col_l};font-size:0.70em;font-weight:700;flex-shrink:0'>{_conf_pct_l}%</span>"
+                                f"</div>"
+                                f"</div>",
+                                unsafe_allow_html=True)
+                            # ── Expander ze szczegółami (łączy się wizualnie z kartą) ──
+                            with st.expander("▾ szczegóły", expanded=False):
                                 _conf_pct = _conf_pct_l
                                 _conf_col = _conf_col_l
                                 _conf_lbl = {"High": "Wysoka pewność", "Medium": "Umiarkowana", "Coinflip": "Wyrównany"}.get(pred["conf_level"], "")
