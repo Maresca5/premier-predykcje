@@ -3410,39 +3410,29 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                      f"onerror=\"this.style.display='none'\">") if _mc_a_crest else "🏟️"
                         label_t2 = f"{h} – {a}   {_conf_icon} {pred['typ']} @ {pred['fo_typ']:.2f}"
                         with kolumna:
-                            # Karta przed expanderem
-                            st.markdown(
-                                f"<div style='background:#0d1117;border:1px solid #1e2028;"
-                                f"border-top:2px solid {_conf_col_l};"
-                                f"border-radius:10px;padding:10px 14px;margin-bottom:2px'>"
-                                # Herby + nazwy
-                                f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:6px'>"
-                                f"<div style='display:flex;align-items:center;gap:7px;flex:1'>"
-                                f"{_mc_h_img}"
-                                f"<b style='color:#fff;font-size:0.95em'>{h}</b>"
-                                f"</div>"
-                                f"<div style='text-align:center;padding:0 8px'>"
-                                f"<span style='color:#555;font-size:0.75em'>{data_meczu}</span>"
-                                f"</div>"
-                                f"<div style='display:flex;align-items:center;gap:7px;flex:1;justify-content:flex-end'>"
-                                f"<b style='color:#fff;font-size:0.95em'>{a}</b>"
-                                f"{_mc_a_img}"
-                                f"</div>"
-                                f"</div>"
-                                # Typ badge + confidence bar
-                                f"<div style='display:flex;align-items:center;gap:8px'>"
-                                f"<span style='background:{_typ_bg};color:{_typ_fg};"
-                                f"font-size:0.78em;font-weight:700;padding:2px 10px;border-radius:12px'>"
-                                f"{pred['typ']} @ {pred['fo_typ']:.2f}</span>"
-                                f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:4px'>"
-                                f"<div style='background:{_conf_col_l};width:{_conf_pct_l}%;"
-                                f"height:4px;border-radius:3px'></div></div>"
-                                f"<span style='color:{_conf_col_l};font-size:0.72em;font-weight:600'>{_conf_pct_l}%</span>"
-                                f"</div>"
-                                f"</div>",
-                                unsafe_allow_html=True)
-                            with st.expander("▸ Szczegóły analizy", expanded=False):
-                                # ── Confidence Meter (wewnątrz) ───────────
+                            with st.expander(label_t2, expanded=False):
+                                # ── Mini karta nagłówkowa (wewnątrz expandera) ──
+                                st.markdown(
+                                    f"<div style='background:#0d1117;border:1px solid #1e2028;"
+                                    f"border-top:2px solid {_conf_col_l};"
+                                    f"border-radius:8px;padding:10px 14px;margin-bottom:10px'>"
+                                    f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:6px'>"
+                                    f"<div style='display:flex;align-items:center;gap:6px;flex:1'>"
+                                    f"{_mc_h_img}<b style='color:#fff;font-size:0.93em'>{h}</b>"
+                                    f"</div>"
+                                    f"<span style='color:#555;font-size:0.73em;padding:0 8px'>{data_meczu}</span>"
+                                    f"<div style='display:flex;align-items:center;gap:6px;flex:1;justify-content:flex-end'>"
+                                    f"<b style='color:#fff;font-size:0.93em'>{a}</b>{_mc_a_img}"
+                                    f"</div></div>"
+                                    f"<div style='display:flex;align-items:center;gap:8px'>"
+                                    f"<span style='background:{_typ_bg};color:{_typ_fg};font-size:0.76em;"
+                                    f"font-weight:700;padding:2px 10px;border-radius:12px'>{pred['typ']} @ {pred['fo_typ']:.2f}</span>"
+                                    f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:4px'>"
+                                    f"<div style='background:{_conf_col_l};width:{_conf_pct_l}%;height:4px;border-radius:3px'></div></div>"
+                                    f"<span style='color:{_conf_col_l};font-size:0.70em;font-weight:600'>{_conf_pct_l}%</span>"
+                                    f"</div></div>",
+                                    unsafe_allow_html=True)
+
                                 _conf_pct = _conf_pct_l
                                 _conf_col = _conf_col_l
                                 _conf_lbl = {"High": "Wysoka pewność", "Medium": "Umiarkowana", "Coinflip": "Wyrównany"}.get(pred["conf_level"], "")
@@ -3539,49 +3529,57 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 elif sedzia not in ("Nieznany", "", None):
                                     st.caption(f"🟨 **Sędzia:** {sedzia}")
 
-                                # ── Ostatnie mecze drużyn ─────────────────
+                                # ── Ostatnie 5 meczów drużyn ─────────────
                                 try:
                                     _hist_h2h = historical.copy()
                                     def _ostatnie_mecze(team, n=5):
                                         _hm = _hist_h2h[_hist_h2h["HomeTeam"] == team].copy()
-                                        _hm["res"] = _hm.apply(lambda r: "W" if r["FTHG"]>r["FTAG"] else ("L" if r["FTHG"]<r["FTAG"] else "D"), axis=1)
-                                        _hm["wynik"] = _hm.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
-                                        _hm["rywal"] = _hm["AwayTeam"]; _hm["strona"] = "dom"
+                                        _hm["res"]    = _hm.apply(lambda r: "W" if r["FTHG"]>r["FTAG"] else ("L" if r["FTHG"]<r["FTAG"] else "D"), axis=1)
+                                        _hm["wynik"]  = _hm.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
+                                        _hm["rywal"]  = _hm["AwayTeam"]; _hm["strona"] = "H"
                                         _am = _hist_h2h[_hist_h2h["AwayTeam"] == team].copy()
-                                        _am["res"] = _am.apply(lambda r: "W" if r["FTAG"]>r["FTHG"] else ("L" if r["FTAG"]<r["FTHG"] else "D"), axis=1)
-                                        _am["wynik"] = _am.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
-                                        _am["rywal"] = _am["HomeTeam"]; _am["strona"] = "wyjazd"
-                                        _all = pd.concat([
+                                        _am["res"]    = _am.apply(lambda r: "W" if r["FTAG"]>r["FTHG"] else ("L" if r["FTAG"]<r["FTHG"] else "D"), axis=1)
+                                        _am["wynik"]  = _am.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
+                                        _am["rywal"]  = _am["HomeTeam"]; _am["strona"] = "A"
+                                        return pd.concat([
                                             _hm[["Date","res","wynik","rywal","strona"]],
                                             _am[["Date","res","wynik","rywal","strona"]]
                                         ]).sort_values("Date", ascending=False).head(n)
-                                        return _all
                                     _h_last = _ostatnie_mecze(h, 5)
                                     _a_last = _ostatnie_mecze(a, 5)
 
-                                    def _render_team_history(team_name, df_last, crest_url=""):
-                                        _crest_tag = (f"<img src='{crest_url}' style='width:18px;height:18px;"
-                                                      f"object-fit:contain;vertical-align:middle;margin-right:4px' "
-                                                      f"onerror=\"this.style.display='none'\">") if crest_url else ""
+                                    def _team_hist_html(team_name, df_last, crest_url=""):
+                                        _crest_tag = (
+                                            f"<img src='{crest_url}' style='width:16px;height:16px;"
+                                            f"object-fit:contain;vertical-align:middle;margin-right:4px' "
+                                            f"onerror=\"this.style.display='none'\">"
+                                        ) if crest_url else ""
                                         rows = ""
                                         for _, _r in df_last.iterrows():
-                                            _rc = {"W":"#4CAF50","D":"#FF9800","L":"#F44336"}.get(_r["res"],"#888")
-                                            _dt = _r["Date"].strftime("%d.%m") if pd.notna(_r["Date"]) else "?"
-                                            _side_icon = "🏠" if _r["strona"] == "dom" else "✈️"
+                                            _rc  = {"W":"#4CAF50","D":"#FF9800","L":"#F44336"}.get(_r["res"],"#888")
+                                            _dt  = _r["Date"].strftime("%d.%m") if pd.notna(_r["Date"]) else "?"
+                                            # Skróć nazwę rywala do 10 znaków
+                                            _rywal_short = str(_r["rywal"])[:11]
+                                            _side = _r["strona"]  # H / A
                                             rows += (
-                                                f"<tr>"
-                                                f"<td style='padding:3px 6px;color:#555;font-size:0.75em'>{_dt}</td>"
-                                                f"<td style='padding:3px 6px;font-size:0.75em;color:#888'>{_side_icon} {_r['rywal']}</td>"
-                                                f"<td style='padding:3px 6px;text-align:center;font-weight:bold;font-size:0.82em;color:{_rc}'>"
-                                                f"<span style='background:{_rc}22;padding:1px 6px;border-radius:8px'>{_r['res']}</span></td>"
-                                                f"<td style='padding:3px 6px;text-align:right;color:#aaa;font-size:0.80em'>{_r['wynik']}</td>"
-                                                f"</tr>"
+                                                f"<div style='display:flex;align-items:center;gap:5px;"
+                                                f"padding:4px 0;border-bottom:1px solid #111827'>"
+                                                f"<span style='color:#4b5563;font-size:0.70em;min-width:30px'>{_dt}</span>"
+                                                f"<span style='color:#374151;font-size:0.68em;min-width:14px;text-align:center'>{_side}</span>"
+                                                f"<span style='color:#9ca3af;font-size:0.75em;flex:1;overflow:hidden;"
+                                                f"text-overflow:ellipsis;white-space:nowrap'>{_rywal_short}</span>"
+                                                f"<span style='background:{_rc}22;color:{_rc};font-size:0.70em;"
+                                                f"font-weight:700;padding:1px 5px;border-radius:6px;min-width:16px;text-align:center'>{_r['res']}</span>"
+                                                f"<span style='color:#6b7280;font-size:0.70em;min-width:26px;text-align:right'>{_r['wynik']}</span>"
+                                                f"</div>"
                                             )
                                         return (
                                             f"<div style='flex:1;min-width:0'>"
-                                            f"<div style='font-size:0.78em;color:#aaa;font-weight:600;margin-bottom:4px'>"
+                                            f"<div style='display:flex;align-items:center;gap:4px;"
+                                            f"font-size:0.78em;color:#e5e7eb;font-weight:600;margin-bottom:5px;"
+                                            f"padding-bottom:4px;border-bottom:1px solid #1f2937'>"
                                             f"{_crest_tag}{team_name}</div>"
-                                            f"<table style='width:100%;border-collapse:collapse'>{rows}</table>"
+                                            f"{rows}"
                                             f"</div>"
                                         )
 
@@ -3589,9 +3587,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     _a_crest_url = _sbn.get(a, {}).get("crest", "")
                                     if not _h_last.empty or not _a_last.empty:
                                         st.markdown(
-                                            f"<div style='display:flex;gap:12px;margin:8px 0;flex-wrap:wrap'>"
-                                            + _render_team_history(h, _h_last, _h_crest_url)
-                                            + _render_team_history(a, _a_last, _a_crest_url)
+                                            f"<div style='display:flex;gap:10px;margin:4px 0 10px'>"
+                                            + _team_hist_html(h, _h_last, _h_crest_url)
+                                            + f"<div style='width:1px;background:#1f2937;flex-shrink:0'></div>"
+                                            + _team_hist_html(a, _a_last, _a_crest_url)
                                             + f"</div>",
                                             unsafe_allow_html=True)
                                 except Exception:
@@ -3603,7 +3602,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     ((historical["HomeTeam"]==a) & (historical["AwayTeam"]==h))
                                 ].sort_values("Date", ascending=False).head(5)
                                 if not _h2h.empty:
-                                    with st.expander(f"📜 H2H – ostatnie {len(_h2h)} spotkania", expanded=False):
+                                    with st.expander(f"⚔️ H2H – ostatnie {len(_h2h)} spotkania", expanded=False):
                                         _h2h_rows = []
                                         for _, _hm in _h2h.iterrows():
                                             _hg = int(_hm["FTHG"]); _ag = int(_hm["FTAG"])
@@ -3778,6 +3777,17 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 elif _OA_OK and _oa_key and not _oa_cached:
                                     st.caption("📊 Brak kursów — kliknij 'Odśwież kursy' w sidebarze.")
 
+                                if pokaz_komentarz:
+                                    _odds_buk_kom = _kurs_live_1x2 if '_kurs_live_1x2' in dir() else None
+                                    _fk_html = render_forma_kontekst(
+                                        h, a, pred, forma_dict, srednie_df, srednie_lig,
+                                        odds_buk=_odds_buk_kom)
+                                    st.markdown(_fk_html, unsafe_allow_html=True)
+
+                                if pokaz_macierz:
+                                    st.markdown("**Macierz wyników**")
+                                    st.markdown(render_macierz_html(pred["macierz"], h, a), unsafe_allow_html=True)
+
                                 with st.expander("📊 Alternatywne rynki (p ≥ 55%)", expanded=False):
                                     alt = alternatywne_zdarzenia(lam_h, lam_a, lam_r, lam_k, rho, lam_sot=lam_sot)
                                     if alt:
@@ -3808,17 +3818,6 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                         )
                                     else:
                                         st.caption("Brak zdarzeń powyżej progu 55%.")
-
-                                if pokaz_komentarz:
-                                    _odds_buk_kom = _kurs_live_1x2 if '_kurs_live_1x2' in dir() else None
-                                    _fk_html = render_forma_kontekst(
-                                        h, a, pred, forma_dict, srednie_df, srednie_lig,
-                                        odds_buk=_odds_buk_kom)
-                                    st.markdown(_fk_html, unsafe_allow_html=True)
-
-                                if pokaz_macierz:
-                                    st.markdown("**Macierz wyników**")
-                                    st.markdown(render_macierz_html(pred["macierz"], h, a), unsafe_allow_html=True)
 
                 st.divider()
                 # Auto-zapis predykcji – uruchamia sie raz per liga+kolejka
@@ -4172,104 +4171,118 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             if search_dd:
                 df_dd = df_dd[df_dd["Drużyna"].str.contains(search_dd, case=False, na=False)]
 
-            # Dodaj kolumnę Crest URL z standings
-            def _get_crest(team_name):
-                return _sbn.get(team_name, {}).get("crest", "")
-
-            # Kolumny do wyświetlenia
-            display_cols_dd = ["Drużyna","M","Gole/M ↑","Strac./M ↓","SOT/M",
-                               "Konwersja%","xG-proxy","Kartki/M","Rożne/M","Forma (pkt/5M)"]
-            avail_dd = [c for c in display_cols_dd if c in df_dd.columns]
-            df_show = df_dd[avail_dd].copy()
-
-            # Konwertuj kolumny numeryczne
-            for col in ["Gole/M ↑","Strac./M ↓","SOT/M","Konwersja%","xG-proxy","Kartki/M","Rożne/M","Forma (pkt/5M)"]:
-                if col in df_show.columns:
-                    df_show[col] = pd.to_numeric(df_show[col], errors="coerce")
-
-            # Renderuj jako HTML karty zamiast tabeli – bardziej czytelne na mobile
-            _dd_rows_html = []
-            for _, _dr in df_show.iterrows():
+            # Wzbogać o dane z standings (poz, pkt, W/D/L, gole)
+            _dd_rows_enriched = []
+            for _, _dr in df_dd.iterrows():
                 _dn = _dr["Drużyna"]
-                _dc = _get_crest(_dn)
-                _dc_img = (f"<img src='{_dc}' style='width:24px;height:24px;object-fit:contain;"
-                           f"vertical-align:middle;margin-right:6px' "
-                           f"onerror=\"this.style.display='none'\">") if _dc else ""
-                _gm = _dr.get("Gole/M ↑", 0) or 0
-                _sm = _dr.get("Strac./M ↓", 0) or 0
-                _sot = _dr.get("SOT/M", 0) or 0
-                _forma = _dr.get("Forma (pkt/5M)", 0) or 0
-                _xg = _dr.get("xG-proxy", 0) or 0
-                _m = int(_dr.get("M", 0) or 0)
-                # Kolor formy
-                _fc = "#4CAF50" if _forma >= 10 else ("#FF9800" if _forma >= 6 else "#F44336")
-                # Kolor goli
-                _gc = "#4CAF50" if _gm >= 2.0 else ("#FF9800" if _gm >= 1.3 else "#888")
-                # Kolor straconych
-                _sc_col = "#4CAF50" if _sm <= 1.2 else ("#FF9800" if _sm <= 1.8 else "#F44336")
-                _dd_rows_html.append(
-                    f"<div style='display:flex;align-items:center;padding:8px 12px;"
-                    f"border-bottom:1px solid #111827;gap:8px'>"
-                    # Herb + nazwa
-                    f"<div style='display:flex;align-items:center;flex:2;min-width:0'>"
-                    f"{_dc_img}"
-                    f"<span style='color:#e5e7eb;font-size:0.85em;white-space:nowrap;"
-                    f"overflow:hidden;text-overflow:ellipsis'>{_dn}</span>"
-                    f"</div>"
-                    # Stats pills
-                    f"<div style='display:flex;gap:5px;flex:3;justify-content:flex-end;flex-wrap:wrap'>"
-                    f"<span style='font-size:0.72em;color:{_gc};background:#0d1117;"
-                    f"padding:2px 7px;border-radius:8px;border:1px solid {_gc}44'>"
-                    f"⚽ {_gm:.2f}</span>"
-                    f"<span style='font-size:0.72em;color:{_sc_col};background:#0d1117;"
-                    f"padding:2px 7px;border-radius:8px;border:1px solid {_sc_col}44'>"
-                    f"🛡 {_sm:.2f}</span>"
-                    f"<span style='font-size:0.72em;color:#6b7280;background:#0d1117;"
-                    f"padding:2px 7px;border-radius:8px;border:1px solid #1f2937'>"
-                    f"SOT {_sot:.1f}</span>"
-                    f"<span style='font-size:0.72em;color:{_fc};background:#0d1117;"
-                    f"padding:2px 7px;border-radius:8px;border:1px solid {_fc}44'>"
-                    f"F {_forma:.0f}</span>"
-                    f"</div>"
-                    f"</div>"
+                _st = _sbn.get(_dn, {})
+                _pos  = _st.get("position", 0) or 0
+                _pts  = _st.get("points", 0) or 0
+                _won  = _st.get("won", 0) or 0
+                _drw  = _st.get("draw", 0) or 0
+                _lst  = _st.get("lost", 0) or 0
+                _gf   = _st.get("gf", 0) or 0
+                _ga   = _st.get("ga", 0) or 0
+                _gd   = _st.get("gd", 0) or 0
+                _crest= _st.get("crest", "")
+                _gm   = float(_dr.get("Gole/M ↑", 0) or 0)
+                _sm_v = float(_dr.get("Strac./M ↓", 0) or 0)
+                _sot  = float(_dr.get("SOT/M", 0) or 0)
+                _kart = float(_dr.get("Kartki/M", 0) or 0)
+                _rozn = float(_dr.get("Rożne/M", 0) or 0)
+                _form = float(_dr.get("Forma (pkt/5M)", 0) or 0)
+                _m    = int(_dr.get("M", 0) or 0)
+                _dd_rows_enriched.append({
+                    "Crest": _crest,
+                    "Drużyna": _dn,
+                    "Poz": _pos, "Pkt": _pts,
+                    "M": _m,
+                    "W": _won, "R": _drw, "P": _lst,
+                    "G+": _gf, "G-": _ga, "GD": _gd,
+                    "Gole/M": round(_gm, 2),
+                    "Strac/M": round(_sm_v, 2),
+                    "SOT/M": round(_sot, 1),
+                    "Kartki/M": round(_kart, 2),
+                    "Rożne/M": round(_rozn, 1),
+                    "Forma/5M": round(_form, 0),
+                })
+            df_full = pd.DataFrame(_dd_rows_enriched)
+            if not df_full.empty and df_full["Poz"].max() > 0:
+                df_full = df_full.sort_values("Poz")
+            else:
+                df_full = df_full.sort_values("Gole/M", ascending=False)
+
+            # Renderuj jako HTML z herbami (nagłówek) + st.dataframe dla sortowania
+            # Najpierw mini widok z herbami i formą
+            _tbl_rows = []
+            for _, _r in df_full.iterrows():
+                _c = _r["Crest"]
+                _ci = (f"<img src='{_c}' style='width:18px;height:18px;object-fit:contain;vertical-align:middle' "
+                       f"onerror=\"this.style.display='none'\">") if _c else "·"
+                _poz_col = "#4CAF50" if _r["Poz"] <= 4 else ("#FF9800" if _r["Poz"] <= 6 else ("#F44336" if _r["Poz"] >= 18 else "#9ca3af"))
+                _gd_col  = "#4CAF50" if _r["GD"] > 0 else ("#F44336" if _r["GD"] < 0 else "#888")
+                _tbl_rows.append(
+                    f"<tr style='border-bottom:1px solid #111827'>"
+                    f"<td style='padding:5px 4px;text-align:center;color:{_poz_col};font-size:0.72em;font-weight:700'>{int(_r['Poz']) if _r['Poz'] else '–'}</td>"
+                    f"<td style='padding:5px 6px'>{_ci}</td>"
+                    f"<td style='padding:5px 4px;color:#e5e7eb;font-size:0.78em;white-space:nowrap'>{_r['Drużyna'][:14]}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:#fff;font-weight:700;font-size:0.80em'>{int(_r['Pkt']) if _r['Pkt'] else '–'}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:#6b7280;font-size:0.72em'>{int(_r['W'])}/{int(_r['R'])}/{int(_r['P'])}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:{_gd_col};font-size:0.72em'>{int(_r['G+'])}:{int(_r['G-'])}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:#60a5fa;font-size:0.72em'>{_r['Gole/M']:.2f}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:#f87171;font-size:0.72em'>{_r['Strac/M']:.2f}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:#34d399;font-size:0.72em'>{_r['SOT/M']:.1f}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:#fb923c;font-size:0.72em'>{_r['Kartki/M']:.2f}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:#a78bfa;font-size:0.72em'>{_r['Rożne/M']:.1f}</td>"
+                    f"</tr>"
                 )
             st.markdown(
-                f"<div style='background:#0d1117;border:1px solid #1f2937;"
-                f"border-radius:10px;overflow:hidden;margin-bottom:8px'>"
-                # Header
-                f"<div style='display:flex;padding:6px 12px;background:#111827;"
-                f"font-size:0.70em;color:#4b5563;font-weight:600'>"
-                f"<span style='flex:2'>Drużyna</span>"
-                f"<div style='flex:3;display:flex;gap:5px;justify-content:flex-end'>"
-                f"<span style='min-width:52px;text-align:center'>Gole/M</span>"
-                f"<span style='min-width:52px;text-align:center'>Strac.</span>"
-                f"<span style='min-width:52px;text-align:center'>SOT/M</span>"
-                f"<span style='min-width:40px;text-align:center'>Forma</span>"
-                f"</div></div>"
-                + "".join(_dd_rows_html) +
-                f"</div>",
+                "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+                "<table style='width:100%;border-collapse:collapse;background:#0d1117;"
+                "border:1px solid #1f2937;border-radius:8px;overflow:hidden'>"
+                "<thead><tr style='background:#111827'>"
+                "<th style='padding:6px 4px;text-align:center;color:#4b5563;font-size:0.68em'>#</th>"
+                "<th style='padding:6px 4px;color:#4b5563;font-size:0.68em'></th>"
+                "<th style='padding:6px 4px;text-align:left;color:#4b5563;font-size:0.68em'>Drużyna</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#4b5563;font-size:0.68em'>Pkt</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#4b5563;font-size:0.68em'>W/R/P</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#4b5563;font-size:0.68em'>G</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#60a5fa;font-size:0.68em'>⚽/M</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#f87171;font-size:0.68em'>🛡/M</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#34d399;font-size:0.68em'>SOT</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#fb923c;font-size:0.68em'>🟨/M</th>"
+                "<th style='padding:6px 4px;text-align:center;color:#a78bfa;font-size:0.68em'>⚑/M</th>"
+                "</tr></thead>"
+                "<tbody>" + "".join(_tbl_rows) + "</tbody>"
+                "</table></div>",
                 unsafe_allow_html=True)
-            st.caption("⚽ Gole/M · 🛡 Stracone/M · SOT/M · F = Forma (pkt z ost. 5 meczów max 15)")
+            st.caption("⬅️ Przewiń w prawo · W/R/P = Wygrane/Remisy/Porażki · SOT = celne strzały/M · 🟨 kartki · ⚑ rożne")
 
-            # Pełna tabela z sortowaniem (toggle)
-            with st.expander("📋 Pełna tabela z sortowaniem", expanded=False):
-                st.caption("💡 Kliknij nagłówek kolumny żeby posortować")
+            # Sortowalna tabela pełna w expander
+            with st.expander("📋 Sortowalna tabela (kliknij nagłówek kolumny)", expanded=False):
+                df_sort = df_full.drop(columns=["Crest"], errors="ignore")
                 st.dataframe(
-                    df_show,
+                    df_sort,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Drużyna":        st.column_config.TextColumn("Drużyna", width="medium"),
-                        "M":              st.column_config.NumberColumn("Mecze", format="%d", width="small"),
-                        "Gole/M ↑":       st.column_config.NumberColumn("Gole/M ↑",  format="%.2f"),
-                        "Strac./M ↓":     st.column_config.NumberColumn("Strac./M ↓", format="%.2f"),
-                        "SOT/M":          st.column_config.NumberColumn("SOT/M",      format="%.1f"),
-                        "Konwersja%":     st.column_config.NumberColumn("Konwersja%", format="%.1f%%"),
-                        "xG-proxy":       st.column_config.NumberColumn("xG-proxy",   format="%.2f"),
-                        "Kartki/M":       st.column_config.NumberColumn("Kartki/M",   format="%.2f"),
-                        "Rożne/M":        st.column_config.NumberColumn("Rożne/M",    format="%.1f"),
-                        "Forma (pkt/5M)": st.column_config.NumberColumn("Forma/5M",   format="%.0f"),
-                    },
+                        "Poz":      st.column_config.NumberColumn("Poz", format="%d", width="small"),
+                        "Drużyna":  st.column_config.TextColumn("Drużyna", width="medium"),
+                        "Pkt":      st.column_config.NumberColumn("Pkt", format="%d", width="small"),
+                        "M":        st.column_config.NumberColumn("M", format="%d", width="small"),
+                        "W":        st.column_config.NumberColumn("W", format="%d", width="small"),
+                        "R":        st.column_config.NumberColumn("R", format="%d", width="small"),
+                        "P":        st.column_config.NumberColumn("P", format="%d", width="small"),
+                        "G+":       st.column_config.NumberColumn("G+", format="%d", width="small"),
+                        "G-":       st.column_config.NumberColumn("G-", format="%d", width="small"),
+                        "GD":       st.column_config.NumberColumn("GD", format="%+d", width="small"),
+                        "Gole/M":   st.column_config.NumberColumn("⚽/M", format="%.2f"),
+                        "Strac/M":  st.column_config.NumberColumn("🛡/M", format="%.2f"),
+                        "SOT/M":    st.column_config.NumberColumn("SOT/M", format="%.1f"),
+                        "Kartki/M": st.column_config.NumberColumn("🟨/M", format="%.2f"),
+                        "Rożne/M":  st.column_config.NumberColumn("⚑/M", format="%.1f"),
+                        "Forma/5M": st.column_config.NumberColumn("Forma", format="%.0f"),
+                    }
                 )
 
             export_cols = ["Drużyna","M","Gole/M ↑","Strac./M ↓","SOT/M",
@@ -5599,17 +5612,18 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _lr_html_rows = []
             for _lr in _lig_rows:
                 _bar_w = int(_lr["hr"] * 100)
+                _lr_flag = _LIGA_FLAGS.get(_lr["liga"], "🌍")
                 _lr_html_rows.append(
                     f"<tr>"
-                    f"<td style='padding:8px 12px;font-weight:600;font-size:0.9em'>{_lr['liga']}</td>"
+                    f"<td style='padding:8px 12px;font-weight:600;font-size:0.9em'>{_lr_flag} {_lr['liga']}</td>"
                     f"<td style='padding:8px 10px;text-align:center;color:#888'>{_lr['n']}</td>"
                     f"<td style='padding:8px 10px;width:140px'>"
                     f"<div style='display:flex;align-items:center;gap:6px'>"
                     f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:6px'>"
-                    f"<div style='background:{_lr["hr_col"]};width:{_bar_w}%;height:6px;border-radius:3px'></div></div>"
-                    f"<span style='color:{_lr["hr_col"]};font-weight:700;font-size:0.88em'>{_lr['hr']:.1%}</span>"
+                    f"<div style='background:{_lr['hr_col']};width:{_bar_w}%;height:6px;border-radius:3px'></div></div>"
+                    f"<span style='color:{_lr['hr_col']};font-weight:700;font-size:0.88em'>{_lr['hr']:.1%}</span>"
                     f"</div></td>"
-                    f"<td style='padding:8px 10px;text-align:right;font-weight:700;color:{_lr["roi_col"]}'>{_lr['roi']:+.1f}%</td>"
+                    f"<td style='padding:8px 10px;text-align:right;font-weight:700;color:{_lr['roi_col']}'>{_lr['roi']:+.1f}%</td>"
                     f"<td style='padding:8px 10px;text-align:center;color:#888;font-size:0.84em'>{_lr['brier']:.4f}</td>"
                     f"<td style='padding:8px 10px;text-align:center'>{_lr['status']}</td>"
                     f"</tr>"
