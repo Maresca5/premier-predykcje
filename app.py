@@ -811,6 +811,7 @@ def load_standings(fd_org_id: int) -> dict:
                 "ga":       row.get("goalsAgainst", 0),
                 "gd":       row.get("goalDifference", 0),
                 "form":     form_list,   # lista ["W","L","W","W","D"]
+                "crest":    team.get("crest") or f"https://crests.football-data.org/{tid}.png",
             }
         return result
     except Exception:
@@ -2867,16 +2868,35 @@ if not historical.empty:
                     except Exception:
                         pass
 
-    # Forma z standings (fd.org) – lookup po nazwie
+                    # Forma – najpierw z standings API, fallback z historical CSV
                     _h_stand = _sbn.get(h, {})
                     _a_stand = _sbn.get(a, {})
-                    _h_form  = _h_stand.get("form", []) or []
-                    _a_form  = _a_stand.get("form", []) or []
-                    _h_pos   = _h_stand.get("position", 0) or 0
-                    _a_pos   = _a_stand.get("position", 0) or 0
-                    # Upewnij się że forma to lista stringów bez NaN
-                    _h_form = [str(x) for x in _h_form if x and str(x) not in ("nan","None","")]
-                    _a_form = [str(x) for x in _a_form if x and str(x) not in ("nan","None","")]
+                    _h_form  = [str(x) for x in (_h_stand.get("form", []) or [])
+                                if x and str(x) not in ("nan","None","")]
+                    _a_form  = [str(x) for x in (_a_stand.get("form", []) or [])
+                                if x and str(x) not in ("nan","None","")]
+                    _h_pos   = int(_h_stand.get("position", 0) or 0)
+                    _a_pos   = int(_a_stand.get("position", 0) or 0)
+                    # Fallback: policz formę z historical CSV gdy API nie daje
+                    if not _h_form or not _a_form:
+                        try:
+                            _hist_fc = historical[historical["_sezon"] == "biezacy"] \
+                                if "_sezon" in historical.columns else historical
+                            def _form_from_csv(team: str, n: int = 5) -> list:
+                                _hm = _hist_fc[_hist_fc["HomeTeam"] == team].copy()
+                                _hm["res"] = _hm.apply(lambda r: "W" if r["FTHG"]>r["FTAG"] else ("L" if r["FTHG"]<r["FTAG"] else "D"), axis=1)
+                                _am = _hist_fc[_hist_fc["AwayTeam"] == team].copy()
+                                _am["res"] = _am.apply(lambda r: "W" if r["FTAG"]>r["FTHG"] else ("L" if r["FTAG"]<r["FTHG"] else "D"), axis=1)
+                                _all = pd.concat([
+                                    _hm[["Date","res"]], _am[["Date","res"]]
+                                ]).sort_values("Date").tail(n)
+                                return list(_all["res"])
+                            if not _h_form:
+                                _h_form = _form_from_csv(h)
+                            if not _a_form:
+                                _a_form = _form_from_csv(a)
+                        except Exception:
+                            pass
                     _form_warn = _forma_warning(
                         _h_form, _a_form, _h_pos, _a_pos, pred["typ"])
 
@@ -3316,11 +3336,61 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     f"</div>",
                                     unsafe_allow_html=True
                                 )
-                                # ──────────────────────────────────────────
-                                ch, cmid, ca = st.columns([5,2,5])
-                                with ch: st.markdown(f"<div style='font-weight:bold'>{h}</div>", unsafe_allow_html=True)
-                                with cmid: st.markdown(f"<div style='text-align:center;color:#888'>{data_meczu}</div>", unsafe_allow_html=True)
-                                with ca: st.markdown(f"<div style='font-weight:bold;text-align:right'>{a}</div>", unsafe_allow_html=True)
+                                # ── Herby + nagłówek meczu ─────────────────
+                                _h_info  = _sbn.get(h, {})
+                                _a_info  = _sbn.get(a, {})
+                                _h_crest = _h_info.get("crest", "")
+                                _a_crest = _a_info.get("crest", "")
+                                _h_pos_lbl = f"<span style='font-size:0.72em;color:#888'>#{_h_info['position']}</span> " if _h_info.get("position") else ""
+                                _a_pos_lbl = f" <span style='font-size:0.72em;color:#888'>#{_a_info['position']}</span>" if _a_info.get("position") else ""
+                                _h_img = (f"<img src='{_h_crest}' style='width:32px;height:32px;"
+                                          f"object-fit:contain;margin-right:6px;vertical-align:middle' "
+                                          f"onerror=\"this.style.display='none'\">") if _h_crest else ""
+                                _a_img = (f"<img src='{_a_crest}' style='width:32px;height:32px;"
+                                          f"object-fit:contain;margin-left:6px;vertical-align:middle' "
+                                          f"onerror=\"this.style.display='none'\">") if _a_crest else ""
+                                # Forma z CSV (zawsze dostępna)
+                                try:
+                                    _hist_tab1 = historical[historical["_sezon"] == "biezacy"] \
+                                        if "_sezon" in historical.columns else historical
+                                    def _csv_form(team, n=5):
+                                        _hm = _hist_tab1[_hist_tab1["HomeTeam"] == team].copy()
+                                        _hm["res"] = _hm.apply(lambda r: "W" if r["FTHG"]>r["FTAG"] else ("L" if r["FTHG"]<r["FTAG"] else "D"), axis=1)
+                                        _am = _hist_tab1[_hist_tab1["AwayTeam"] == team].copy()
+                                        _am["res"] = _am.apply(lambda r: "W" if r["FTAG"]>r["FTHG"] else ("L" if r["FTAG"]<r["FTHG"] else "D"), axis=1)
+                                        _all = pd.concat([_hm[["Date","res"]], _am[["Date","res"]]]).sort_values("Date").tail(n)
+                                        return "".join(_all["res"].tolist())
+                                    _h_form_str = _csv_form(h)
+                                    _a_form_str = _csv_form(a)
+                                except Exception:
+                                    _h_form_str = ""
+                                    _a_form_str = ""
+                                _h_form_html = _forma_html(_h_form_str) if _h_form_str else "<span style='color:#555;font-size:0.8em'>—</span>"
+                                _a_form_html = _forma_html(_a_form_str) if _a_form_str else "<span style='color:#555;font-size:0.8em'>—</span>"
+                                st.markdown(
+                                    f"<div style='display:flex;align-items:center;justify-content:space-between;"
+                                    f"padding:8px 4px;margin-bottom:4px'>"
+                                    # Lewa: herb + pozycja + nazwa + forma
+                                    f"<div style='display:flex;flex-direction:column;align-items:flex-start;flex:1'>"
+                                    f"<div style='display:flex;align-items:center'>"
+                                    f"{_h_img}"
+                                    f"<span>{_h_pos_lbl}<b style='color:#fff;font-size:1.0em'>{h}</b></span>"
+                                    f"</div>"
+                                    f"<div style='margin-top:4px'>{_h_form_html}</div>"
+                                    f"</div>"
+                                    # Środek: data
+                                    f"<div style='text-align:center;color:#888;font-size:0.85em;padding:0 8px'>{data_meczu}</div>"
+                                    # Prawa: nazwa + forma + herb
+                                    f"<div style='display:flex;flex-direction:column;align-items:flex-end;flex:1'>"
+                                    f"<div style='display:flex;align-items:center'>"
+                                    f"<span><b style='color:#fff;font-size:1.0em'>{a}</b>{_a_pos_lbl}</span>"
+                                    f"{_a_img}"
+                                    f"</div>"
+                                    f"<div style='margin-top:4px'>{_a_form_html}</div>"
+                                    f"</div>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
 
                                 st.markdown(
                                     f"<div style='text-align:center;font-size:1.7em;font-weight:bold;margin:4px 0'>"
