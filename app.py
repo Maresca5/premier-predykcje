@@ -533,10 +533,22 @@ def load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
     if api_key:
         try:
             import requests as _req
-            url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season=2024"
-            resp = _req.get(url, headers={"X-Auth-Token": api_key}, timeout=10)
+            headers = {"X-Auth-Token": api_key}
+
+            # Krok 1: pobierz aktualny sezon z competition endpoint
+            comp_resp = _req.get(
+                f"https://api.football-data.org/v4/competitions/{fd_org_id}",
+                headers=headers, timeout=10)
+            comp_resp.raise_for_status()
+            comp_data = comp_resp.json()
+            current_season_year = comp_data.get("currentSeason", {}).get("startDate", "2024-01-01")[:4]
+
+            # Krok 2: pobierz mecze bieżącego sezonu
+            url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season={current_season_year}"
+            resp = _req.get(url, headers=headers, timeout=10)
             resp.raise_for_status()
             matches = resp.json().get("matches", [])
+
             rows = []
             for m in matches:
                 ht_name = m["homeTeam"].get("shortName") or m["homeTeam"].get("name", "")
@@ -560,15 +572,21 @@ def load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
                     "wynik_h":   wynik_h,
                     "wynik_a":   wynik_a,
                     "fd_id":     m.get("id"),
+                    "_season":   current_season_year,
                 })
             if not rows:
                 raise ValueError("Pusta odpowiedź API")
             df = pd.DataFrame(rows)
             df["round"] = pd.to_numeric(df["round"], errors="coerce").fillna(0).astype(int)
+            # Zapisz info o sezonie do session_state dla sidebara
+            try:
+                st.session_state["_fd_season_debug"] = current_season_year + "/" + str(int(current_season_year)+1)[2:]
+            except Exception:
+                pass
             return df.sort_values("date").reset_index(drop=True)
+
         except Exception as _e:
-            # Cicha degradacja do fallback CSV
-            pass
+            st.sidebar.warning(f"⚠️ API terminarz: {_e} → CSV fallback")
 
     # ── Fallback: lokalny CSV (stare zachowanie) ──────────────────────
     try:
@@ -2147,13 +2165,16 @@ with st.sidebar.expander("📅 Terminarz (football-data.org)", expanded=not bool
             st.session_state["_fd_api_key"] = _fd_mk
             st.rerun()
     else:
+        # Pokaż sezon z aktualnie załadowanego terminarza
+        _fd_sch = st.session_state.get("_fd_season_debug", "")
         st.markdown(
-            "<div style='font-size:0.78em;color:#4CAF50'>✅ Klucz aktywny – terminarz z API</div>"
-            "<div style='font-size:0.72em;color:#555;margin-top:2px'>Odświeżanie co 1h · fallback na CSV</div>",
+            f"<div style='font-size:0.78em;color:#4CAF50'>✅ Klucz aktywny – terminarz z API</div>"
+            f"<div style='font-size:0.72em;color:#555;margin-top:2px'>"
+            f"Odświeżanie co 1h · fallback na CSV{' · sezon: ' + _fd_sch if _fd_sch else ''}</div>",
             unsafe_allow_html=True)
         if st.button("🔄 Wyczyść cache terminarza", use_container_width=True, key="_fd_clear"):
             load_schedule.clear()
-            st.success("Cache wyczyszczony")
+            st.success("Cache wyczyszczony – odświeżam...")
 
 with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key)):
     if not _oa_key:
