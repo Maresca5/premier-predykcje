@@ -444,8 +444,25 @@ NAZWY_MAP = {
     "Angers SCO":                    "Angers",
     "AC Ajaccio":                    "Ajaccio",
     "FC Lorient":                    "Lorient",
-    "RC Paris":                      "Paris FC",
+    "RC Paris":                      "Paris FC",    # ── Poprawki z debug (screenshoty 2026-03-09) ──────────────────────
+    # EPL: fd.org zwraca skrócone shortName bez "& Hove Albion" i "Forest"
+    "Brighton Hove":                 "Brighton",
+    "Nottingham":                    "Nott'm Forest",
+    # Bundesliga: fd.org shortName bez prefiksu
+    "Bremen":                        "Werder Bremen",
+    "Frankfurt":                     "Ein Frankfurt",
+    # La Liga: fd.org używa znaków diakrytycznych i skrótów
+    "Alavés":                        "Alaves",
+    "Athletic":                      "Ath Bilbao",
+    "Atleti":                        "Ath Madrid",
+    "Barça":                         "Barcelona",
+    # Serie A
+    "AC Pisa":                       "Pisa",
+    "Pisa SC":                       "Pisa",
+    # Ligue 1
+    "Olympique Lyon":                "Lyon",
 }
+
 
 _niezmapowane: set = set()
 
