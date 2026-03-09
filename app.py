@@ -717,6 +717,8 @@ def load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
                     "date":      dt,
                     "home_team": ht,
                     "away_team": at,
+                    "home_id":   m["homeTeam"].get("id"),
+                    "away_id":   m["awayTeam"].get("id"),
                     "is_played": is_played,
                     "status":    status,
                     "wynik_h":   wynik_h,
@@ -762,6 +764,118 @@ def load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
 # ===========================================================================
 # FUNKCJE POMOCNICZE DLA KOLEJEK
 # ===========================================================================
+@st.cache_data(ttl=3600)
+def load_standings(fd_org_id: int) -> dict:
+    """Pobiera tabelę ligową z football-data.org API (TTL 1h).
+    Zwraca dict: {team_id: {name, short, position, points, played,
+                             won, draw, lost, gf, ga, gd, form}}
+    form = string np. "W,L,W,W,D" (ostatnie 5 meczów, od najnowszego)
+    Fallback: pusty dict przy błędzie lub braku klucza."""
+    api_key = _get_fd_api_key()
+    if not api_key:
+        return {}
+    try:
+        import requests as _req
+        resp = _req.get(
+            f"https://api.football-data.org/v4/competitions/{fd_org_id}/standings",
+            headers={"X-Auth-Token": api_key}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        # Szukaj TOTAL standings (nie home/away)
+        table = []
+        for sg in data.get("standings", []):
+            if sg.get("type") == "TOTAL":
+                table = sg.get("table", [])
+                break
+        if not table and data.get("standings"):
+            table = data["standings"][0].get("table", [])
+        result = {}
+        for row in table:
+            team = row.get("team", {})
+            tid = team.get("id")
+            if not tid:
+                continue
+            # Forma: "W,W,L,D,W" → lista ostatnich 5 od najnowszego
+            raw_form = row.get("form") or ""
+            form_list = [x.strip() for x in raw_form.split(",") if x.strip()][-5:]
+            result[tid] = {
+                "name":     team.get("name", ""),
+                "short":    team.get("shortName") or team.get("tla") or team.get("name", ""),
+                "position": row.get("position", 0),
+                "points":   row.get("points", 0),
+                "played":   row.get("playedGames", 0),
+                "won":      row.get("won", 0),
+                "draw":     row.get("draw", 0),
+                "lost":     row.get("lost", 0),
+                "gf":       row.get("goalsFor", 0),
+                "ga":       row.get("goalsAgainst", 0),
+                "gd":       row.get("goalDifference", 0),
+                "form":     form_list,   # lista ["W","L","W","W","D"]
+            }
+        return result
+    except Exception:
+        return {}
+
+
+def _standings_by_name(standings: dict) -> dict:
+    """Pomocniczy: zwraca standings indeksowane po znormalizowanej nazwie
+    (po map_nazwa) dla łatwego lookup w karcie meczu."""
+    by_name = {}
+    for tid, info in standings.items():
+        # Próbuj wszystkie warianty nazwy
+        for raw in [info["name"], info["short"]]:
+            mapped = map_nazwa(raw)
+            by_name[mapped] = info
+            by_name[raw] = info
+    return by_name
+
+
+def _forma_html(form_list: list) -> str:
+    """Renderuje ostatnie 5 wyników jako kolorowe kółka HTML."""
+    if not form_list:
+        return ""
+    colors = {"W": "#4CAF50", "D": "#FF9800", "L": "#F44336"}
+    labels = {"W": "W", "D": "R", "L": "P"}  # tłumaczenie na PL
+    circles = []
+    for f in form_list[-5:]:
+        c = colors.get(f, "#666")
+        l = labels.get(f, f)
+        circles.append(
+            f"<span style='display:inline-block;width:18px;height:18px;"
+            f"border-radius:50%;background:{c};color:#fff;"
+            f"font-size:9px;font-weight:700;text-align:center;"
+            f"line-height:18px;margin:1px'>{l}</span>"
+        )
+    return "".join(circles)
+
+
+def _forma_warning(h_form: list, a_form: list,
+                   h_pos: int, a_pos: int, pred_typ: str) -> str | None:
+    """Zwraca tekst ostrzeżenia jeśli forma przeczy predykcji modelu.
+    pred_typ: '1' (wygrana gospodarza), 'X', '2' (wygrana gościa)"""
+    if not h_form or not a_form:
+        return None
+    h_wins  = h_form.count("W")
+    a_wins  = a_form.count("W")
+    h_losses = h_form.count("L")
+    a_losses = a_form.count("L")
+    warnings = []
+    # Model faworyzuje gospodarza, ale ma złą formę (≤1W z 5) i jest wyżej w tabeli
+    if pred_typ == "1" and h_wins <= 1 and h_losses >= 3:
+        warnings.append(f"Gospodarz ({h_wins}W/{h_losses}P z 5) w słabej formie")
+    # Model faworyzuje gościa, ale ma złą formę
+    if pred_typ == "2" and a_wins <= 1 and a_losses >= 3:
+        warnings.append(f"Gość ({a_wins}W/{a_losses}P z 5) w słabej formie")
+    # Różnica pozycji vs predykcja (tylko gdy standings dostępne)
+    if h_pos > 0 and a_pos > 0:
+        pos_diff = a_pos - h_pos  # > 0 = gospodarz wyżej w tabeli
+        if pred_typ == "2" and pos_diff >= 10 and a_wins <= 2:
+            warnings.append(f"Faworyzowany gość na poz.{a_pos} vs gospodarz poz.{h_pos}")
+        if pred_typ == "1" and pos_diff <= -10 and h_wins <= 2:
+            warnings.append(f"Faworyzowany gospodarz na poz.{h_pos} vs gość poz.{a_pos}")
+    return " · ".join(warnings) if warnings else None
+
+
 def get_current_round(schedule: pd.DataFrame) -> int:
     """
     Zwraca numer aktualnej kolejki.
@@ -2404,6 +2518,8 @@ with st.sidebar.expander("💼 Kelly & Bankroll", expanded=True):
 with st.spinner(f"⚙️ Model Dixon-Coles analizuje dane {wybrana_liga}..."):
     historical = load_historical(LIGI[wybrana_liga]["csv_code"])
     schedule   = load_schedule(LIGI[wybrana_liga]["fd_org_id"], LIGI[wybrana_liga]["file"])
+    standings  = load_standings(LIGI[wybrana_liga]["fd_org_id"])
+    _sbn       = _standings_by_name(standings) if standings else {}
 
 # ── Debug mapowania nazw ────────────────────────────────────────────────────
 # Porównaj nazwy z terminarza (fd.org) z nazwami z historycznych CSV (co.uk)
@@ -2770,6 +2886,16 @@ if not historical.empty:
                     except Exception:
                         pass
 
+                    # Forma z standings (fd.org) – lookup po nazwie
+                    _h_stand = _sbn.get(h, {})
+                    _a_stand = _sbn.get(a, {})
+                    _h_form  = _h_stand.get("form", [])
+                    _a_form  = _a_stand.get("form", [])
+                    _h_pos   = _h_stand.get("position", 0)
+                    _a_pos   = _a_stand.get("position", 0)
+                    _form_warn = _forma_warning(
+                        _h_form, _a_form, _h_pos, _a_pos, pred["typ"])
+
                     # Typ główny – dopisz kurs live i kelly
                     # Śledź ekspozycję per mecz od 1X2
                     _br_mecz2 = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
@@ -2795,6 +2921,9 @@ if not historical.empty:
                             "p_kelly_used": _kel.get("p_kelly"),
                             "Kelly_unverified": False, "Kategoria": "1X2",
                             "LineMovement": _lm_signal,
+                            "FormWarning": _form_warn,
+                            "HomeForm": _h_form, "AwayForm": _a_form,
+                            "HomePos": _h_pos, "AwayPos": _a_pos,
                         })
 
                     # Alternatywne zdarzenia – z per-rynek frakcją Kelly i max exposure
@@ -2894,6 +3023,31 @@ if not historical.empty:
                                 f"⚡ Steam: rynek shortuje <b>{_lm_team}</b> "
                                 f"({_lm_size:.2f} pkt) · sprawdź skład/kontuzje"
                                 f"</div>")
+                        # Forma z standings
+                        _fw = row.get("FormWarning")
+                        _hf = row.get("HomeForm", [])
+                        _af = row.get("AwayForm", [])
+                        _hp = row.get("HomePos", 0)
+                        _ap = row.get("AwayPos", 0)
+                        _form_html = ""
+                        if _hf or _af:
+                            _teams = row["Mecz"].split(" – ")
+                            _hn = _teams[0] if len(_teams) > 0 else ""
+                            _an = _teams[1] if len(_teams) > 1 else ""
+                            _pos_h = f"<span style='color:#888;font-size:0.72em'>#{_hp}</span> " if _hp else ""
+                            _pos_a = f"<span style='color:#888;font-size:0.72em'>#{_ap}</span> " if _ap else ""
+                            _form_html = (
+                                f"<div style='display:flex;gap:12px;margin-top:4px;flex-wrap:wrap'>"
+                                f"<span style='font-size:0.74em;color:#aaa'>"
+                                f"{_pos_h}<b style='color:#ccc'>{_hn}</b>: {_forma_html(_hf)}</span>"
+                                f"<span style='font-size:0.74em;color:#aaa'>"
+                                f"{_pos_a}<b style='color:#ccc'>{_an}</b>: {_forma_html(_af)}</span>"
+                                f"</div>")
+                        _fw_html = ""
+                        if _fw:
+                            _fw_html = (
+                                f"<div style='font-size:0.74em;color:#FF5722;margin-top:3px'>"
+                                f"⚠️ Forma vs model: {_fw}</div>")
                         st.markdown(
                             f"<div style='background:#0a1628;border-left:3px solid {_ec};"
                             f"border-radius:6px;padding:8px 12px;margin:3px 0'>"
@@ -2906,7 +3060,9 @@ if not historical.empty:
                             f"{row['P']:.0%} @ {_kd} · "
                             f"<b style='color:{_ec}'>EV {row['EV']:+.3f}</b></span>"
                             f"{_kelly_html}</div></div>"
+                            f"{_form_html}"
                             f"{_lm_html}"
+                            f"{_fw_html}"
                             f"</div>",
                             unsafe_allow_html=True)
                 else:
