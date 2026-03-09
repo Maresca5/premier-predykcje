@@ -55,6 +55,15 @@ LIGI = {
 
 DB_FILE    = "predykcje.db"
 
+# Bieżący sezon (kod football-data.co.uk: "2526" = sezon 2025/26)
+# Europejskie ligi: sezon startuje w lipcu/sierpniu
+# Jeśli miesiąc >= 7 → rok bieżący, inaczej rok-1
+def _oblicz_biezacy_sezon() -> str:
+    _y = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
+    return f"{str(_y)[2:]}{str(_y+1)[2:]}"
+
+BIEZACY_SEZON = _oblicz_biezacy_sezon()   # np. "2526" dla sezonu 2025/26
+
 def waga_poprzedniego(n_biezacy: int) -> float:
     return float(np.clip(0.8 - (n_biezacy / 30) * 0.6, 0.2, 0.8))
 
@@ -390,6 +399,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS zdarzenia (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             liga        TEXT,
+            sezon       TEXT,
             kolejnosc   INTEGER,
             mecz        TEXT,
             home        TEXT,
@@ -402,9 +412,18 @@ def init_db():
             wynik       TEXT,
             trafione    BOOLEAN,
             data        TEXT,
-            UNIQUE(liga, kolejnosc, mecz, rynek, typ, linia)
+            UNIQUE(liga, sezon, kolejnosc, mecz, rynek, typ, linia)
         )
     """)
+    # Migracja: dodaj kolumnę sezon do istniejących baz (bez niej ALTER TABLE nie przejdzie)
+    try:
+        con.execute("ALTER TABLE zdarzenia ADD COLUMN sezon TEXT")
+        # Wypełnij stare rekordy (bez sezonu) wartością poprzedniego sezonu
+        _prev = f"{str(int(BIEZACY_SEZON[:2])-1):02d}{BIEZACY_SEZON[:2]}"
+        con.execute("UPDATE zdarzenia SET sezon=? WHERE sezon IS NULL", (_prev,))
+        con.commit()
+    except Exception:
+        pass  # kolumna już istnieje
     
     # Tabela kupony (opcjonalna, dla historycznych danych)
     con.execute("""
@@ -1485,16 +1504,19 @@ def alternatywne_zdarzenia(lam_h: float, lam_a: float, lam_r: float,
 # ZAPIS ZDARZEŃ DO BAZY (tracking skuteczności)
 # ===========================================================================
 def zapisz_zdarzenia(liga: str, kolejnosc: int, mecz: str, home: str, away: str,
-                     rynek: str, typ: str, linia: float, p_model: float, fair_odds: float):
+                     rynek: str, typ: str, linia: float, p_model: float, fair_odds: float,
+                     sezon: str = None):
     """Zapisuje pojedyncze zdarzenie do bazy (do późniejszej weryfikacji)"""
+    if sezon is None:
+        sezon = BIEZACY_SEZON
     init_db()
     con = sqlite3.connect(DB_FILE)
     try:
         con.execute(
             """INSERT OR IGNORE INTO zdarzenia 
-               (liga, kolejnosc, mecz, home, away, rynek, linia, typ, p_model, fair_odds, data)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (liga, kolejnosc, mecz, home, away, rynek, linia, typ, p_model, fair_odds,
+               (liga, sezon, kolejnosc, mecz, home, away, rynek, linia, typ, p_model, fair_odds, data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (liga, sezon, kolejnosc, mecz, home, away, rynek, linia, typ, p_model, fair_odds,
              datetime.now().strftime("%Y-%m-%d"))
         )
         con.commit()
@@ -2307,8 +2329,8 @@ with _hc3:
     try:
         _con_hero = __import__('sqlite3').connect(DB_FILE)
         _hr_row = _con_hero.execute(
-            "SELECT COUNT(*), SUM(trafione) FROM zdarzenia WHERE liga=? AND trafione IS NOT NULL AND rynek='1X2'",
-            (wybrana_liga,)).fetchone()
+            "SELECT COUNT(*), SUM(trafione) FROM zdarzenia WHERE liga=? AND sezon=? AND trafione IS NOT NULL AND rynek='1X2'",
+            (wybrana_liga, BIEZACY_SEZON)).fetchone()
         _con_hero.close()
         _hr_n = int(_hr_row[0]) if _hr_row and _hr_row[0] else 0
         _hr_v = (_hr_row[1]/_hr_row[0]*100) if _hr_row and _hr_row[0] else 0
@@ -3781,8 +3803,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
         if _mg_top:
             _con_kpi = sqlite3.connect(DB_FILE)
             _kpi_row = _con_kpi.execute(
-                "SELECT COUNT(*), SUM(trafione) FROM zdarzenia WHERE liga=? AND trafione IS NOT NULL AND rynek='1X2'",
-                (wybrana_liga,)).fetchone()
+                "SELECT COUNT(*), SUM(trafione) FROM zdarzenia WHERE liga=? AND sezon=? AND trafione IS NOT NULL AND rynek='1X2'",
+                (wybrana_liga, BIEZACY_SEZON)).fetchone()
             _con_kpi.close()
             _kpi_n    = int(_kpi_row[0]) if _kpi_row and _kpi_row[0] else 0
             _kpi_traf = int(_kpi_row[1]) if _kpi_row and _kpi_row[1] else 0
@@ -3988,8 +4010,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             """SELECT kolejnosc, home, away, typ, trafione, p_model, fair_odds
                FROM zdarzenia
                WHERE liga=? AND rynek='1X2' AND trafione IS NOT NULL
+               AND sezon=?
                ORDER BY kolejnosc, id""",
-            _con_eq, params=(wybrana_liga,))
+            _con_eq, params=(wybrana_liga, BIEZACY_SEZON))
         _con_eq.close()
 
         if len(_eq_df) >= 3 and not historical.empty:
@@ -4264,8 +4287,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 """SELECT rynek, typ, p_model, fair_odds, trafione
                    FROM zdarzenia
                    WHERE liga=? AND rynek != '1X2' AND trafione IS NOT NULL
+                   AND sezon=?
                    ORDER BY id""",
-                _alt_con, params=(wybrana_liga,))
+                _alt_con, params=(wybrana_liga, BIEZACY_SEZON))
             _alt_con.close()
 
             if len(_alt_df) < 5:
@@ -5102,8 +5126,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     _ml_csv=LIGI[_ml_liga]["csv_code"]
                     _ml_con2=sqlite3.connect(DB_FILE)
                     _ml_eq=pd.read_sql_query(
-                        "SELECT kolejnosc,home,away,typ,trafione,p_model,fair_odds FROM zdarzenia WHERE liga=? AND rynek='1X2' AND trafione IS NOT NULL ORDER BY kolejnosc,id",
-                        _ml_con2,params=(_ml_liga,))
+                        "SELECT kolejnosc,home,away,typ,trafione,p_model,fair_odds FROM zdarzenia WHERE liga=? AND sezon=? AND rynek='1X2' AND trafione IS NOT NULL ORDER BY kolejnosc,id",
+                        _ml_con2,params=(_ml_liga, BIEZACY_SEZON))
                     _ml_con2.close()
                     if len(_ml_eq)<3: continue
                     _ml_hist=load_historical(_ml_csv)
