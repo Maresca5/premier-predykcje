@@ -830,25 +830,6 @@ def _standings_by_name(standings: dict) -> dict:
     return by_name
 
 
-def _forma_html(form_list: list) -> str:
-    """Renderuje ostatnie 5 wyników jako kolorowe kółka HTML."""
-    if not form_list:
-        return ""
-    colors = {"W": "#4CAF50", "D": "#FF9800", "L": "#F44336"}
-    labels = {"W": "W", "D": "R", "L": "P"}  # tłumaczenie na PL
-    circles = []
-    for f in form_list[-5:]:
-        c = colors.get(f, "#666")
-        l = labels.get(f, f)
-        circles.append(
-            f"<span style='display:inline-block;width:18px;height:18px;"
-            f"border-radius:50%;background:{c};color:#fff;"
-            f"font-size:9px;font-weight:700;text-align:center;"
-            f"line-height:18px;margin:1px'>{l}</span>"
-        )
-    return "".join(circles)
-
-
 def _forma_warning(h_form: list, a_form: list,
                    h_pos: int, a_pos: int, pred_typ: str) -> str | None:
     """Zwraca tekst ostrzeżenia jeśli forma przeczy predykcji modelu.
@@ -2886,13 +2867,16 @@ if not historical.empty:
                     except Exception:
                         pass
 
-                    # Forma z standings (fd.org) – lookup po nazwie
+    # Forma z standings (fd.org) – lookup po nazwie
                     _h_stand = _sbn.get(h, {})
                     _a_stand = _sbn.get(a, {})
-                    _h_form  = _h_stand.get("form", [])
-                    _a_form  = _a_stand.get("form", [])
-                    _h_pos   = _h_stand.get("position", 0)
-                    _a_pos   = _a_stand.get("position", 0)
+                    _h_form  = _h_stand.get("form", []) or []
+                    _a_form  = _a_stand.get("form", []) or []
+                    _h_pos   = _h_stand.get("position", 0) or 0
+                    _a_pos   = _a_stand.get("position", 0) or 0
+                    # Upewnij się że forma to lista stringów bez NaN
+                    _h_form = [str(x) for x in _h_form if x and str(x) not in ("nan","None","")]
+                    _a_form = [str(x) for x in _a_form if x and str(x) not in ("nan","None","")]
                     _form_warn = _forma_warning(
                         _h_form, _a_form, _h_pos, _a_pos, pred["typ"])
 
@@ -3029,8 +3013,13 @@ if not historical.empty:
                         _af = row.get("AwayForm", [])
                         _hp = row.get("HomePos", 0)
                         _ap = row.get("AwayPos", 0)
+                        # Konwersja lista→string dla _forma_html (oczekuje "WWLDW")
+                        _hf_str = "".join(_hf) if isinstance(_hf, list) else (str(_hf) if _hf and str(_hf) != "nan" else "")
+                        _af_str = "".join(_af) if isinstance(_af, list) else (str(_af) if _af and str(_af) != "nan" else "")
+                        _hp = int(_hp) if _hp and str(_hp) != "nan" else 0
+                        _ap = int(_ap) if _ap and str(_ap) != "nan" else 0
                         _form_html = ""
-                        if _hf or _af:
+                        if _hf_str or _af_str:
                             _teams = row["Mecz"].split(" – ")
                             _hn = _teams[0] if len(_teams) > 0 else ""
                             _an = _teams[1] if len(_teams) > 1 else ""
@@ -3039,12 +3028,12 @@ if not historical.empty:
                             _form_html = (
                                 f"<div style='display:flex;gap:12px;margin-top:4px;flex-wrap:wrap'>"
                                 f"<span style='font-size:0.74em;color:#aaa'>"
-                                f"{_pos_h}<b style='color:#ccc'>{_hn}</b>: {_forma_html(_hf)}</span>"
+                                f"{_pos_h}<b style='color:#ccc'>{_hn}</b>: {_forma_html(_hf_str)}</span>"
                                 f"<span style='font-size:0.74em;color:#aaa'>"
-                                f"{_pos_a}<b style='color:#ccc'>{_an}</b>: {_forma_html(_af)}</span>"
+                                f"{_pos_a}<b style='color:#ccc'>{_an}</b>: {_forma_html(_af_str)}</span>"
                                 f"</div>")
                         _fw_html = ""
-                        if _fw:
+                        if _fw and str(_fw) != "nan":
                             _fw_html = (
                                 f"<div style='font-size:0.74em;color:#FF5722;margin-top:3px'>"
                                 f"⚠️ Forma vs model: {_fw}</div>")
