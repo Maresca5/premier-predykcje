@@ -5142,6 +5142,121 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     except Exception:
                         pass  # wykres opcjonalny
 
+                    # ── Skuteczność per linia (expanders) ────────────────────
+                    st.markdown(
+                        "<div style='margin:16px 0 8px 0;font-size:0.78em;color:#555;"
+                        "text-transform:uppercase;letter-spacing:.07em'>"
+                        "📐 Skuteczność per linia – rozwiń kategorię</div>",
+                        unsafe_allow_html=True)
+
+                    # Grupuj rynek → typy (linie)
+                    # Wzorzec: rynek = "Gole" → typ = "Over 2.5", "Under 1.5" itp.
+                    # Grupujemy po (rynek, typ) i liczymy n/hit/yield
+                    _linia_df = _alt_df.copy()
+                    _linia_df["p_model"]   = pd.to_numeric(_linia_df["p_model"],   errors="coerce")
+                    _linia_df["fair_odds"] = pd.to_numeric(_linia_df["fair_odds"], errors="coerce")
+                    _linia_df = _linia_df.dropna(subset=["p_model", "fair_odds"])
+
+                    # Kategorie rynków do wyświetlenia (kolejność)
+                    _kat_icons = {
+                        "Gole":    "⚽", "BTTS":   "🤝",
+                        "Rożne":   "🚩", "Kartki": "🟨",
+                        "SOT":     "🎯",
+                    }
+                    _kat_kolejnosc = ["Gole", "BTTS", "Rożne", "Kartki", "SOT"]
+
+                    for _kat in _kat_kolejnosc:
+                        _kat_data = _linia_df[_linia_df["rynek"] == _kat]
+                        if _kat_data.empty:
+                            continue
+                        _kat_n    = len(_kat_data)
+                        _kat_traf = int(_kat_data["trafione"].sum())
+                        _kat_hr   = _kat_traf / _kat_n
+                        _kat_pnl  = sum(
+                            float(r["fair_odds"]) - 1 if r["trafione"] == 1 else -1
+                            for _, r in _kat_data.iterrows()
+                        )
+                        _kat_yield = _kat_pnl / _kat_n * 100
+                        _kat_yc   = "#4CAF50" if _kat_yield >= 0 else "#F44336"
+                        _kat_ico  = _kat_icons.get(_kat, "📊")
+
+                        _exp_lbl = (
+                            f"{_kat_ico} {_kat}  ·  "
+                            f"{_kat_n} typów  ·  "
+                            f"Hit {_kat_hr:.0%}  ·  "
+                            f"Yield {_kat_yield:+.1f}%"
+                        )
+                        with st.expander(_exp_lbl, expanded=False):
+                            # Per-linia tabela
+                            _linia_rows_data = []
+                            for _typ_val, _grp_t in _kat_data.groupby("typ"):
+                                _tn = len(_grp_t)
+                                if _tn < 2:
+                                    continue
+                                _tt = int(_grp_t["trafione"].sum())
+                                _th = _tt / _tn
+                                _tfo = _grp_t["fair_odds"].mean()
+                                _tbe = 1 / _tfo  # break-even
+                                _tpnl = sum(
+                                    float(r["fair_odds"]) - 1 if r["trafione"] == 1 else -1
+                                    for _, r in _grp_t.iterrows()
+                                )
+                                _tyield = _tpnl / _tn * 100
+                                _tbrier = float(
+                                    ((_grp_t["p_model"] - _grp_t["trafione"]) ** 2).mean()
+                                )
+                                _linia_rows_data.append({
+                                    "typ": _typ_val, "n": _tn,
+                                    "hit": _th, "be": _tbe,
+                                    "fo": _tfo, "yield": _tyield,
+                                    "pnl": _tpnl, "brier": _tbrier,
+                                })
+
+                            # Sortuj po Yield malejąco
+                            _linia_rows_data.sort(key=lambda x: -x["yield"])
+
+                            if not _linia_rows_data:
+                                st.caption("Za mało danych (min. 2 typy per linia).")
+                            else:
+                                _tr_html = ""
+                                for _r in _linia_rows_data:
+                                    _yc2  = "#4CAF50" if _r["yield"] >= 0 else "#F44336"
+                                    _hc2  = "#4CAF50" if _r["hit"] >= _r["be"] else "#aaa"
+                                    _best = "background:#0a1a0a;" if _r["yield"] == max(x["yield"] for x in _linia_rows_data) else ""
+                                    _pnl_sym = "▲" if _r["pnl"] >= 0 else "▼"
+                                    _tr_html += (
+                                        f"<tr style='{_best}'>"
+                                        f"<td style='padding:8px 12px;font-weight:600;color:#e5e7eb'>{_r['typ']}</td>"
+                                        f"<td style='padding:8px 10px;text-align:center;color:#6b7280'>{_r['n']}</td>"
+                                        f"<td style='padding:8px 10px;text-align:center;color:{_hc2};font-weight:700'>{_r['hit']:.0%}</td>"
+                                        f"<td style='padding:8px 10px;text-align:center;color:#4b5563;font-size:0.82em'>{_r['be']:.0%}</td>"
+                                        f"<td style='padding:8px 10px;text-align:center;color:#9ca3af'>{_r['fo']:.2f}</td>"
+                                        f"<td style='padding:8px 10px;text-align:center;color:{_yc2};font-weight:700'>{_r['yield']:+.1f}%</td>"
+                                        f"<td style='padding:8px 10px;text-align:center;color:{_yc2}'>{_pnl_sym} {abs(_r['pnl']):.1f}</td>"
+                                        f"<td style='padding:8px 10px;text-align:center;color:#374151;font-size:0.8em'>{_r['brier']:.3f}</td>"
+                                        f"</tr>"
+                                    )
+                                st.markdown(
+                                    "<div style='overflow-x:auto;border-radius:8px;"
+                                    "border:1px solid #1e2028'>"
+                                    "<table style='width:100%;border-collapse:collapse'>"
+                                    "<thead><tr style='background:#0d0f14;color:#444;"
+                                    "font-size:0.70em;text-transform:uppercase'>"
+                                    "<th style='padding:6px 12px;text-align:left'>Linia</th>"
+                                    "<th style='padding:6px 10px;text-align:center'>Typów</th>"
+                                    "<th style='padding:6px 10px;text-align:center'>Hit%</th>"
+                                    "<th style='padding:6px 10px;text-align:center'>Break-even</th>"
+                                    "<th style='padding:6px 10px;text-align:center'>Avg FO</th>"
+                                    "<th style='padding:6px 10px;text-align:center'>Yield</th>"
+                                    "<th style='padding:6px 10px;text-align:center'>PnL</th>"
+                                    f"<th style='padding:6px 10px;text-align:center'>Brier ↓</th>"
+                                    f"</tr></thead><tbody>{_tr_html}</tbody></table></div>",
+                                    unsafe_allow_html=True)
+                                st.caption(
+                                    "Tło zielone = najlepsza linia w kategorii. "
+                                    "Hit% zielony = powyżej break-even. "
+                                    "Min. 2 typy per linia.")
+
         except Exception as _e_alt:
             st.caption(f"Błąd sekcji alt rynków: {_e_alt}")
 
@@ -5699,7 +5814,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
 
                     st.markdown("#### ⚙️ Wybierz zdarzenia do kombinacji")
 
-                    # Sekcja 1: 1X2
+                    # Sekcja 1: 1X2 + gole
                     _bb_c1, _bb_c2, _bb_c3 = st.columns(3)
                     _bb_wynik = _bb_c1.selectbox("Wynik meczu", ["(brak)", "1 – Wygrana dom.", "X – Remis", "2 – Wygrana gość", "1X – Dom lub remis", "X2 – Remis lub gość"], key="_bb_wynik")
                     _bb_gole_typ = _bb_c2.selectbox("Gole (łącznie)", ["(brak)", "Over 0.5", "Over 1.5", "Over 2.5", "Over 3.5", "Under 1.5", "Under 2.5", "Under 3.5"], key="_bb_gole")
@@ -5709,20 +5824,33 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     _bb_dom_gole = _bb_c4.selectbox(f"Gole {_bb_h[:12]}", ["(brak)", "Over 0.5", "Over 1.5", "Over 2.5", "Under 0.5", "Under 1.5"], key="_bb_dom_g")
                     _bb_gos_gole = _bb_c5.selectbox(f"Gole {_bb_a[:12]}", ["(brak)", "Over 0.5", "Over 1.5", "Over 2.5", "Under 0.5", "Under 1.5"], key="_bb_gos_g")
 
+                    # Rożne i kartki – niezależne od macierzy Poissona (Poisson osobny)
+                    _bb_c6, _bb_c7 = st.columns(2)
+                    _bb_rozne = _bb_c6.selectbox("Rożne (łącznie)", ["(brak)", "Over 7.5", "Over 8.5", "Over 9.5", "Over 10.5", "Under 7.5", "Under 8.5", "Under 9.5"], key="_bb_rozne")
+                    _bb_kartki = _bb_c7.selectbox("Kartki (łącznie)", ["(brak)", "Over 1.5", "Over 2.5", "Over 3.5", "Over 4.5", "Under 1.5", "Under 2.5", "Under 3.5"], key="_bb_kartki")
+
                     # Opcjonalny kurs bukmachera
                     _bb_kurs_buk = st.number_input("Kurs bukmachera (opcjonalnie)", min_value=1.01, max_value=100.0, value=2.00, step=0.05, key="_bb_kurs", help="Wpisz kurs z Bet Buildera żeby sprawdzić wartość")
 
                     # ── Oblicz p z macierzy Poissona ─────────────────────────
-                    def _bb_p_from_matrix(macierz, condition_fn):
-                        """Sumuje p z macierzy dla wyników spełniających warunek."""
-                        return sum(p for (hg, ag), p in macierz.items() if condition_fn(hg, ag))
+                    # M jest np.ndarray gdzie M[hg][ag] = p(home=hg, away=ag)
+                    def _bb_p_from_matrix(M_arr, condition_fn):
+                        """Sumuje p z macierzy ndarray dla wyników spełniających warunek."""
+                        total = 0.0
+                        for hg in range(M_arr.shape[0]):
+                            for ag in range(M_arr.shape[1]):
+                                if condition_fn(hg, ag):
+                                    total += M_arr[hg, ag]
+                        return total
 
                     _conditions = []
                     _labels = []
+                    # Zdarzenia niezależne od macierzy (rożne, kartki) – Poisson osobny
+                    _bb_indep_ps = []  # (label, p) dla rożnych/kartek
 
                     # 1X2
                     if _bb_wynik != "(brak)":
-                        if "1X2" in _bb_wynik or _bb_wynik.startswith("1 –"):
+                        if _bb_wynik.startswith("1 –"):
                             _conditions.append(lambda hg, ag: hg > ag)
                         elif _bb_wynik.startswith("X –"):
                             _conditions.append(lambda hg, ag: hg == ag)
@@ -5772,52 +5900,81 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             _conditions.append(lambda hg, ag, l=_gg_line: ag < l)
                         _labels.append(f"{_bb_a[:10]} {_bb_gos_gole}")
 
-                    if not _conditions:
+                    # Rożne – Poisson niezależny od macierzy goli
+                    if _bb_rozne != "(brak)":
+                        _rz_over = "Over" in _bb_rozne
+                        _rz_line = float(_bb_rozne.split()[1])
+                        _rz_p = oblicz_p("Over" if _rz_over else "Under", _rz_line, _bb_lr)
+                        _bb_indep_ps.append((f"Rożne {_bb_rozne}", _rz_p))
+
+                    # Kartki – Poisson niezależny
+                    if _bb_kartki != "(brak)":
+                        _kk_over = "Over" in _bb_kartki
+                        _kk_line = float(_bb_kartki.split()[1])
+                        _kk_p = oblicz_p("Over" if _kk_over else "Under", _kk_line, _bb_lk)
+                        _bb_indep_ps.append((f"Kartki {_bb_kartki}", _kk_p))
+
+                    if not _conditions and not _bb_indep_ps:
                         st.info("Wybierz co najmniej jedno zdarzenie aby obliczyć kurs.")
                     else:
-                        # Suma p z macierzy gdzie WSZYSTKIE warunki spełnione
-                        def _all_conds(hg, ag):
-                            return all(c(hg, ag) for c in _conditions)
+                        # P z macierzy goli (zdarzenia skorelowane)
+                        if _conditions:
+                            def _all_conds(hg, ag):
+                                return all(c(hg, ag) for c in _conditions)
+                            _bb_p_matrix = _bb_p_from_matrix(_bb_macierz, _all_conds)
+                        else:
+                            _bb_p_matrix = 1.0
 
-                        _bb_p_combo = _bb_p_from_matrix(_bb_macierz, _all_conds)
-                        _bb_fair    = 1 / _bb_p_combo if _bb_p_combo > 0 else 999
+                        # P rożnych i kartek (niezależne od macierzy goli, mnożone)
+                        _bb_p_indep = 1.0
+                        for _, _pi in _bb_indep_ps:
+                            _bb_p_indep *= _pi
+
+                        # Finalne combo: macierz * niezależne
+                        _bb_p_combo = _bb_p_matrix * _bb_p_indep
+                        _bb_fair    = 1 / _bb_p_combo if _bb_p_combo > 0.001 else 999
                         _bb_ev      = _bb_p_combo * (_bb_kurs_buk - 1) - (1 - _bb_p_combo)
                         _bb_ev_c    = "#4CAF50" if _bb_ev > 0 else ("#FF9800" if _bb_ev > -0.05 else "#F44336")
-                        _bb_margin  = (_bb_kurs_buk - _bb_fair) / _bb_fair if _bb_fair > 0 else 0
 
-                        # Pokaż każde zdarzenie osobno (korelacja = sumowanie, nie mnożenie)
-                        _bb_ind_ps = []
-                        for i, (_cond, _lbl) in enumerate(zip(_conditions, _labels)):
+                        # Dla porównania: błędna metoda (wszystko mnożone niezależnie)
+                        _bb_p_ind_all = _bb_p_indep
+                        for _cond, _lbl in zip(_conditions, _labels):
+                            _bb_p_ind_all *= _bb_p_from_matrix(_bb_macierz, _cond)
+                        _bb_fair_ind = 1 / _bb_p_ind_all if _bb_p_ind_all > 0.001 else 999
+
+                        # Wszystkie zdarzenia z p dla tabeli (label, p, źródło)
+                        _bb_all_ps = []
+                        for _cond, _lbl in zip(_conditions, _labels):
                             _p_i = _bb_p_from_matrix(_bb_macierz, _cond)
-                            _bb_ind_ps.append((_lbl, _p_i))
-
-                        # Porównaj: prawidłowa (Poisson) vs błędna (niezależne)
-                        _bb_p_independent = 1.0
-                        for _, _p_i in _bb_ind_ps:
-                            _bb_p_independent *= _p_i
-                        _bb_fair_ind = 1 / _bb_p_independent if _bb_p_independent > 0 else 999
+                            _bb_all_ps.append((_lbl, _p_i, "🔗 Poisson"))
+                        for _lbl, _pi in _bb_indep_ps:
+                            _bb_all_ps.append((_lbl, _pi, "⚡ niezależne"))
 
                         st.markdown("---")
                         st.markdown("#### 📊 Wynik analizy")
 
-                        # Indywidualne zdarzenia
+                        # Tabela indywidualnych zdarzeń
                         _bb_rows = "".join([
-                            f"<tr><td style='padding:5px 8px;font-size:0.85em;color:#d1d5db'>{_lbl}</td>"
-                            f"<td style='padding:5px 8px;text-align:right;font-weight:700;color:#4CAF50'>{_pi:.1%}</td>"
-                            f"<td style='padding:5px 8px;text-align:right;color:#9ca3af'>{1/_pi:.2f}</td></tr>"
-                            for _lbl, _pi in _bb_ind_ps
+                            f"<tr>"
+                            f"<td style='padding:6px 10px;font-size:0.85em;color:#d1d5db'>{_lbl}</td>"
+                            f"<td style='padding:6px 8px;text-align:center;font-size:0.72em;color:#4b5563'>{_src}</td>"
+                            f"<td style='padding:6px 10px;text-align:right;font-weight:700;color:#4CAF50'>{_pi:.1%}</td>"
+                            f"<td style='padding:6px 10px;text-align:right;color:#9ca3af'>{1/_pi:.2f}</td>"
+                            f"</tr>"
+                            for _lbl, _pi, _src in _bb_all_ps
                         ])
                         st.markdown(
-                            f"<table style='width:100%;border-collapse:collapse;margin-bottom:8px'>"
-                            f"<thead><tr style='font-size:0.72em;color:#555;text-transform:uppercase'>"
-                            f"<th style='padding:4px 8px;text-align:left'>Zdarzenie</th>"
-                            f"<th style='padding:4px 8px;text-align:right'>P model</th>"
-                            f"<th style='padding:4px 8px;text-align:right'>Fair</th></tr></thead>"
-                            f"<tbody>{_bb_rows}</tbody></table>",
+                            "<table style='width:100%;border-collapse:collapse;margin-bottom:8px'>"
+                            "<thead><tr style='font-size:0.72em;color:#555;text-transform:uppercase;background:#0d1117'>"
+                            "<th style='padding:5px 10px;text-align:left'>Zdarzenie</th>"
+                            "<th style='padding:5px 8px;text-align:center'>Metoda</th>"
+                            "<th style='padding:5px 10px;text-align:right'>P model</th>"
+                            "<th style='padding:5px 10px;text-align:right'>Fair</th>"
+                            f"</tr></thead><tbody>{_bb_rows}</tbody></table>",
                             unsafe_allow_html=True)
 
-                        # Wynik kombinator
-                        _corr_diff = _bb_p_combo - _bb_p_independent
+                        # Wynik kombo: Poisson vs mnożone
+                        _corr_diff = _bb_p_combo - _bb_p_ind_all
                         _corr_sign = "↑ korelacja pozytywna" if _corr_diff > 0.005 else ("↓ korelacja negatywna" if _corr_diff < -0.005 else "≈ brak korelacji")
                         _corr_col  = "#4CAF50" if _corr_diff > 0.005 else ("#F44336" if _corr_diff < -0.005 else "#888")
                         st.markdown(
@@ -5831,35 +5988,42 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             f"<div style='width:1px;background:#1f2937;margin:0 10px'></div>"
                             f"<div style='text-align:center;flex:1'>"
                             f"<div style='font-size:0.70em;color:#555;margin-bottom:3px;text-transform:uppercase'>P mnożone (błędna)</div>"
-                            f"<div style='font-size:1.8em;font-weight:800;color:#6b7280'>{_bb_p_independent:.1%}</div>"
+                            f"<div style='font-size:1.8em;font-weight:800;color:#6b7280'>{_bb_p_ind_all:.1%}</div>"
                             f"<div style='font-size:0.85em;color:#6b7280'>Fair Odds: <b>{_bb_fair_ind:.2f}</b></div>"
                             f"</div></div>"
-                            f"<div style='border-top:1px solid #1f2937;padding-top:8px;display:flex;justify-content:space-between;align-items:center'>"
+                            f"<div style='border-top:1px solid #1f2937;padding-top:8px;"
+                            f"display:flex;justify-content:space-between;align-items:center'>"
                             f"<div style='font-size:0.78em;color:{_corr_col}'>"
                             f"🔗 {_corr_sign} ({_corr_diff:+.1%})</div>"
-                            f"<div style='font-size:0.78em;color:#555'>Zdarzenia: {len(_conditions)}</div>"
+                            f"<div style='font-size:0.78em;color:#555'>Zdarzeń: {len(_bb_all_ps)}</div>"
                             f"</div></div>",
                             unsafe_allow_html=True)
 
-                        # Ocena kursu bukmachera
+                        # Werdykt vs kurs buka
                         if _bb_kurs_buk > 1.05:
                             _verd_bg  = "#0d1f0d" if _bb_ev > 0 else "#1f0d0d"
                             _verd_brd = "#4CAF50" if _bb_ev > 0 else "#F44336"
                             _verd_ico = "✅ WARTOŚĆ" if _bb_ev > 0 else ("⚠️ NEUTRALNY" if _bb_ev > -0.05 else "❌ BRAK WARTOŚCI")
                             _margin_warn = ""
                             if _bb_fair > 0 and _bb_kurs_buk < _bb_fair * 0.85:
-                                _margin_warn = f"<div style='font-size:0.74em;color:#F44336;margin-top:4px'>⚠️ Kurs buka jest o {(_bb_fair - _bb_kurs_buk)/_bb_fair:.0%} poniżej Fair — marża bukmachera pochłania wartość.</div>"
+                                _margin_warn = (
+                                    f"<div style='font-size:0.74em;color:#F44336;margin-top:4px'>"
+                                    f"⚠️ Kurs buka o {(_bb_fair-_bb_kurs_buk)/_bb_fair:.0%} poniżej Fair "
+                                    f"— marża bukmachera pochłania wartość.</div>")
                             st.markdown(
                                 f"<div style='background:{_verd_bg};border:1px solid {_verd_brd};"
                                 f"border-radius:8px;padding:12px 14px;margin-top:8px'>"
-                                f"<div style='font-size:0.72em;color:#555;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px'>Werdykt</div>"
-                                f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px'>"
-                                f"<div><span style='font-size:1.3em;font-weight:800;color:{_bb_ev_c}'>{_verd_ico}</span></div>"
+                                f"<div style='font-size:0.72em;color:#555;text-transform:uppercase;"
+                                f"letter-spacing:.06em;margin-bottom:6px'>Werdykt</div>"
+                                f"<div style='display:flex;justify-content:space-between;"
+                                f"align-items:center;flex-wrap:wrap;gap:8px'>"
+                                f"<div><span style='font-size:1.3em;font-weight:800;color:{_bb_ev_c}'>"
+                                f"{_verd_ico}</span></div>"
                                 f"<div style='text-align:right;font-size:0.85em'>"
-                                f"<div>Buk: <b>{_bb_kurs_buk:.2f}</b> vs Fair: <b style='color:#4CAF50'>{_bb_fair:.2f}</b></div>"
-                                f"<div>EV: <b style='color:{_bb_ev_c}'>{_bb_ev:+.3f}</b> na jednostkę</div>"
-                                f"</div></div>"
-                                f"{_margin_warn}</div>",
+                                f"<div>Buk: <b>{_bb_kurs_buk:.2f}</b> vs Fair: "
+                                f"<b style='color:#4CAF50'>{_bb_fair:.2f}</b></div>"
+                                f"<div>EV: <b style='color:{_bb_ev_c}'>{_bb_ev:+.3f}</b> na jedn.</div>"
+                                f"</div></div>{_margin_warn}</div>",
                                 unsafe_allow_html=True)
             else:
                 st.warning("Brak danych modelu.")
