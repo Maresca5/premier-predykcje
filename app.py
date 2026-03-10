@@ -2663,6 +2663,126 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
             except Exception:
                 pass
 
+    # 📲 Telegram: zbiorczy poranny digest ze WSZYSTKICH lig (raz dziennie, 8-10 rano)
+    # Działa niezależnie od aktywnej ligi — ładuje dane każdej ligi osobno
+    if _TG_OK and _tg.should_send_morning("_all_ligi_"):
+        _tg_all_key = f"_tg_all_digest_{datetime.now().strftime('%Y%m%d')}"
+        if not st.session_state.get(_tg_all_key):
+            try:
+                _tg_all_vbs = {}   # liga → lista value betów
+                _tg_all_errs = []
+
+                for _tg_lig in LIGI.keys():
+                    try:
+                        _tg_h_lig = load_historical(LIGI[_tg_lig]["csv_code"])
+                        _tg_s_lig = load_schedule(LIGI[_tg_lig]["fd_org_id"],
+                                                   LIGI[_tg_lig]["file"])
+                        if _tg_h_lig.empty or _tg_s_lig.empty:
+                            continue
+                        # Oblicz statystyki i rho dla tej ligi
+                        _tg_sr_lig  = oblicz_wszystkie_statystyki(_tg_h_lig.to_json())
+                        _tg_srl_avg = oblicz_srednie_ligowe(_tg_h_lig.to_json())
+                        if _tg_sr_lig is None or _tg_sr_lig.empty:
+                            continue
+                        _tg_rho_lig = float(_tg_srl_avg.get("rho", -0.13))
+                        _tg_fd_lig  = {}  # brak formy – uproszczony digest
+                        _tg_kol_lig = get_current_round(_tg_s_lig)
+                        _tg_mecze_lig = _tg_s_lig[_tg_s_lig["round"] == _tg_kol_lig]
+                        _tg_lig_vbs = []
+
+                        for _, _tg_m in _tg_mecze_lig.iterrows():
+                            try:
+                                _th2 = map_nazwa(_tg_m["home_team"])
+                                _ta2 = map_nazwa(_tg_m["away_team"])
+                                if _th2 not in _tg_sr_lig.index or _ta2 not in _tg_sr_lig.index:
+                                    continue
+                                _lh2, _la2, *_ = oblicz_lambdy(
+                                    _th2, _ta2, _tg_sr_lig, _tg_srl_avg, _tg_fd_lig,
+                                    csv_code=LIGI[_tg_lig]["csv_code"])
+                                _pr2 = predykcja_meczu(
+                                    _lh2, _la2, rho=_tg_rho_lig,
+                                    csv_code=LIGI[_tg_lig]["csv_code"])
+                                # Kursy live jeśli dostępne
+                                if _OA_OK and _oa_key and _oa_cached:
+                                    _tg_o2 = _oa.znajdz_kursy(_th2, _ta2, _oa_cached)
+                                    if _tg_o2:
+                                        _kdc2, _ = _kurs_dc_live(
+                                            _pr2["typ"], _tg_o2["odds_h"],
+                                            _tg_o2["odds_d"], _tg_o2["odds_a"])
+                                        if _kdc2:
+                                            _ev2 = (_pr2["p_typ"] * (_kdc2 - 1)
+                                                    - (1 - _pr2["p_typ"]))
+                                            _br2 = st.session_state.get(
+                                                "bankroll_per_liga", {}
+                                            ).get(_tg_lig, 1000.0)
+                                            _kel2 = kelly_stake(
+                                                _pr2["p_typ"], _kdc2, bankroll=_br2)
+                                            if _ev2 >= _tg.MIN_EV_DIGEST:
+                                                _tg_lig_vbs.append({
+                                                    "home": _th2, "away": _ta2,
+                                                    "liga": _tg_lig,
+                                                    "typ":  _pr2["typ"],
+                                                    "kurs": _kdc2,
+                                                    "p_model": _pr2["p_typ"],
+                                                    "ev":   _ev2,
+                                                    "stake_pln": _kel2.get("stake_pln", 0),
+                                                })
+                            except Exception:
+                                continue
+
+                        if _tg_lig_vbs:
+                            _tg_all_vbs[_tg_lig] = _tg_lig_vbs
+                    except Exception:
+                        _tg_all_errs.append(_tg_lig)
+                        continue
+
+                # Wyślij jedną zbiorczą wiadomość ze wszystkich lig
+                _total_vbs = sum(len(v) for v in _tg_all_vbs.values())
+                _now_s = datetime.now().strftime("%d.%m.%Y %H:%M")
+                if _total_vbs == 0:
+                    _digest_txt = (
+                        f"☀️ <b>Poranny raport</b> · {_now_s}\n\n"
+                        f"Brak value betów (EV ≥ {_tg.MIN_EV_DIGEST:.0%}) "
+                        f"we wszystkich ligach.\n"
+                        f"<i>Sprawdź po odświeżeniu kursów.</i>")
+                else:
+                    _digest_parts = [
+                        f"☀️ <b>Poranny raport – wszystkie ligi</b> · {_now_s}\n"]
+                    for _tg_lig2, _vbs_l in sorted(
+                            _tg_all_vbs.items(),
+                            key=lambda x: -max(b["ev"] for b in x[1])):
+                        _flag2  = _tg._LIGA_EMOJI.get(_tg_lig2, "⚽")
+                        _kol2   = get_current_round(
+                            _tg_s_lig  # przybliżone – użyjemy już załadowanego
+                            if _tg_lig2 == _tg_lig  # ostatnia iteracja pętli
+                            else load_schedule(
+                                LIGI[_tg_lig2]["fd_org_id"],
+                                LIGI[_tg_lig2]["file"]))
+                        _digest_parts.append(
+                            f"\n{_flag2} <b>{_tg_lig2}</b> · kolejka {_kol2}")
+                        for _vb in sorted(_vbs_l, key=lambda x: -x["ev"])[:3]:
+                            _ev_ico = "🟢" if _vb["ev"] >= 0.15 else "🟡"
+                            _digest_parts.append(
+                                f"{_ev_ico} <b>{_vb['home']} vs {_vb['away']}</b>\n"
+                                f"   {_vb['typ']} @ {_vb['kurs']:.2f} · "
+                                f"EV <b>{_vb['ev']:+.1%}</b> · {_vb['stake_pln']:.0f} zł")
+                    _digest_parts.append(
+                        f"\n<i>Łącznie: {_total_vbs} value bet"
+                        f"{'ów' if _total_vbs != 1 else ''} · "
+                        f"Dixon-Coles · Kelly 1/8</i>")
+                    _digest_txt = "\n".join(_digest_parts)
+
+                _ok_all = _tg.send_message(_digest_txt)
+                if _ok_all:
+                    st.session_state[_tg_all_key] = True
+                    for _tg_lig3 in LIGI.keys():
+                        _tg._mark_digest_sent(_tg_lig3)
+                    st.toast(
+                        f"📲 Poranny digest wysłany · {_total_vbs} value betów",
+                        icon="☀️")
+            except Exception:
+                pass
+
     elif not _OA_OK:
         st.caption("ℹ️ Plik `odds_api.py` nie znaleziony.")
 
@@ -2717,43 +2837,39 @@ if _TG_OK:
                 f"Alert EV≥{_tg.MIN_EV_ALERT:.0%} · Digest EV≥{_tg.MIN_EV_DIGEST:.0%}")
 
 
-    # ── Bankroll per liga ──────────────────────────────────────────────────
-    # Każda liga ma osobny bankroll – przechowywany w session_state["bankroll_per_liga"]
-    if "bankroll_per_liga" not in st.session_state:
-        st.session_state["bankroll_per_liga"] = {
-            "Premier League": 1000.0,
-            "La Liga":        1000.0,
-            "Bundesliga":     1000.0,
-            "Serie A":        1000.0,
-            "Ligue 1":        1000.0,
-        }
-    _br_per_liga = st.session_state["bankroll_per_liga"]
+# ── Bankroll & Kelly ────────────────────────────────────────────────────────
+if "bankroll_per_liga" not in st.session_state:
+    st.session_state["bankroll_per_liga"] = {l: 1000.0 for l in LIGI.keys()}
+_br_per_liga = st.session_state["bankroll_per_liga"]
 
+# Zawsze oblicz _br_input przed expander (potrzebny niżej do caption)
+_br_input = _br_per_liga.get(wybrana_liga, 1000.0) if st.session_state.get("_br_mode_toggle") else float(st.session_state.get("bankroll", 1000.0))
+
+with st.sidebar.expander("💼 Kelly & Bankroll", expanded=False):
     _br_mode = st.toggle("💡 Osobny bankroll per liga", value=False, key="_br_mode_toggle")
     if _br_mode:
         st.markdown(
             "<div style='font-size:0.74em;color:#555;margin-bottom:6px'>"
-            "Ustaw bankroll oddzielnie dla każdej ligi:</div>",
+            "Bankroll oddzielnie dla każdej ligi:</div>",
             unsafe_allow_html=True)
         for _br_liga in list(LIGI.keys()):
             _br_per_liga[_br_liga] = st.number_input(
-                f"{_br_liga[:10]}",
+                f"{_br_liga[:12]}",
                 min_value=10.0, max_value=1_000_000.0,
                 value=float(_br_per_liga.get(_br_liga, 1000.0)),
                 step=100.0, key=f"_br_{_br_liga[:6]}",
                 help=f"Bankroll dla {_br_liga}")
         st.session_state["bankroll_per_liga"] = _br_per_liga
-        # Aktywna liga
         _br_input = _br_per_liga.get(wybrana_liga, 1000.0)
         st.session_state["bankroll"] = _br_input
-        st.caption(f"Aktywna liga: **{_br_input:.0f} zł**")
+        st.caption(f"Aktywna ({wybrana_liga[:12]}): **{_br_input:.0f} zł**")
     else:
         _br_input = st.number_input(
             "Bankroll (zł)", min_value=10.0, max_value=1_000_000.0,
             value=float(st.session_state.get("bankroll", 1000.0)),
-            step=100.0, key="_br_widget", help="Kwota do obliczeń Kelly – wspólna dla wszystkich lig")
+            step=100.0, key="_br_widget",
+            help="Kwota do obliczeń Kelly – wspólna dla wszystkich lig")
         st.session_state["bankroll"] = _br_input
-        # Ustaw ten sam bankroll dla wszystkich lig
         for _lk in LIGI.keys():
             _br_per_liga[_lk] = _br_input
         st.session_state["bankroll_per_liga"] = _br_per_liga
@@ -6531,10 +6647,12 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _lr_html_rows = []
             for _lr in _lig_rows:
                 _bar_w = int(_lr["hr"] * 100)
-                _lr_flag = _LIGA_FLAGS.get(_lr["liga"], "🌍")
+                _lr_logo_cell = _liga_img(_lr["liga"], size="20px",
+                                          style="margin-right:7px;vertical-align:middle")
                 _lr_html_rows.append(
                     f"<tr>"
-                    f"<td style='padding:8px 12px;font-weight:600;font-size:0.9em'>{_lr_flag} {_lr['liga']}</td>"
+                    f"<td style='padding:8px 12px;font-weight:600;font-size:0.9em'>"
+                    f"{_lr_logo_cell}{_lr['liga']}</td>"
                     f"<td style='padding:8px 10px;text-align:center;color:#888'>{_lr['n']}</td>"
                     f"<td style='padding:8px 10px;width:140px'>"
                     f"<div style='display:flex;align-items:center;gap:6px'>"
@@ -6708,8 +6826,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     _bkc="#4CAF50" if _ld["bk"]>=_ML_KS else "#F44336"
                     _roic="#4CAF50" if _ld["roi"]>=0 else "#F44336"
                     _icon="OK" if _ld["bk"]>=_ML_KS else "DD"
+                    _ml_logo_img = _liga_img(_lname, size="18px", style="margin-right:6px;vertical-align:middle")
                     _ml_rows.append(
-                        f"<tr><td style='padding:10px 12px'><span style='color:{_lc};font-weight:700'>{_icon} {_lname}</span></td>"
+                        f"<tr><td style='padding:10px 12px'>"
+                        f"{_ml_logo_img}<span style='color:{_lc};font-weight:700'>{_icon} {_lname}</span></td>"
                         f"<td style='padding:10px 12px;text-align:center'><span style='font-size:1.05em;font-weight:800;color:{_bkc}'>{_ld['bk']:.0f} zl</span></td>"
                         f"<td style='padding:10px 10px;text-align:center'><span style='color:{_roic};font-weight:700'>{_pnl:+.0f} zl ({_ld['roi']:+.1f}%)</span></td>"
                         f"<td style='padding:10px 10px;text-align:center;color:#aaa;font-size:0.85em'>{_ld['n']} - {_ld['hr']:.0%}</td>"
