@@ -753,19 +753,6 @@ def _is_matchday() -> bool:
             continue
     return False
 
-def maybe_send_morning_digest(token: str, chat_id: str):
-    """Wysyła poranny digest o DIGEST_HOUR tylko w dzień meczu, raz dziennie."""
-    now = datetime.now()
-    if now.hour != DIGEST_HOUR:
-        return
-    if _digest_sent_today():
-        return
-    if not _is_matchday():
-        return
-    bets = compute_value_bets()
-    _mark_digest_sent()
-    _send_long(token, chat_id, _format_value_message(bets, title="☀️ Poranny Digest — dzień meczu"))
-
 
 def handle_value(token: str, chat_id: str):
     """Odpowiedź na /value — value bety z bieżącej kolejki wszystkich lig."""
@@ -858,16 +845,21 @@ def handle_debug(token: str, chat_id: str):
     send_message(token, chat_id, "\n".join(lines))
 
 
+def handle_help(token: str, chat_id: str):
     send_message(token, chat_id,
         "🤖 <b>Komendy bota predykcji</b>\n\n"
-        "/value  – value bety z 5 lig (p≥58%)\n"
+        "/value  – value bety z 5 lig (p≥55%)\n"
         "/status – hit rate i ROI per liga\n"
+        "/debug  – diagnostyka danych i kluczy API\n"
         "/help   – ta wiadomość\n\n"
-        "<i>Bot działa w tle – odpowiada w ciągu 30 sekund od wysłania komendy.</i>")
+        "<i>Bot działa w tle — odpowiada w ciągu 15s.\n"
+        "Poranny digest wysyłany automatycznie o 9:00 w dzień meczu.</i>")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GŁÓWNA PĘTLA BOTA
 # ─────────────────────────────────────────────────────────────────────────────
+_digest_sent_in_memory: set = set()  # dodatkowy guard w pamięci (szybszy niż SQLite)
+
 def _bot_loop():
     log.info("Bot runner started — polling every %ds", POLL_INTERVAL)
     while True:
@@ -882,10 +874,12 @@ def _bot_loop():
 
             for upd in updates:
                 uid = upd["update_id"]
+                # KLUCZOWE: ustaw offset PRZED przetworzeniem — jeśli handle_value
+                # trwa 10s i pętla wykona się ponownie, nie przetworzy tej samej wiadomości
                 _set_offset(uid + 1)
 
-                msg  = upd.get("message", {})
-                text = msg.get("text", "").strip()
+                msg     = upd.get("message", {})
+                text    = msg.get("text", "").strip()
                 from_id = str(msg.get("chat", {}).get("id", ""))
 
                 if from_id != chat_id:
@@ -903,13 +897,26 @@ def _bot_loop():
                 elif cmd == "/help":
                     handle_help(token, chat_id)
 
-            # Poranny digest — raz dziennie o DIGEST_HOUR w dzień meczu
-            maybe_send_morning_digest(token, chat_id)
+            # Poranny digest — sprawdzaj tylko raz na minutę (co 4 iteracje po 15s)
+            # i z podwójnym guardem: pamięć + SQLite
+            now = datetime.now()
+            today_key = now.strftime("%Y-%m-%d")
+            if (now.hour == DIGEST_HOUR
+                    and today_key not in _digest_sent_in_memory
+                    and not _digest_sent_today()):
+                _digest_sent_in_memory.add(today_key)  # zablokuj natychmiast w pamięci
+                _mark_digest_sent()                     # zapisz do SQLite
+                if _is_matchday():
+                    bets = compute_value_bets()
+                    _send_long(token, chat_id,
+                               _format_value_message(bets, title="☀️ Poranny Digest — dzień meczu"))
+                    log.info("Morning digest sent")
 
         except Exception as e:
             log.error(f"Bot loop error: {e}")
 
         time.sleep(POLL_INTERVAL)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PUBLIC API
