@@ -3281,45 +3281,55 @@ if not historical.empty:
                 # Funkcja obliczająca value bety ze WSZYSTKICH lig
                 def _tg_compute_all_vbs():
                     _all = []
+                    _debug = []  # zbierz info diagnostyczne per liga
                     for _tgl in LIGI.keys():
                         try:
-                            # KLUCZOWE: używamy bot-safe loaderów bez @st.cache_data
                             _hl = _bot_load_historical(LIGI[_tgl]["csv_code"])
+                            if _hl.empty:
+                                _debug.append(f"  {_tgl}: ❌ brak CSV historii")
+                                continue
                             _sl = _bot_load_schedule(LIGI[_tgl]["fd_org_id"], LIGI[_tgl]["file"])
-                            if _hl.empty or _sl.empty: continue
-                            # Wywołaj _impl bezpośrednio — omija @st.cache_data (nie działa poza renderowaniem)
+                            if _sl.empty:
+                                _debug.append(f"  {_tgl}: ❌ brak terminarza")
+                                continue
                             _hl_json = _hl.to_json()
                             _srl = _oblicz_statystyki_impl(_hl_json)
                             _avg = _oblicz_srednie_impl(_hl_json)
-                            if _srl is None or _srl.empty: continue
+                            if _srl is None or _srl.empty:
+                                _debug.append(f"  {_tgl}: ❌ brak statystyk")
+                                continue
                             _rho_l = float(_avg.get("rho", -0.13))
-                            # Szukaj bieżącej i następnej kolejki
                             _kol_l = get_current_round(_sl)
                             _mecze_l = _sl[_sl["round"].isin([_kol_l, _kol_l + 1])]
                             _srl_idx = list(_srl.index)
+                            _n_przed = len(_all)
+                            _n_mecze = len(_mecze_l)
+                            _n_skip_name = 0
+                            _n_skip_prog = 0
                             for _, _m in _mecze_l.iterrows():
                                 try:
                                     _h_raw = map_nazwa(_m["home_team"])
                                     _a_raw = map_nazwa(_m["away_team"])
-                                    # Fuzzy match nazw drużyn do indeksu statystyk
                                     _h = _h_raw if _h_raw in _srl_idx else next(
                                         (x for x in _srl_idx if x.lower() in _h_raw.lower()
                                          or _h_raw.lower() in x.lower()), None)
                                     _a = _a_raw if _a_raw in _srl_idx else next(
                                         (x for x in _srl_idx if x.lower() in _a_raw.lower()
                                          or _a_raw.lower() in x.lower()), None)
-                                    if not _h or not _a: continue
+                                    if not _h or not _a:
+                                        _n_skip_name += 1
+                                        continue
                                     _lh, _la, *_ = oblicz_lambdy(_h, _a, _srl, _avg, {},
                                         csv_code=LIGI[_tgl]["csv_code"])
                                     _pr = predykcja_meczu(_lh, _la, rho=_rho_l,
                                         csv_code=LIGI[_tgl]["csv_code"])
                                     _p   = _pr.get("p_typ", 0)
-                                    _fo  = _pr.get("fo_typ", 0)  # fair odds = 1/p
-                                    if not _fo or _fo < 1.01 or _p < 0.58: continue  # próg jak na stronie
-                                    # EV z fair odds (brak live API)
+                                    _fo  = _pr.get("fo_typ", 0)
+                                    if not _fo or _fo < 1.01 or _p < 0.58:
+                                        _n_skip_prog += 1
+                                        continue
                                     _kurs = _fo
-                                    _ev   = round(_p * _fo - 1.0, 3)  # identycznie jak _ev() na stronie
-                                    # Nadpisz live kursem bukmachera jeśli dostępny
+                                    _ev   = round(_p * _fo - 1.0, 3)
                                     if _OA_OK and _oa_key and _oa_cached:
                                         try:
                                             _o = _oa.znajdz_kursy(_h, _a, _oa_cached)
@@ -3347,7 +3357,17 @@ if not historical.empty:
                                         "live_odds": _OA_OK and _oa_key and bool(_oa_cached),
                                     })
                                 except Exception: continue
-                        except Exception: continue
+                            _n_added = len(_all) - _n_przed
+                            _debug.append(
+                                f"  {_tgl}: ✅ kol#{_kol_l} · {_n_mecze}m · "
+                                f"+{_n_added}typ · skip_nazwy={_n_skip_name} skip_prog={_n_skip_prog}")
+                        except Exception as _exc:
+                            _debug.append(f"  {_tgl}: 💥 {type(_exc).__name__}: {str(_exc)[:60]}")
+                            continue
+                    # Zapisz debug do session_state (widoczny w UI)
+                    try:
+                        st.session_state["_tg_debug_last"] = "\n".join(_debug)
+                    except Exception: pass
                     return _all
 
                 # Funkcja statystyk per liga
