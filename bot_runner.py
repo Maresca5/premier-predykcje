@@ -41,12 +41,16 @@ logging.basicConfig(
 log = logging.getLogger("bot_runner")
 
 # ── Singleton guard ───────────────────────────────────────────────────────────
+# Używamy pliku-locka zamiast zmiennej w pamięci.
+# Streamlit może tworzyć nowe procesy/wątki przy rerunach — zmienna modułu
+# nie jest wystarczającym guardem jeśli moduł jest importowany wielokrotnie.
 _BOT_STARTED = False
 _BOT_LOCK    = threading.Lock()
+_BOT_LOCKFILE = "/tmp/zipybets_bot.lock"
 
 # Klucze API — wstrzykiwane przez start() z kontekstu Streamlit
-_TG_TOKEN  = None
-_TG_CHAT   = None
+_TG_TOKEN   = None
+_TG_CHAT    = None
 _FD_API_KEY = None
 
 # ── Konfiguracja (skopiowana z app.py, bez importowania Streamlit) ────────────
@@ -645,58 +649,73 @@ def compute_value_bets() -> list:
     return sorted(all_bets, key=lambda x: -x["p_model"])
 
 # ─────────────────────────────────────────────────────────────────────────────
-# OBSŁUGA KOMEND TELEGRAM
+# FORMATOWANIE WIADOMOŚCI
 # ─────────────────────────────────────────────────────────────────────────────
-def _format_value_message(bets: list, title: str = "💰 Value Bets") -> str:
-    """Formatuje listę betów do czytelnej wiadomości Telegram."""
+def _format_value_message(bets: list, title: str = "💰 Value Bets",
+                           app_url: str = "https://zipybets.streamlit.app") -> str:
     if not bets:
-        return (
-            "🔍 <b>Brak typów</b> spełniających kryteria (p≥55%)\n"
-            "Sprawdź ponownie po zaplanowaniu kolejki.")
+        return "🔍 <b>Brak typów</b> spełniających kryteria (p≥55%) w bieżącej kolejce."
 
     by_liga = defaultdict(list)
     for b in bets:
         by_liga[b["liga"]].append(b)
 
     now = datetime.now().strftime("%d.%m.%Y  %H:%M")
-    TYP_ICON  = {"1": "🏠", "X": "🤝", "2": "✈️", "1X": "🏠🤝", "X2": "🤝✈️"}
-    CONF_ICON = lambda p: "🟢" if p >= 0.70 else ("🟡" if p >= 0.62 else "🔵")
-    CONF_BAR  = lambda p: "▓▓▓" if p >= 0.70 else ("▓▓░" if p >= 0.62 else "▓░░")
+    TYP_ICON = {"1": "🏠", "X": "🤝", "2": "✈️", "1X": "🏠🤝", "X2": "🤝✈️"}
+
+    def conf_dots(p):
+        return "●●●" if p >= 0.72 else ("●●○" if p >= 0.63 else "●○○")
+
+    def ev_tag(ev):
+        return "🔥" if ev >= 0.12 else ("📈" if ev >= 0.06 else "➕")
 
     lines = [
-        f"╔══ {title} ══╗",
-        f"🕐 {now}  │  {len(bets)} typów z {len(by_liga)} lig",
-        f"╚{'═'*28}╝",
+        f"<b>{title}</b>",
+        f"🕐 {now}  ·  {len(bets)} typów z {len(by_liga)} lig",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
     ]
 
+    # TOP 3 — najwyższe EV
+    top3 = sorted(bets, key=lambda x: -x.get("ev", 0))[:3]
+    if top3:
+        lines.append("\n🏆 <b>TOP 3 OKAZJE KOLEJKI</b>")
+        for i, b in enumerate(top3, 1):
+            flag = LIGA_EMOJI.get(b["liga"], "⚽")
+            ti   = TYP_ICON.get(b["typ"], "⚽")
+            ev_p = b.get("ev", 0)
+            lines.append(
+                f"  {i}. {flag} <b>{b['home']} – {b['away']}</b>"
+                f"\n     {ti} <b>{b['typ']}</b>  ·  p=<b>{b['p_model']:.0%}</b>"
+                f"  ·  {ev_tag(ev_p)} EV: <b>{ev_p:+.1%}</b>"
+            )
+        lines.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    # Per liga
     for liga, lb in by_liga.items():
-        flag     = LIGA_EMOJI.get(liga, "⚽")
-        lb_sorted = sorted(lb, key=lambda x: -x["p_model"])[:5]
-        kol_nr   = lb_sorted[0]["kolejka"]
-        lines.append(f"\n{flag}  <b>{liga}</b>  ·  kolejka {kol_nr}")
-        lines.append(f"{'╌'*30}")
+        flag      = LIGA_EMOJI.get(liga, "⚽")
+        lb_sorted = sorted(lb, key=lambda x: -x.get("ev", 0))[:5]
+        kol_nr    = lb_sorted[0]["kolejka"]
+        lines.append(f"\n{flag}  <b>{liga}</b>  ·  kol. {kol_nr}")
 
         for b in lb_sorted:
-            ci  = CONF_ICON(b["p_model"])
-            bar = CONF_BAR(b["p_model"])
-            typ_icon = TYP_ICON.get(b["typ"], "⚽")
+            ti       = TYP_ICON.get(b["typ"], "⚽")
+            ev_p     = b.get("ev", 0)
             data_fmt = b["data"][5:].replace("-", ".") if b.get("data") else "?"
-            kelly_str = f"  🏦 <b>{b['stake']:.0f} zł</b>" if b.get("stake", 0) > 5 else ""
+            kelly_str = f"  💰 Kelly: <b>{b['stake']:.0f} zł</b>" if b.get("stake", 0) > 5 else ""
             lines.append(
-                f"\n  ⚽ <b>{b['home']}</b> – <b>{b['away']}</b>  📅 {data_fmt}"
-                f"\n  {typ_icon} Typ: <b>{b['typ']}</b>  {ci} {bar} <b>{b['p_model']:.0%}</b>"
-                f"\n  💵 Kurs: <b>{b['kurs']:.2f}</b>{kelly_str}"
+                f"\n⚽ <b>{b['home']} – {b['away']}</b>  📅 {data_fmt}"
+                f"\n   {ti} <b>{b['typ']}</b>  ·  {conf_dots(b['p_model'])} <b>{b['p_model']:.0%}</b>"
+                f"\n   💵 Kurs fair: <b>{b['kurs']:.2f}</b>  ·  {ev_tag(ev_p)} EV: <b>{ev_p:+.1%}</b>{kelly_str}"
             )
-
         lines.append("")
 
-    lines.append(f"{'─'*30}")
-    lines.append(f"<i>Kurs = fair odds modelu (1/p), bez marży buka</i>")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"<i>EV = (p × kurs) − 1, kurs = fair odds modelu</i>")
+    lines.append(f"🌐 <a href='{app_url}'>Otwórz aplikację</a>")
     return "\n".join(lines)
 
 
 def _send_long(token: str, chat_id: str, text: str):
-    """Wysyła wiadomość, dzieląc na części jeśli >4000 znaków."""
     if len(text) <= 4000:
         send_message(token, chat_id, text)
         return
@@ -713,51 +732,13 @@ def _send_long(token: str, chat_id: str, text: str):
         send_message(token, chat_id, prefix + chunk)
 
 
-# ── Poranny digest (raz dziennie) ─────────────────────────────────────────────
-def _digest_sent_today() -> bool:
-    """Sprawdza czy digest był już wysłany dziś."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    try:
-        con = sqlite3.connect(TG_DB_FILE)
-        con.execute(f"CREATE TABLE IF NOT EXISTS {DIGEST_DB_TABLE} (date TEXT PRIMARY KEY)")
-        row = con.execute(f"SELECT date FROM {DIGEST_DB_TABLE} WHERE date=?", (today,)).fetchone()
-        con.close()
-        return row is not None
-    except Exception:
-        return False
-
-def _mark_digest_sent():
-    today = datetime.now().strftime("%Y-%m-%d")
-    try:
-        con = sqlite3.connect(TG_DB_FILE)
-        con.execute(f"CREATE TABLE IF NOT EXISTS {DIGEST_DB_TABLE} (date TEXT PRIMARY KEY)")
-        con.execute(f"INSERT OR REPLACE INTO {DIGEST_DB_TABLE} (date) VALUES (?)", (today,))
-        con.commit()
-        con.close()
-    except Exception:
-        pass
-
-def _is_matchday() -> bool:
-    """Sprawdza czy dziś jest dzień meczu w którejkolwiek lidze (bieżąca kolejka)."""
-    today = datetime.now().date()
-    for cfg in LIGI.values():
-        try:
-            sl = load_schedule(cfg["fd_org_id"])
-            if sl.empty:
-                continue
-            kol   = get_current_round(sl)
-            mecze = sl[sl["round"] == kol]
-            if mecze["date"].dt.date.eq(today).any():
-                return True
-        except Exception:
-            continue
-    return False
-
-
+# ─────────────────────────────────────────────────────────────────────────────
+# OBSŁUGA KOMEND TELEGRAM
+# ─────────────────────────────────────────────────────────────────────────────
 def handle_value(token: str, chat_id: str):
-    """Odpowiedź na /value — value bety z bieżącej kolejki wszystkich lig."""
     bets = compute_value_bets()
     _send_long(token, chat_id, _format_value_message(bets, title="💰 Value Bets — na żądanie"))
+
 
 def handle_status(token: str, chat_id: str):
     try:
@@ -779,89 +760,106 @@ def handle_status(token: str, chat_id: str):
                               f"   {hr_c} Hit: {hr:.1%} · {roi_c} ROI: {roi:+.1f}% · {n} typów")
         con.close()
         send_message(token, chat_id, "\n".join(lines) if len(lines) > 1
-                     else "📭 Brak danych w bazie – zacznij typować w aplikacji.")
+                     else "📭 Brak danych w bazie.")
     except Exception as e:
         send_message(token, chat_id, f"❌ Błąd bazy: {e}")
 
+
 def handle_debug(token: str, chat_id: str):
-    """Diagnostyka krok po kroku — co działa, co nie."""
-    lines = [f"🔧 <b>Debug bot_runner</b> · {datetime.now().strftime('%d.%m %H:%M:%S')}\n"]
-
-    # 1. Klucze API
-    lines.append(f"<b>Klucze:</b>")
-    lines.append(f"  TG token: {'✅ ok' if _TG_TOKEN else '❌ brak'}")
-    lines.append(f"  TG chat:  {'✅ ' + str(_TG_CHAT) if _TG_CHAT else '❌ brak'}")
-    lines.append(f"  FD key:   {'✅ ok' if _FD_API_KEY else '❌ brak'}")
-    lines.append(f"  Sezon:    {BIEZACY_SEZON}\n")
-
-    # 2. Per liga — dane
-    lines.append(f"<b>Dane per liga:</b>")
+    lines = [f"🔧 <b>Debug</b> · {datetime.now().strftime('%d.%m %H:%M:%S')}\n"]
+    lines.append(f"TG: {'✅' if _TG_TOKEN else '❌'}  FD: {'✅' if _FD_API_KEY else '❌'}  Sezon: {BIEZACY_SEZON}\n")
     for liga_name, cfg in LIGI.items():
         flag = LIGA_EMOJI.get(liga_name, "⚽")
         try:
             hl = load_historical(cfg["csv_code"])
             sl = load_schedule(cfg["fd_org_id"])
-            if hl.empty and sl.empty:
-                lines.append(f"  {flag} {liga_name}: ❌ brak CSV i terminarza")
-                continue
-            if hl.empty:
-                lines.append(f"  {flag} {liga_name}: ❌ brak CSV historii")
-                continue
-            if sl.empty:
-                lines.append(f"  {flag} {liga_name}: ❌ brak terminarza")
+            if hl.empty or sl.empty:
+                lines.append(f"{flag} {liga_name}: ❌ hl={'ok' if not hl.empty else 'brak'} sl={'ok' if not sl.empty else 'brak'}")
                 continue
             srl = oblicz_statystyki(hl)
             avg = oblicz_srednie(hl)
             kol = get_current_round(sl)
-            mecze = sl[sl["round"].isin([kol, kol + 1])]
+            mecze = sl[sl["round"] == kol]
             idx = list(srl.index)
-            # Policz ile meczów ma dopasowane nazwy
-            n_ok = 0
-            for _, m in mecze.iterrows():
-                h_raw = map_nazwa(m["home_team"])
-                a_raw = map_nazwa(m["away_team"])
-                h = h_raw if h_raw in idx else next(
-                    (x for x in idx if x.lower() in h_raw.lower() or h_raw.lower() in x.lower()), None)
-                a = a_raw if a_raw in idx else next(
-                    (x for x in idx if x.lower() in a_raw.lower() or a_raw.lower() in x.lower()), None)
-                if h and a:
-                    n_ok += 1
+            n_ok = sum(1 for _, m in mecze.iterrows()
+                       if (map_nazwa(m["home_team"]) in idx or
+                           any(x.lower() in map_nazwa(m["home_team"]).lower() for x in idx)))
             lines.append(
-                f"  {flag} {liga_name}: ✅ CSV={len(hl)}m · sched={len(sl)}m · "
-                f"kol#{kol} · {len(mecze)} meczów · {n_ok} dopasowanych · "
-                f"stat={len(srl)} drużyn · rho={avg.get('rho', 0):.3f}")
+                f"{flag} {liga_name}: ✅ kol#{kol} · {len(mecze)}m · "
+                f"{n_ok} dopas. · {len(srl)} drużyn")
         except Exception as e:
-            lines.append(f"  {flag} {liga_name}: 💥 {type(e).__name__}: {str(e)[:60]}")
-
-    # 3. Test predykcji dla jednego meczu
-    lines.append(f"\n<b>Test predykcji (lam_h=1.8, lam_a=1.0, E0):</b>")
+            lines.append(f"{flag} {liga_name}: 💥 {type(e).__name__}: {str(e)[:50]}")
     try:
         pr = predykcja(1.8, 1.0, rho=-0.13, csv_code="E0", n_train=150)
-        lines.append(f"  typ={pr['typ']} p={pr['p_typ']:.3f} fo={pr['fo_typ']:.2f}")
-        lines.append(f"  >= PROG_PEWNY({PROG_PEWNY})? {pr['p_typ'] >= PROG_PEWNY}")
+        lines.append(f"\nTest predykcji: typ={pr['typ']} p={pr['p_typ']:.3f} ≥{PROG_PEWNY}? {pr['p_typ']>=PROG_PEWNY}")
     except Exception as e:
-        lines.append(f"  💥 {e}")
-
+        lines.append(f"\nTest predykcji: 💥 {e}")
     send_message(token, chat_id, "\n".join(lines))
 
 
 def handle_help(token: str, chat_id: str):
     send_message(token, chat_id,
-        "🤖 <b>Komendy bota predykcji</b>\n\n"
-        "/value  – value bety z 5 lig (p≥55%)\n"
+        "🤖 <b>Komendy bota</b>\n\n"
+        "/value  – value bety z bieżącej kolejki\n"
         "/status – hit rate i ROI per liga\n"
         "/debug  – diagnostyka danych i kluczy API\n"
         "/help   – ta wiadomość\n\n"
-        "<i>Bot działa w tle — odpowiada w ciągu 15s.\n"
-        "Poranny digest wysyłany automatycznie o 9:00 w dzień meczu.</i>")
+        "<i>Poranny digest wysyłany automatycznie o 9:00 w dzień meczu.</i>")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GŁÓWNA PĘTLA BOTA
+# DIGEST HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
-_digest_sent_in_memory: set = set()  # dodatkowy guard w pamięci (szybszy niż SQLite)
+def _digest_sent_today() -> bool:
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        con = sqlite3.connect(TG_DB_FILE)
+        con.execute(f"CREATE TABLE IF NOT EXISTS {DIGEST_DB_TABLE} (date TEXT PRIMARY KEY)")
+        row = con.execute(f"SELECT date FROM {DIGEST_DB_TABLE} WHERE date=?", (today,)).fetchone()
+        con.close()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _mark_digest_sent():
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        con = sqlite3.connect(TG_DB_FILE)
+        con.execute(f"CREATE TABLE IF NOT EXISTS {DIGEST_DB_TABLE} (date TEXT PRIMARY KEY)")
+        con.execute(f"INSERT OR REPLACE INTO {DIGEST_DB_TABLE} (date) VALUES (?)", (today,))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+
+def _is_matchday() -> bool:
+    today = datetime.now().date()
+    for cfg in LIGI.values():
+        try:
+            sl = load_schedule(cfg["fd_org_id"])
+            if sl.empty:
+                continue
+            kol   = get_current_round(sl)
+            mecze = sl[sl["round"] == kol]
+            if mecze["date"].dt.date.eq(today).any():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GŁÓWNA PĘTLA I START
+# ─────────────────────────────────────────────────────────────────────────────
+_digest_sent_in_memory: set = set()
+_processed_uids: set = set()
+
 
 def _bot_loop():
     log.info("Bot runner started — polling every %ds", POLL_INTERVAL)
+
     while True:
         try:
             token, chat_id = _get_credentials()
@@ -869,14 +867,18 @@ def _bot_loop():
                 time.sleep(60)
                 continue
 
-            offset = _get_offset()
+            offset  = _get_offset()
             updates = get_updates(token, offset)
 
             for upd in updates:
                 uid = upd["update_id"]
-                # KLUCZOWE: ustaw offset PRZED przetworzeniem — jeśli handle_value
-                # trwa 10s i pętla wykona się ponownie, nie przetworzy tej samej wiadomości
-                _set_offset(uid + 1)
+                _set_offset(uid + 1)          # przesuń PRZED przetworzeniem
+
+                if uid in _processed_uids:    # dedup w RAM
+                    continue
+                _processed_uids.add(uid)
+                if len(_processed_uids) > 500:
+                    _processed_uids.clear()
 
                 msg     = upd.get("message", {})
                 text    = msg.get("text", "").strip()
@@ -886,7 +888,7 @@ def _bot_loop():
                     continue
 
                 cmd = text.lower().split()[0] if text else ""
-                log.info(f"Command: {cmd!r} from {from_id}")
+                log.info(f"Command: {cmd!r} (uid={uid})")
 
                 if cmd == "/value":
                     handle_value(token, chat_id)
@@ -897,19 +899,18 @@ def _bot_loop():
                 elif cmd == "/help":
                     handle_help(token, chat_id)
 
-            # Poranny digest — sprawdzaj tylko raz na minutę (co 4 iteracje po 15s)
-            # i z podwójnym guardem: pamięć + SQLite
+            # Poranny digest — podwójny guard RAM + SQLite
             now = datetime.now()
             today_key = now.strftime("%Y-%m-%d")
             if (now.hour == DIGEST_HOUR
                     and today_key not in _digest_sent_in_memory
                     and not _digest_sent_today()):
-                _digest_sent_in_memory.add(today_key)  # zablokuj natychmiast w pamięci
-                _mark_digest_sent()                     # zapisz do SQLite
+                _digest_sent_in_memory.add(today_key)
+                _mark_digest_sent()
                 if _is_matchday():
                     bets = compute_value_bets()
                     _send_long(token, chat_id,
-                               _format_value_message(bets, title="☀️ Poranny Digest — dzień meczu"))
+                               _format_value_message(bets, title="☀️ Poranny Digest"))
                     log.info("Morning digest sent")
 
         except Exception as e:
@@ -918,25 +919,37 @@ def _bot_loop():
         time.sleep(POLL_INTERVAL)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PUBLIC API
-# ─────────────────────────────────────────────────────────────────────────────
 def start(tg_token: str = None, tg_chat: str = None, fd_api_key: str = None):
-    """Uruchamia bota jako daemon thread. Bezpieczne do wywołania wielokrotnie."""
+    """
+    Uruchamia bota jako daemon thread.
+    File lock gwarantuje jeden wątek nawet przy wielokrotnych rerunach Streamlit.
+    """
     global _BOT_STARTED, _TG_TOKEN, _TG_CHAT, _FD_API_KEY
     with _BOT_LOCK:
-        # Zawsze zaktualizuj klucze (mogły być None przy pierwszym wywołaniu)
-        if tg_token:  _TG_TOKEN   = tg_token
-        if tg_chat:   _TG_CHAT    = tg_chat
+        if tg_token:   _TG_TOKEN   = tg_token
+        if tg_chat:    _TG_CHAT    = tg_chat
         if fd_api_key: _FD_API_KEY = fd_api_key
+
         if _BOT_STARTED:
             return
+
+        try:
+            import fcntl
+            _lf = open(_BOT_LOCKFILE, "w")
+            fcntl.flock(_lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            log.info("Bot already running in another process — skipping")
+            _BOT_STARTED = True
+            return
+        except ImportError:
+            pass  # Windows — bez file lock
+
         _BOT_STARTED = True
         t = threading.Thread(target=_bot_loop, name="telegram-bot", daemon=True)
         t.start()
-        log.info(f"Telegram bot thread started — TG={'ok' if _TG_TOKEN else 'missing'} FD={'ok' if _FD_API_KEY else 'missing'}")
+        log.info(f"Bot started — TG={'ok' if _TG_TOKEN else 'MISSING'} FD={'ok' if _FD_API_KEY else 'MISSING'}")
+
 
 if __name__ == "__main__":
-    # Uruchomienie bezpośrednie: python bot_runner.py
     log.info("Running bot_runner standalone")
     _bot_loop()
