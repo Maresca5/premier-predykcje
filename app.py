@@ -3194,6 +3194,9 @@ if not historical.empty:
         if not st.session_state.get(_tg_poll_key):
             try:
                 # Funkcja obliczająca value bety ze WSZYSTKICH lig (closure z dostępem do cache)
+                # Logika identyczna jak tab1 strony: EV = p * fo - 1 (gdzie fo = fair_odds lub kurs buka)
+                # Kluczowe: bez live API kurs = fair odds → EV ~ 0, ale filtrujemy po p_model >= 0.58
+                # żeby odpowiadało temu co widać na stronie (próg pewności, nie EV)
                 def _tg_compute_all_vbs():
                     _all = []
                     for _tgl in LIGI.keys():
@@ -3205,37 +3208,32 @@ if not historical.empty:
                             _avg = oblicz_srednie_ligowe(_hl.to_json())
                             if _srl is None or _srl.empty: continue
                             _rho_l = float(_avg.get("rho", -0.13))
-                            # Szukaj bieżącej i następnej kolejki (+/- 1)
+                            # Szukaj bieżącej i następnej kolejki
                             _kol_l = get_current_round(_sl)
                             _mecze_l = _sl[_sl["round"].isin([_kol_l, _kol_l + 1])]
+                            _srl_idx = list(_srl.index)
                             for _, _m in _mecze_l.iterrows():
                                 try:
-                                    _h = map_nazwa(_m["home_team"])
-                                    _a = map_nazwa(_m["away_team"])
-                                    # Szukaj najbliższego dopasowania w indeksie statystyk
-                                    _srl_idx = list(_srl.index)
-                                    if _h not in _srl_idx:
-                                        _h_match = next(
-                                            (x for x in _srl_idx if x.lower() in _h.lower()
-                                             or _h.lower() in x.lower()), None)
-                                        if not _h_match: continue
-                                        _h = _h_match
-                                    if _a not in _srl_idx:
-                                        _a_match = next(
-                                            (x for x in _srl_idx if x.lower() in _a.lower()
-                                             or _a.lower() in x.lower()), None)
-                                        if not _a_match: continue
-                                        _a = _a_match
+                                    _h_raw = map_nazwa(_m["home_team"])
+                                    _a_raw = map_nazwa(_m["away_team"])
+                                    # Fuzzy match nazw drużyn do indeksu statystyk
+                                    _h = _h_raw if _h_raw in _srl_idx else next(
+                                        (x for x in _srl_idx if x.lower() in _h_raw.lower()
+                                         or _h_raw.lower() in x.lower()), None)
+                                    _a = _a_raw if _a_raw in _srl_idx else next(
+                                        (x for x in _srl_idx if x.lower() in _a_raw.lower()
+                                         or _a_raw.lower() in x.lower()), None)
+                                    if not _h or not _a: continue
                                     _lh, _la, *_ = oblicz_lambdy(_h, _a, _srl, _avg, {},
                                         csv_code=LIGI[_tgl]["csv_code"])
                                     _pr = predykcja_meczu(_lh, _la, rho=_rho_l,
                                         csv_code=LIGI[_tgl]["csv_code"])
-                                    _fo = _pr.get("fo_typ", 0)
-                                    _p  = _pr.get("p_typ", 0)
-                                    if not _fo or _fo <= 1.01 or _p <= 0: continue
-                                    # Kurs bazowy = fair odds z modelu
+                                    _p   = _pr.get("p_typ", 0)
+                                    _fo  = _pr.get("fo_typ", 0)  # fair odds = 1/p
+                                    if not _fo or _fo < 1.01 or _p < 0.58: continue  # próg jak na stronie
+                                    # EV z fair odds (brak live API)
                                     _kurs = _fo
-                                    _ev   = _p * (_fo - 1) - (1 - _p)
+                                    _ev   = round(_p * _fo - 1.0, 3)  # identycznie jak _ev() na stronie
                                     # Nadpisz live kursem bukmachera jeśli dostępny
                                     if _OA_OK and _oa_key and _oa_cached:
                                         try:
@@ -3246,19 +3244,18 @@ if not historical.empty:
                                                     _o["odds_d"], _o["odds_a"])
                                                 if _kdc_t and _kdc_t > 1:
                                                     _kurs = _kdc_t
-                                                    _ev = _p * (_kdc_t - 1) - (1 - _p)
+                                                    _ev = round(_p * _kdc_t - 1.0, 3)
                                         except Exception: pass
-                                    # Tylko value bety (EV >= próg)
-                                    if _ev < MIN_EV_DIGEST: continue
                                     _br_l = st.session_state.get(
                                         "bankroll_per_liga", {}).get(_tgl, 1000.0)
                                     _kel = kelly_stake(_p, _kurs, bankroll=_br_l)
                                     _all.append({
-                                        "home": _m["home_team"], "away": _m["away_team"],
-                                        "home_mapped": _h, "away_mapped": _a,
+                                        "home": str(_m.get("home_team", _h)),
+                                        "away": str(_m.get("away_team", _a)),
                                         "liga": _tgl,
                                         "typ": _pr["typ"], "kurs": _kurs,
                                         "p_model": _p, "ev": _ev,
+                                        "fo_fair": _fo,
                                         "stake_pln": _kel.get("stake_pln", 0),
                                         "kolejka": int(_kol_l),
                                         "data": str(_m.get("date", ""))[:10],
