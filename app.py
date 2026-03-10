@@ -34,9 +34,23 @@ except ImportError:
 # Reaguje na /value w ciągu 15s bez potrzeby otwierania strony.
 try:
     import bot_runner as _br
-    _br.start()
-except Exception:
-    pass
+    # Pobierz klucze tutaj (w pełnym kontekście Streamlit) i przekaż do bota
+    _br_tg_token = None
+    _br_tg_chat  = None
+    _br_fd_key   = None
+    try:
+        _br_tg_token = st.secrets.get("TELEGRAM_BOT_TOKEN")
+        _br_tg_chat  = str(st.secrets.get("TELEGRAM_CHAT_ID", ""))
+        _br_fd_key   = st.secrets.get("FOOTBALL_DATA_API_KEY")
+    except Exception:
+        pass
+    _br.start(
+        tg_token=_br_tg_token,
+        tg_chat=_br_tg_chat,
+        fd_api_key=_br_fd_key,
+    )
+except Exception as _br_err:
+    pass  # bot_runner.py nie istnieje lub błąd — aplikacja działa normalnie
 
 def _kurs_dc_live(typ, oh, od, oa):
     """Kurs DC i impl dla live odds – identyczna logika jak backtest.py."""
