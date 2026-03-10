@@ -2740,6 +2740,23 @@ _LIGA_FLAGS = {
     "Serie A":        "🇮🇹",
     "Ligue 1":        "🇫🇷",
 }
+# Ikony lig z football-data.org (te same co herby drużyn)
+_LIGA_LOGOS = {
+    "Premier League": "https://crests.football-data.org/PL.png",
+    "La Liga":        "https://crests.football-data.org/PD.png",
+    "Bundesliga":     "https://crests.football-data.org/BL1.png",
+    "Serie A":        "https://crests.football-data.org/SA.png",
+    "Ligue 1":        "https://crests.football-data.org/FL1.png",
+}
+def _liga_img(liga_name, size="28px", style=""):
+    """Zwraca <img> z logo ligi lub flagę emoji jako fallback."""
+    url = _LIGA_LOGOS.get(liga_name)
+    flag = _LIGA_FLAGS.get(liga_name, "🌍")
+    if url:
+        return (f"<img src='{url}' style='width:{size};height:{size};"
+                f"object-fit:contain;vertical-align:middle;{style}' "
+                f"onerror=\"this.outerHTML='{flag}'\">")
+    return f"<span style='font-size:{size}'>{flag}</span>"
 # ── Liga Switcher – poziomy pasek ───────────────────────────────────────────
 # Obsługa query param _ls przy wczytaniu strony
 _qs_ls = st.query_params.get("_ls")
@@ -2756,7 +2773,6 @@ if _qs_ls is not None:
 # HTML <a href target="_self"> – otwiera w TEJ SAMEJ karcie, poziomo na mobile
 _ls_pills = []
 for _li, _ln in enumerate(LIGI.keys()):
-    _flag   = _LIGA_FLAGS.get(_ln, "🌍")
     _active = _ln == wybrana_liga
     _bg     = "#1e3a5f" if _active else "#111827"
     _border = "#4CAF50" if _active else "#1f2937"
@@ -2764,13 +2780,22 @@ for _li, _ln in enumerate(LIGI.keys()):
     _fw     = "700"     if _active else "400"
     _short  = {"Premier League":"EPL","La Liga":"La Liga",
                 "Bundesliga":"Bund.","Serie A":"Serie A","Ligue 1":"Ligue 1"}.get(_ln, _ln)
+    _logo_url = _LIGA_LOGOS.get(_ln, "")
+    _flag_fb  = _LIGA_FLAGS.get(_ln, "🌍")
+    # Ikona: <img> z logo ligi, fallback do flagi emoji
+    _icon_html = (
+        f"<img src='{_logo_url}' style='width:28px;height:28px;"
+        f"object-fit:contain;filter:{'none' if _active else 'grayscale(40%) opacity(0.7)'}' "
+        f"onerror=\"this.outerHTML='<span style=font-size:1.3em>{_flag_fb}</span>'\">"
+        if _logo_url else f"<span style='font-size:1.4em'>{_flag_fb}</span>"
+    )
     _ls_pills.append(
         f"<a href='?_ls={_li}' target='_self' "
         f"style='display:inline-flex;flex-direction:column;align-items:center;"
-        f"gap:2px;padding:6px 12px;border-radius:14px;border:1.5px solid {_border};"
+        f"gap:3px;padding:7px 12px;border-radius:14px;border:1.5px solid {_border};"
         f"background:{_bg};color:{_col};font-size:0.85em;font-weight:{_fw};"
         f"text-decoration:none;white-space:nowrap;flex-shrink:0;'>"
-        f"<span style='font-size:1.4em;line-height:1'>{_flag}</span>"
+        f"{_icon_html}"
         f"<span style='font-size:0.62em;color:{_col}'>{_short}</span>"
         f"</a>"
     )
@@ -2785,9 +2810,10 @@ st.markdown(
 # ── Hero Header ────────────────────────────────────────────────────────────
 _hc1, _hc2, _hc3 = st.columns([5, 2, 2])
 with _hc1:
-    _flag_h = _LIGA_FLAGS.get(wybrana_liga, "🌍")
+    _flag_h = _liga_img(wybrana_liga, size="36px", style="margin-right:8px;vertical-align:middle")
     st.markdown(
-        f"<h1 style='margin:0 0 2px 0;font-size:1.9em;font-weight:800;color:#fff'>"
+        f"<h1 style='margin:0 0 2px 0;font-size:1.9em;font-weight:800;color:#fff;"
+        f"display:flex;align-items:center;gap:6px'>"
         f"{_flag_h} {wybrana_liga}</h1>"
         f"<p style='margin:0;color:#444;font-size:0.8em;letter-spacing:0.04em'>"
         f"DIXON-COLES MODEL · SOT BLEND · WALK-FORWARD BACKTEST</p>",
