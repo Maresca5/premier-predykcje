@@ -70,6 +70,8 @@ DB_FILE          = "predykcje.db"
 TG_DB_FILE       = "telegram_alerts.db"
 POLL_INTERVAL    = 15        # sekund między sprawdzeniami Telegrama
 DATA_TTL         = 900       # sekundy ważności cache danych (15 min)
+DIGEST_HOUR      = 9         # godzina porannego digestu (9:00)
+DIGEST_DB_TABLE  = "bot_digest_sent"  # tabela w TG_DB_FILE
 SOT_BLEND_W      = 0.30
 KELLY_BANKROLL   = 1000.0
 KELLY_PROB_SCALE = 0.85
@@ -588,7 +590,7 @@ def compute_value_bets() -> list:
 
             rho   = avg.get("rho", -0.13)
             kol   = get_current_round(sl)
-            mecze = sl[sl["round"].isin([kol, kol + 1])]
+            mecze = sl[sl["round"] == kol]   # tylko bieżąca kolejka
             idx   = list(srl.index)
             n_added = 0; n_skip_name = 0; n_skip_prog = 0
 
@@ -645,47 +647,130 @@ def compute_value_bets() -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 # OBSŁUGA KOMEND TELEGRAM
 # ─────────────────────────────────────────────────────────────────────────────
-def handle_value(token: str, chat_id: str):
-    bets = compute_value_bets()
+def _format_value_message(bets: list, title: str = "💰 Value Bets") -> str:
+    """Formatuje listę betów do czytelnej wiadomości Telegram."""
     if not bets:
-        send_message(token, chat_id,
-            "🔍 Brak typów z pewnością ≥58% w żadnej lidze.\n\n"
+        return (
+            "🔍 <b>Brak typów</b> spełniających kryteria (p≥55%)\n"
             "Sprawdź ponownie po zaplanowaniu kolejki.")
-        return
 
     by_liga = defaultdict(list)
     for b in bets:
         by_liga[b["liga"]].append(b)
 
-    now = datetime.now().strftime("%d.%m %H:%M")
-    lines = [f"💰 <b>Value Bets – wszystkie ligi</b>  🕐 {now}\n"
-             f"<i>✦ kurs = fair odds modelu (bez live API)</i>\n"]
+    now = datetime.now().strftime("%d.%m.%Y  %H:%M")
+    TYP_ICON  = {"1": "🏠", "X": "🤝", "2": "✈️", "1X": "🏠🤝", "X2": "🤝✈️"}
+    CONF_ICON = lambda p: "🟢" if p >= 0.70 else ("🟡" if p >= 0.62 else "🔵")
+    CONF_BAR  = lambda p: "▓▓▓" if p >= 0.70 else ("▓▓░" if p >= 0.62 else "▓░░")
+
+    lines = [
+        f"╔══ {title} ══╗",
+        f"🕐 {now}  │  {len(bets)} typów z {len(by_liga)} lig",
+        f"╚{'═'*28}╝",
+    ]
 
     for liga, lb in by_liga.items():
-        flag = LIGA_EMOJI.get(liga, "⚽")
-        lines.append(f"\n{flag} <b>{liga}</b>")
-        for b in sorted(lb, key=lambda x: -x["p_model"])[:5]:
-            _d = f" · {b['data']}" if b.get("data") else ""
-            _s = f"\n     🏦 Kelly: {b['stake']:.0f} zł" if b.get("stake", 0) > 5 else ""
-            lines.append(
-                f"  <b>{b['home']} – {b['away']}</b>{_d}\n"
-                f"     Typ: <b>{b['typ']}</b> @ {b['kurs']:.2f} · "
-                f"p=<b>{b['p_model']:.0%}</b>{_s}")
+        flag     = LIGA_EMOJI.get(liga, "⚽")
+        lb_sorted = sorted(lb, key=lambda x: -x["p_model"])[:5]
+        kol_nr   = lb_sorted[0]["kolejka"]
+        lines.append(f"\n{flag}  <b>{liga}</b>  ·  kolejka {kol_nr}")
+        lines.append(f"{'╌'*30}")
 
-    text = "\n".join(lines)
-    # Podziel jeśli za długi
-    if len(text) > 4000:
-        chunk = ""
-        for line in lines:
-            if len(chunk) + len(line) + 1 > 3900:
-                send_message(token, chat_id, chunk)
-                chunk = line
-            else:
-                chunk += "\n" + line
-        if chunk:
-            send_message(token, chat_id, chunk)
-    else:
+        for b in lb_sorted:
+            ci  = CONF_ICON(b["p_model"])
+            bar = CONF_BAR(b["p_model"])
+            typ_icon = TYP_ICON.get(b["typ"], "⚽")
+            data_fmt = b["data"][5:].replace("-", ".") if b.get("data") else "?"
+            kelly_str = f"  🏦 <b>{b['stake']:.0f} zł</b>" if b.get("stake", 0) > 5 else ""
+            lines.append(
+                f"\n  ⚽ <b>{b['home']}</b> – <b>{b['away']}</b>  📅 {data_fmt}"
+                f"\n  {typ_icon} Typ: <b>{b['typ']}</b>  {ci} {bar} <b>{b['p_model']:.0%}</b>"
+                f"\n  💵 Kurs: <b>{b['kurs']:.2f}</b>{kelly_str}"
+            )
+
+        lines.append("")
+
+    lines.append(f"{'─'*30}")
+    lines.append(f"<i>Kurs = fair odds modelu (1/p), bez marży buka</i>")
+    return "\n".join(lines)
+
+
+def _send_long(token: str, chat_id: str, text: str):
+    """Wysyła wiadomość, dzieląc na części jeśli >4000 znaków."""
+    if len(text) <= 4000:
         send_message(token, chat_id, text)
+        return
+    chunks, current = [], []
+    for line in text.split("\n"):
+        current.append(line)
+        if len("\n".join(current)) > 3600 and not line.strip():
+            chunks.append("\n".join(current))
+            current = []
+    if current:
+        chunks.append("\n".join(current))
+    for i, chunk in enumerate(chunks):
+        prefix = f"<i>({i+1}/{len(chunks)})</i>\n" if len(chunks) > 1 else ""
+        send_message(token, chat_id, prefix + chunk)
+
+
+# ── Poranny digest (raz dziennie) ─────────────────────────────────────────────
+def _digest_sent_today() -> bool:
+    """Sprawdza czy digest był już wysłany dziś."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        con = sqlite3.connect(TG_DB_FILE)
+        con.execute(f"CREATE TABLE IF NOT EXISTS {DIGEST_DB_TABLE} (date TEXT PRIMARY KEY)")
+        row = con.execute(f"SELECT date FROM {DIGEST_DB_TABLE} WHERE date=?", (today,)).fetchone()
+        con.close()
+        return row is not None
+    except Exception:
+        return False
+
+def _mark_digest_sent():
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        con = sqlite3.connect(TG_DB_FILE)
+        con.execute(f"CREATE TABLE IF NOT EXISTS {DIGEST_DB_TABLE} (date TEXT PRIMARY KEY)")
+        con.execute(f"INSERT OR REPLACE INTO {DIGEST_DB_TABLE} (date) VALUES (?)", (today,))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+def _is_matchday() -> bool:
+    """Sprawdza czy dziś jest dzień meczu w którejkolwiek lidze (bieżąca kolejka)."""
+    today = datetime.now().date()
+    for cfg in LIGI.values():
+        try:
+            sl = load_schedule(cfg["fd_org_id"])
+            if sl.empty:
+                continue
+            kol   = get_current_round(sl)
+            mecze = sl[sl["round"] == kol]
+            if mecze["date"].dt.date.eq(today).any():
+                return True
+        except Exception:
+            continue
+    return False
+
+def maybe_send_morning_digest(token: str, chat_id: str):
+    """Wysyła poranny digest o DIGEST_HOUR tylko w dzień meczu, raz dziennie."""
+    now = datetime.now()
+    if now.hour != DIGEST_HOUR:
+        return
+    if _digest_sent_today():
+        return
+    if not _is_matchday():
+        return
+    bets = compute_value_bets()
+    _mark_digest_sent()
+    _send_long(token, chat_id, _format_value_message(bets, title="☀️ Poranny Digest — dzień meczu"))
+
+
+def handle_value(token: str, chat_id: str):
+    """Odpowiedź na /value — value bety z bieżącej kolejki wszystkich lig."""
+    bets = compute_value_bets()
+    _send_long(token, chat_id, _format_value_message(bets, title="💰 Value Bets — na żądanie"))
 
 def handle_status(token: str, chat_id: str):
     try:
@@ -817,6 +902,9 @@ def _bot_loop():
                     handle_status(token, chat_id)
                 elif cmd == "/help":
                     handle_help(token, chat_id)
+
+            # Poranny digest — raz dziennie o DIGEST_HOUR w dzień meczu
+            maybe_send_morning_digest(token, chat_id)
 
         except Exception as e:
             log.error(f"Bot loop error: {e}")
