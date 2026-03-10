@@ -271,9 +271,58 @@ details summary { font-weight: 600 !important; color: var(--text-secondary) !imp
 </style>
 """, unsafe_allow_html=True)
 
+# ── Auto-theme: wykryj preferencję systemową i przełącz Streamlit theme ────
+# Streamlit ignoruje CSS @media prefers-color-scheme – trzeba kliknąć jego własny toggle.
+# Skrypt uruchamia się raz przy ładowaniu, czyta matchMedia i ustawia data-theme na <html>.
+st.markdown("""
+<script>
+(function() {
+    // Uruchom dopiero gdy Streamlit skończy renderować
+    function applyTheme() {
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var html = document.documentElement;
+        var currentTheme = html.getAttribute('data-theme');
 
-# ===========================================================================
-# MAPOWANIA NAZW
+        // Ustaw zmienne CSS bezpośrednio na :root w zależności od systemu
+        // (jako fallback gdy Streamlit nie zdąży przełączyć)
+        if (!prefersDark) {
+            html.style.setProperty('color-scheme', 'light');
+            html.setAttribute('data-theme', 'light');
+        } else {
+            html.style.setProperty('color-scheme', 'dark');
+            html.setAttribute('data-theme', 'dark');
+        }
+
+        // Spróbuj też kliknąć Streamlit's own theme toggle jeśli nie zgadza się
+        // (działa na Streamlit >= 1.28)
+        try {
+            var themeBtn = document.querySelector('[data-testid="baseButton-headerNoPadding"]');
+            if (!themeBtn) return;
+            var body = document.body;
+            var isDarkNow = body.classList.contains('dark') ||
+                            getComputedStyle(body).backgroundColor === 'rgb(14, 17, 23)';
+            if (prefersDark && !isDarkNow) { themeBtn.click(); }
+            if (!prefersDark && isDarkNow) { themeBtn.click(); }
+        } catch(e) {}
+    }
+
+    // Czekaj na pełne załadowanie DOM
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(applyTheme, 300);
+        });
+    } else {
+        setTimeout(applyTheme, 300);
+    }
+
+    // Reaguj na zmianę ustawień systemu w locie
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+        setTimeout(applyTheme, 100);
+    });
+})();
+</script>
+""", unsafe_allow_html=True)
+
 # ===========================================================================
 def normalize_name(name: str) -> str:
     if not isinstance(name, str):
@@ -3156,41 +3205,64 @@ if not historical.empty:
                             _avg = oblicz_srednie_ligowe(_hl.to_json())
                             if _srl is None or _srl.empty: continue
                             _rho_l = float(_avg.get("rho", -0.13))
+                            # Szukaj bieżącej i następnej kolejki (+/- 1)
                             _kol_l = get_current_round(_sl)
-                            _mecze_l = _sl[_sl["round"] == _kol_l]
+                            _mecze_l = _sl[_sl["round"].isin([_kol_l, _kol_l + 1])]
                             for _, _m in _mecze_l.iterrows():
                                 try:
                                     _h = map_nazwa(_m["home_team"])
                                     _a = map_nazwa(_m["away_team"])
-                                    if _h not in _srl.index or _a not in _srl.index: continue
+                                    # Szukaj najbliższego dopasowania w indeksie statystyk
+                                    _srl_idx = list(_srl.index)
+                                    if _h not in _srl_idx:
+                                        _h_match = next(
+                                            (x for x in _srl_idx if x.lower() in _h.lower()
+                                             or _h.lower() in x.lower()), None)
+                                        if not _h_match: continue
+                                        _h = _h_match
+                                    if _a not in _srl_idx:
+                                        _a_match = next(
+                                            (x for x in _srl_idx if x.lower() in _a.lower()
+                                             or _a.lower() in x.lower()), None)
+                                        if not _a_match: continue
+                                        _a = _a_match
                                     _lh, _la, *_ = oblicz_lambdy(_h, _a, _srl, _avg, {},
                                         csv_code=LIGI[_tgl]["csv_code"])
                                     _pr = predykcja_meczu(_lh, _la, rho=_rho_l,
                                         csv_code=LIGI[_tgl]["csv_code"])
-                                    # Kurs fair jako proxy jeśli brak live
                                     _fo = _pr.get("fo_typ", 0)
                                     _p  = _pr.get("p_typ", 0)
-                                    if _fo <= 1 or _p <= 0: continue
-                                    # Sprawdź kursy live
-                                    _kurs = _fo; _ev = _p * (_fo - 1) - (1 - _p)
+                                    if not _fo or _fo <= 1.01 or _p <= 0: continue
+                                    # Kurs bazowy = fair odds z modelu
+                                    _kurs = _fo
+                                    _ev   = _p * (_fo - 1) - (1 - _p)
+                                    # Nadpisz live kursem bukmachera jeśli dostępny
                                     if _OA_OK and _oa_key and _oa_cached:
-                                        _o = _oa.znajdz_kursy(_h, _a, _oa_cached)
-                                        if _o:
-                                            _kdc_t, _ = _kurs_dc_live(
-                                                _pr["typ"], _o["odds_h"], _o["odds_d"], _o["odds_a"])
-                                            if _kdc_t:
-                                                _kurs = _kdc_t
-                                                _ev = _p * (_kdc_t - 1) - (1 - _p)
+                                        try:
+                                            _o = _oa.znajdz_kursy(_h, _a, _oa_cached)
+                                            if _o:
+                                                _kdc_t, _ = _kurs_dc_live(
+                                                    _pr["typ"], _o["odds_h"],
+                                                    _o["odds_d"], _o["odds_a"])
+                                                if _kdc_t and _kdc_t > 1:
+                                                    _kurs = _kdc_t
+                                                    _ev = _p * (_kdc_t - 1) - (1 - _p)
+                                        except Exception: pass
+                                    # Tylko value bety (EV >= próg)
+                                    if _ev < MIN_EV_DIGEST: continue
                                     _br_l = st.session_state.get(
                                         "bankroll_per_liga", {}).get(_tgl, 1000.0)
                                     _kel = kelly_stake(_p, _kurs, bankroll=_br_l)
                                     _all.append({
-                                        "home": _h, "away": _a, "liga": _tgl,
+                                        "home": _m["home_team"], "away": _m["away_team"],
+                                        "home_mapped": _h, "away_mapped": _a,
+                                        "liga": _tgl,
                                         "typ": _pr["typ"], "kurs": _kurs,
                                         "p_model": _p, "ev": _ev,
                                         "stake_pln": _kel.get("stake_pln", 0),
                                         "kolejka": int(_kol_l),
-                                        "live_odds": _OA_OK and _oa_key and _oa_cached,
+                                        "data": str(_m.get("date", ""))[:10],
+                                        "live_odds": _OA_OK and _oa_key and bool(_oa_cached),
                                     })
                                 except Exception: continue
                         except Exception: continue
