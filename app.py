@@ -1147,6 +1147,9 @@ def weighted_mean(values: pd.Series, dates: pd.Series = None,
 
 @st.cache_data
 def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
+    return _oblicz_statystyki_impl(df_json)
+
+def _oblicz_statystyki_impl(df_json: str) -> pd.DataFrame:
     df = pd.read_json(df_json)
     if df.empty:
         return pd.DataFrame()
@@ -1189,7 +1192,9 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
 
 @st.cache_data
 def oblicz_srednie_ligowe(df_json: str) -> dict:
-    df = pd.read_json(df_json)
+    return _oblicz_srednie_impl(df_json)
+
+def _oblicz_srednie_impl(df_json: str) -> dict:
     if df.empty:
         return {"avg_home": 1.5, "avg_away": 1.2, "rho": -0.13, "n_biezacy": 0}
     n_biezacy = int((df.get("_sezon", pd.Series()) == "biezacy").sum()) if "_sezon" in df.columns else len(df)
@@ -3193,19 +3198,98 @@ if not historical.empty:
         _tg_poll_key = f"_tg_polled_{datetime.now().strftime('%Y%m%d%H%M')}"
         if not st.session_state.get(_tg_poll_key):
             try:
-                # Funkcja obliczająca value bety ze WSZYSTKICH lig (closure z dostępem do cache)
-                # Logika identyczna jak tab1 strony: EV = p * fo - 1 (gdzie fo = fair_odds lub kurs buka)
-                # Kluczowe: bez live API kurs = fair odds → EV ~ 0, ale filtrujemy po p_model >= 0.58
-                # żeby odpowiadało temu co widać na stronie (próg pewności, nie EV)
+                # ── Bot-safe loaders: bez @st.cache_data (nie działa poza renderowaniem) ──
+                # To jest GŁÓWNA PRZYCZYNA dla której inne ligi były pomijane:
+                # @st.cache_data rzuca StreamlitAPIException poza kontekstem HTTP requesta.
+                def _bot_load_historical(league_code: str) -> pd.DataFrame:
+                    """Wersja load_historical bez @st.cache_data — bezpieczna dla bota."""
+                    try:
+                        _df_now  = _pobierz_csv(league_code, "2526")
+                        _df_prev = _pobierz_csv(league_code, "2425")
+                        if _df_now.empty and _df_prev.empty:
+                            return pd.DataFrame()
+                        if _df_now.empty:
+                            return _df_prev
+                        if _df_prev.empty:
+                            return _df_now
+                        _n_now = len(_df_now)
+                        _wp = waga_poprzedniego(_n_now)
+                        _n_prev_t = min(int(_n_now * _wp / (1 - _wp)), len(_df_prev))
+                        _df_prev_s = _df_prev.tail(_n_prev_t).copy()
+                        _df_prev_s["_sezon"] = "poprzedni"
+                        _df_now = _df_now.copy()
+                        _df_now["_sezon"] = "biezacy"
+                        return pd.concat([_df_prev_s, _df_now], ignore_index=True).sort_values("Date")
+                    except Exception:
+                        return pd.DataFrame()
+
+                def _bot_load_schedule(fd_org_id: int, filename: str) -> pd.DataFrame:
+                    """Wersja load_schedule bez @st.cache_data i bez st.* wywołań."""
+                    try:
+                        _api_key = None
+                        try:
+                            _api_key = st.secrets.get("FOOTBALL_DATA_API_KEY")
+                        except Exception:
+                            pass
+                        if _api_key:
+                            from datetime import date as _date2
+                            import requests as _req2
+                            _today2 = _date2.today()
+                            _yr = _today2.year if _today2.month >= 7 else _today2.year - 1
+                            for _yr_try in [_yr, _yr - 1]:
+                                try:
+                                    _url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season={_yr_try}"
+                                    _r = _req2.get(_url, headers={"X-Auth-Token": _api_key}, timeout=10)
+                                    if _r.status_code != 200:
+                                        continue
+                                    _matches = _r.json().get("matches", [])
+                                    if not _matches:
+                                        continue
+                                    _rows = []
+                                    for _m2 in _matches:
+                                        _ht = map_nazwa(_m2["homeTeam"].get("shortName") or _m2["homeTeam"].get("name",""))
+                                        _at = map_nazwa(_m2["awayTeam"].get("shortName") or _m2["awayTeam"].get("name",""))
+                                        _dt = pd.to_datetime(_m2["utcDate"]).tz_localize(None) \
+                                            if not _m2["utcDate"].endswith("Z") \
+                                            else pd.to_datetime(_m2["utcDate"]).tz_convert(None)
+                                        _sc = _m2.get("score", {}).get("fullTime", {})
+                                        _rows.append({
+                                            "round":     _m2.get("matchday", 0),
+                                            "date":      _dt,
+                                            "home_team": _ht,
+                                            "away_team": _at,
+                                            "is_played": _m2.get("status") == "FINISHED",
+                                            "status":    _m2.get("status", ""),
+                                            "wynik_h":   _sc.get("home"),
+                                            "wynik_a":   _sc.get("away"),
+                                        })
+                                    _df_s = pd.DataFrame(_rows)
+                                    _df_s["round"] = pd.to_numeric(_df_s["round"], errors="coerce").fillna(0).astype(int)
+                                    return _df_s.sort_values("date").reset_index(drop=True)
+                                except Exception:
+                                    continue
+                        # Fallback: CSV
+                        _df_csv = pd.read_csv(filename)
+                        _df_csv["date"] = pd.to_datetime(_df_csv["date"], utc=True).dt.tz_localize(None)
+                        if "round" in _df_csv.columns:
+                            _df_csv["round"] = pd.to_numeric(_df_csv["round"], errors="coerce").fillna(0).astype(int)
+                        return _df_csv.sort_values("date").reset_index(drop=True)
+                    except Exception:
+                        return pd.DataFrame()
+
+                # Funkcja obliczająca value bety ze WSZYSTKICH lig
                 def _tg_compute_all_vbs():
                     _all = []
                     for _tgl in LIGI.keys():
                         try:
-                            _hl = load_historical(LIGI[_tgl]["csv_code"])
-                            _sl = load_schedule(LIGI[_tgl]["fd_org_id"], LIGI[_tgl]["file"])
+                            # KLUCZOWE: używamy bot-safe loaderów bez @st.cache_data
+                            _hl = _bot_load_historical(LIGI[_tgl]["csv_code"])
+                            _sl = _bot_load_schedule(LIGI[_tgl]["fd_org_id"], LIGI[_tgl]["file"])
                             if _hl.empty or _sl.empty: continue
-                            _srl = oblicz_wszystkie_statystyki(_hl.to_json())
-                            _avg = oblicz_srednie_ligowe(_hl.to_json())
+                            # Wywołaj _impl bezpośrednio — omija @st.cache_data (nie działa poza renderowaniem)
+                            _hl_json = _hl.to_json()
+                            _srl = _oblicz_statystyki_impl(_hl_json)
+                            _avg = _oblicz_srednie_impl(_hl_json)
                             if _srl is None or _srl.empty: continue
                             _rho_l = float(_avg.get("rho", -0.13))
                             # Szukaj bieżącej i następnej kolejki
