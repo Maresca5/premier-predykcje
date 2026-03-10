@@ -1195,6 +1195,7 @@ def oblicz_srednie_ligowe(df_json: str) -> dict:
     return _oblicz_srednie_impl(df_json)
 
 def _oblicz_srednie_impl(df_json: str) -> dict:
+    df = pd.read_json(df_json)
     if df.empty:
         return {"avg_home": 1.5, "avg_away": 1.2, "rho": -0.13, "n_biezacy": 0}
     n_biezacy = int((df.get("_sezon", pd.Series()) == "biezacy").sum()) if "_sezon" in df.columns else len(df)
