@@ -29,6 +29,15 @@ try:
 except ImportError:
     _TG_OK = False
 
+# ── Bot runner: osobny wątek, niezależny od renderowania Streamlit ────────────
+# Uruchamiany raz przy pierwszym załadowaniu strony — potem działa w tle.
+# Reaguje na /value w ciągu 15s bez potrzeby otwierania strony.
+try:
+    import bot_runner as _br
+    _br.start()
+except Exception:
+    pass
+
 def _kurs_dc_live(typ, oh, od, oa):
     """Kurs DC i impl dla live odds – identyczna logika jak backtest.py."""
     try:
