@@ -22,6 +22,7 @@ import requests
 import json
 import sqlite3
 from datetime import datetime, timedelta
+from collections import defaultdict
 import streamlit as st
 
 # ── Konfiguracja ──────────────────────────────────────────────────────────────
@@ -301,34 +302,52 @@ def poll_commands(all_value_bets_fn=None, stats_fn=None) -> list:
 
 
 def _handle_value_command(token: str, chat_id: str, all_value_bets_fn):
-    """Odpowiedz na /value – lista aktualnych value betów."""
+    """Odpowiedz na /value – lista aktualnych value betów ze wszystkich lig."""
     if all_value_bets_fn is None:
         send_message("⏳ Dane nie są dostępne – otwórz aplikację aby odświeżyć.", token, chat_id)
         return
 
     try:
         bets = all_value_bets_fn()
-        vbs  = [b for b in bets if b.get("ev", 0) >= MIN_EV_DIGEST]
+        # all_value_bets_fn już filtruje po MIN_EV_DIGEST, ale zabezpieczamy
+        vbs = [b for b in bets if b.get("ev", 0) >= MIN_EV_DIGEST]
     except Exception as e:
         send_message(f"❌ Błąd pobierania danych: {e}", token, chat_id)
         return
 
     if not vbs:
-        send_message("🔍 Brak aktualnych value betów (EV ≥ 8%).\n\nSprawdź później po odświeżeniu kursów.", token, chat_id)
+        send_message(
+            f"🔍 Brak value betów (EV ≥ {MIN_EV_DIGEST:.0%}) w żadnej lidze.\n\n"
+            "Sprawdź ponownie gdy terminarze kolejek będą znane.",
+            token, chat_id)
         return
 
-    lines = []
-    for b in sorted(vbs, key=lambda x: -x["ev"])[:10]:  # max 10
-        flag = _LIGA_EMOJI.get(b.get("liga", ""), "⚽")
-        lines.append(
-            f"{flag} <b>{b['home']} vs {b['away']}</b>\n"
-            f"   {b['typ']} @ {b['kurs']:.2f} · EV <b>{b['ev']:+.1%}</b> · {b['stake_pln']:.0f} zł"
-        )
+    # Grupuj per liga, w każdej lidze sortuj po EV malejąco
+    by_liga = defaultdict(list)
+    for b in vbs:
+        by_liga[b.get("liga", "?")].append(b)
 
-    text = (
-        f"💰 <b>Value Bets</b> ({len(vbs)} znaleziono)\n\n"
-        + "\n\n".join(lines)
-    )
+    now = datetime.now().strftime("%d.%m %H:%M")
+    sections = [f"💰 <b>Value Bets – wszystkie ligi</b>\n🕐 {now} · {len(vbs)} znaleziono\n"]
+
+    for liga, liga_bets in by_liga.items():
+        flag = _LIGA_EMOJI.get(liga, "⚽")
+        liga_bets_sorted = sorted(liga_bets, key=lambda x: -x["ev"])[:5]  # max 5 per liga
+        sections.append(f"\n{flag} <b>{liga}</b>")
+        for b in liga_bets_sorted:
+            _data = f" · {b['data']}" if b.get("data") else ""
+            _live = " 🔴" if b.get("live_odds") else " ✦"
+            _stake = f" · 🏦 {b['stake_pln']:.0f} zł" if b.get("stake_pln", 0) > 0 else ""
+            sections.append(
+                f"  <b>{b['home']} – {b['away']}</b>{_data}\n"
+                f"  Typ: <b>{b['typ']}</b> @ <b>{b['kurs']:.2f}</b>{_live}"
+                f" · EV: <b>{b['ev']:+.1%}</b> · p={b['p_model']:.0%}{_stake}"
+            )
+
+    text = "\n".join(sections)
+    # Telegram limit 4096 znaków
+    if len(text) > 4000:
+        text = text[:3900] + "\n\n<i>…(skrócono, za dużo betów)</i>"
     send_message(text, token, chat_id)
 
 
