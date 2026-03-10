@@ -2956,6 +2956,24 @@ if _TG_OK:
                 f"Auto digest: {_tg.DIGEST_HOUR_FROM}:00–{_tg.DIGEST_HOUR_TO}:00 · "
                 f"Alert EV≥{_tg.MIN_EV_ALERT:.0%} · Digest EV≥{_tg.MIN_EV_DIGEST:.0%}")
 
+            # Debug: ostatni poll i błędy
+            _poll_err = st.session_state.get("_tg_poll_error", "")
+            _poll_dbg = st.session_state.get("_tg_debug_last", "")
+            if _poll_err:
+                st.error(f"❌ Poll error: {_poll_err}")
+            if _poll_dbg:
+                with st.expander("🔍 Debug ostatniego /value", expanded=False):
+                    st.code(_poll_dbg, language=None)
+            # Przycisk testowy /value
+            if st.button("💰 Test /value (wyślij na TG)", use_container_width=True, key="_tg_val_test"):
+                try:
+                    _tg.poll_commands(
+                        all_value_bets_fn=None,  # None = poinformuje że dane są niedostępne
+                        stats_fn=None)
+                    st.info("Sprawdź Telegram — jeśli bot milczy, problem z getUpdates/offset")
+                except Exception as _tge2:
+                    st.error(f"poll_commands error: {_tge2}")
+
 
 # ── Bankroll & Kelly ────────────────────────────────────────────────────────
 if "bankroll_per_liga" not in st.session_state:
@@ -3193,11 +3211,14 @@ if not historical.empty:
     n_biezacy   = srednie_lig["n_biezacy"]
     w_prev      = waga_poprzedniego(n_biezacy)
 
-    # ── 📲 Telegram polling — po załadowaniu modelu ──────────────────────────
-    # Teraz mamy dostęp do danych wszystkich lig, więc /value działa bez wchodzenia na stronę
+    # ── 📲 Telegram polling — przy każdym rerun Streamlit ────────────────────
+    # WAŻNE: Telegram getUpdates konsumuje wiadomości nieodwracalnie (przez offset).
+    # Polling raz/minutę powoduje że komendy /value przepadają między rerunami.
+    # Rozwiązanie: poll przy każdym rerun, throttle tylko wysyłkę digestów.
     if _TG_OK:
-        _tg_poll_key = f"_tg_polled_{datetime.now().strftime('%Y%m%d%H%M')}"
+        _tg_poll_key = f"_tg_polled_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         if not st.session_state.get(_tg_poll_key):
+            st.session_state[_tg_poll_key] = True  # ustaw od razu, zanim zaczniemy (zapobiega double-poll w tym samym rerun)
             try:
                 # ── Bot-safe loaders: bez @st.cache_data (nie działa poza renderowaniem) ──
                 # To jest GŁÓWNA PRZYCZYNA dla której inne ligi były pomijane:
@@ -3392,9 +3413,12 @@ if not historical.empty:
                 _tg.poll_commands(
                     all_value_bets_fn=_tg_compute_all_vbs,
                     stats_fn=_tg_stats_fn)
-                st.session_state[_tg_poll_key] = True
-            except Exception:
-                pass
+            except Exception as _tg_exc:
+                # Zapisz błąd do session_state żeby był widoczny w sidebarze
+                try:
+                    st.session_state["_tg_poll_error"] = f"{type(_tg_exc).__name__}: {_tg_exc}"
+                except Exception:
+                    pass
 
     # Pobierz dane do ostrzeżeń sędziowskich
     # Drużyny aktualnie grające w lidze = z terminarza bieżącego sezonu
