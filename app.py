@@ -23,6 +23,12 @@ try:
 except ImportError:
     _OA_OK = False
 
+try:
+    import telegram_bot as _tg
+    _TG_OK = True
+except ImportError:
+    _TG_OK = False
+
 def _kurs_dc_live(typ, oh, od, oa):
     """Kurs DC i impl dla live odds – identyczna logika jak backtest.py."""
     try:
@@ -2647,15 +2653,111 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
             except Exception:
                 pass
 
+    # 📲 Telegram: polling komend (raz per sesja / rerun)
+    if _TG_OK:
+        _tg_poll_key = f"_tg_polled_{datetime.now().strftime('%Y%m%d%H%M')}"
+        if not st.session_state.get(_tg_poll_key):
+            try:
+                _tg.poll_commands()  # sprawdź /value /status /help
+                st.session_state[_tg_poll_key] = True
+            except Exception:
+                pass
+
     elif not _OA_OK:
         st.caption("ℹ️ Plik `odds_api.py` nie znaleziony.")
 
-with st.sidebar.expander("💼 Kelly & Bankroll", expanded=True):
-    _br_input = st.number_input(
-        "Bankroll (zł)", min_value=10.0, max_value=1_000_000.0,
-        value=float(st.session_state.get("bankroll", 1000.0)),
-        step=100.0, key="_br_widget", help="Kwota do obliczeń Kelly")
-    st.session_state["bankroll"] = _br_input
+# ── Telegram – sidebar panel ─────────────────────────────────────────────────
+if _TG_OK:
+    with st.sidebar.expander("📲 Telegram Bot", expanded=False):
+        _tg_token, _tg_chat = _tg._get_credentials()
+        if not _tg_token or not _tg_chat:
+            st.warning("Brak TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID w secrets.")
+        else:
+            st.markdown(
+                "<div style='font-size:0.80em;color:#4CAF50;margin-bottom:6px'>"
+                "✅ Bot skonfigurowany</div>",
+                unsafe_allow_html=True)
+            # Test ping
+            _tg_c1, _tg_c2 = st.columns(2)
+            if _tg_c1.button("🔔 Test ping", use_container_width=True, key="_tg_ping"):
+                _tg_ok = _tg.send_message(
+                    "🤖 <b>Test połączenia</b> – bot działa poprawnie!\n"
+                    f"Liga: {wybrana_liga} · {datetime.now().strftime('%H:%M')}")
+                if _tg_ok:
+                    st.success("✅ Wysłano!")
+                else:
+                    st.error("❌ Błąd – sprawdź token/chat_id")
+            if _tg_c2.button("📊 /status", use_container_width=True, key="_tg_status"):
+                # Wyślij statystyki na życzenie
+                try:
+                    _con_tgs = sqlite3.connect(DB_FILE)
+                    _tg_stats = {}
+                    for _tgl in LIGI.keys():
+                        _r = _con_tgs.execute(
+                            "SELECT COUNT(*), SUM(trafione), AVG(fair_odds) FROM zdarzenia "
+                            "WHERE liga=? AND sezon=? AND trafione IS NOT NULL AND rynek='1X2'",
+                            (_tgl, BIEZACY_SEZON)).fetchone()
+                        if _r and _r[0] > 0:
+                            _n, _t, _afo = _r
+                            _roi = ((_t * (_afo - 1)) - (_n - _t)) / _n * 100 if _n > 0 else 0
+                            _tg_stats[_tgl] = {"hr": _t/_n if _n else 0, "roi": _roi, "n": _n}
+                    _con_tgs.close()
+                    _tg.send_message(
+                        "📊 <b>Status modelu</b>\n\n" + "\n".join(
+                            f"{_tg._LIGA_EMOJI.get(l,'⚽')} <b>{l}</b>: "
+                            f"Hit {s['hr']:.1%} · ROI {s['roi']:+.1f}% · {s['n']} typów"
+                            for l, s in _tg_stats.items() if s['n'] > 0
+                        ))
+                    st.success("✅ Wysłano status!")
+                except Exception as _tge:
+                    st.error(f"Błąd: {_tge}")
+
+            st.caption(
+                f"Auto digest: {_tg.DIGEST_HOUR_FROM}:00–{_tg.DIGEST_HOUR_TO}:00 · "
+                f"Alert EV≥{_tg.MIN_EV_ALERT:.0%} · Digest EV≥{_tg.MIN_EV_DIGEST:.0%}")
+
+
+    # ── Bankroll per liga ──────────────────────────────────────────────────
+    # Każda liga ma osobny bankroll – przechowywany w session_state["bankroll_per_liga"]
+    if "bankroll_per_liga" not in st.session_state:
+        st.session_state["bankroll_per_liga"] = {
+            "Premier League": 1000.0,
+            "La Liga":        1000.0,
+            "Bundesliga":     1000.0,
+            "Serie A":        1000.0,
+            "Ligue 1":        1000.0,
+        }
+    _br_per_liga = st.session_state["bankroll_per_liga"]
+
+    _br_mode = st.toggle("💡 Osobny bankroll per liga", value=False, key="_br_mode_toggle")
+    if _br_mode:
+        st.markdown(
+            "<div style='font-size:0.74em;color:#555;margin-bottom:6px'>"
+            "Ustaw bankroll oddzielnie dla każdej ligi:</div>",
+            unsafe_allow_html=True)
+        for _br_liga in list(LIGI.keys()):
+            _br_per_liga[_br_liga] = st.number_input(
+                f"{_br_liga[:10]}",
+                min_value=10.0, max_value=1_000_000.0,
+                value=float(_br_per_liga.get(_br_liga, 1000.0)),
+                step=100.0, key=f"_br_{_br_liga[:6]}",
+                help=f"Bankroll dla {_br_liga}")
+        st.session_state["bankroll_per_liga"] = _br_per_liga
+        # Aktywna liga
+        _br_input = _br_per_liga.get(wybrana_liga, 1000.0)
+        st.session_state["bankroll"] = _br_input
+        st.caption(f"Aktywna liga: **{_br_input:.0f} zł**")
+    else:
+        _br_input = st.number_input(
+            "Bankroll (zł)", min_value=10.0, max_value=1_000_000.0,
+            value=float(st.session_state.get("bankroll", 1000.0)),
+            step=100.0, key="_br_widget", help="Kwota do obliczeń Kelly – wspólna dla wszystkich lig")
+        st.session_state["bankroll"] = _br_input
+        # Ustaw ten sam bankroll dla wszystkich lig
+        for _lk in LIGI.keys():
+            _br_per_liga[_lk] = _br_input
+        st.session_state["bankroll_per_liga"] = _br_per_liga
+
     _kelly_frac_options = {
         "🛡️ Konserwatywny (1/16)": 0.0625,
         "⚖️ Standardowy (1/8)":    0.125,
@@ -2669,7 +2771,7 @@ with st.sidebar.expander("💼 Kelly & Bankroll", expanded=True):
     st.session_state["kelly_frac_label"] = _kelly_frac_label
     st.session_state["kelly_frac"]       = _kelly_frac_options[_kelly_frac_label]
     _kelly_info_val = _br_input * st.session_state["kelly_frac"] * 0.3
-    st.caption(f"Typowa stawka ~**{_kelly_info_val:.0f} zł** · Conservative Kelly (-15% p + Half-KF) · max 5%/mecz · EV≥5%")
+    st.caption(f"Typowa stawka ~**{_kelly_info_val:.0f} zł** · Conservative Kelly · max 5%/mecz · EV≥5%")
 
 with st.spinner(f"⚙️ Model Dixon-Coles analizuje dane {wybrana_liga}..."):
     historical = load_historical(LIGI[wybrana_liga]["csv_code"])
@@ -3712,7 +3814,14 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                 _bankroll = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
                                                 _kelly = kelly_stake(pred["p_typ"], _kdc, bankroll=_bankroll)
 
-                                                # Market Noise check
+                                                # 📲 Telegram real-time alert (EV≥12%, anti-spam: 1/mecz/dzień)
+                                                if _TG_OK and _is_val and _ev_val >= _tg.MIN_EV_ALERT:
+                                                    _tg.send_value_alert(
+                                                        home=h, away=a, liga=wybrana_liga,
+                                                        typ=pred["typ"], kurs=_kdc,
+                                                        p_model=pred["p_typ"], ev=_ev_val,
+                                                        stake_pln=_kelly.get("stake_pln", 0),
+                                                        kolejka=int(mecz.get("round", 0)) if hasattr(mecz, "get") else 0)
                                                 _mn2 = market_noise_check(pred["p_typ"], _idc)
                                                 if _mn2["noise"]:
                                                     st.markdown(
@@ -4362,9 +4471,54 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             unsafe_allow_html=True)
                         st.caption("🟢 Sweet spot (5-15%) · 🔵 Zbieżne (<5%) · 🔴 Market Noise (>15%)")
 
+                # 📲 Telegram: poranny digest (w dniu kolejki, 8-10 rano, raz dziennie)
+                if _TG_OK and not schedule.empty and not srednie_df.empty:
+                    try:
+                        _tg_digest_key = f"_tg_digest_{wybrana_liga}_{datetime.now().strftime('%Y%m%d')}"
+                        if (not st.session_state.get(_tg_digest_key) and
+                                _tg.should_send_morning(wybrana_liga)):
+                            # Zbierz value bety z bieżącej kolejki
+                            _tg_vbs = []
+                            _tg_mecze = schedule[schedule["round"] == aktualna_kolejka]
+                            for _, _tg_m in _tg_mecze.iterrows():
+                                _tg_h = map_nazwa(_tg_m["home_team"])
+                                _tg_a = map_nazwa(_tg_m["away_team"])
+                                if _tg_h not in srednie_df.index or _tg_a not in srednie_df.index:
+                                    continue
+                                _tg_lh, _tg_la, _, _, _, _ = oblicz_lambdy(
+                                    _tg_h, _tg_a, srednie_df, srednie_lig, forma_dict,
+                                    csv_code=LIGI[wybrana_liga]["csv_code"])
+                                _tg_pred = predykcja_meczu(
+                                    _tg_lh, _tg_la, rho=rho,
+                                    csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
+                                # Sprawdź czy są kursy live
+                                if _OA_OK and _oa_key and _oa_cached:
+                                    _tg_o = _oa.znajdz_kursy(_tg_h, _tg_a, _oa_cached)
+                                    if _tg_o:
+                                        _tg_kdc, _tg_idc = _kurs_dc_live(
+                                            _tg_pred["typ"],
+                                            _tg_o["odds_h"], _tg_o["odds_d"], _tg_o["odds_a"])
+                                        if _tg_kdc:
+                                            _tg_ev = _tg_pred["p_typ"] * (_tg_kdc - 1) - (1 - _tg_pred["p_typ"])
+                                            _tg_br = st.session_state.get("bankroll_per_liga", {}).get(wybrana_liga, 1000.0)
+                                            _tg_kel = kelly_stake(_tg_pred["p_typ"], _tg_kdc, bankroll=_tg_br)
+                                            if _tg_ev >= _tg.MIN_EV_DIGEST:
+                                                _tg_vbs.append({
+                                                    "home": _tg_h, "away": _tg_a, "liga": wybrana_liga,
+                                                    "typ": _tg_pred["typ"], "kurs": _tg_kdc,
+                                                    "p_model": _tg_pred["p_typ"], "ev": _tg_ev,
+                                                    "stake_pln": _tg_kel.get("stake_pln", 0),
+                                                })
+                            ok_digest = _tg.send_morning_digest(
+                                wybrana_liga, _tg_vbs, kolejka=int(aktualna_kolejka))
+                            if ok_digest:
+                                st.session_state[_tg_digest_key] = True
+                                st.toast(f"📲 Poranny digest wysłany na Telegram [{wybrana_liga}]", icon="☀️")
+                    except Exception:
+                        pass
 
-    # =========================================================================
-    # TAB 3 – DEEP DATA
+
+
     # =========================================================================
     with tab3:
         st.subheader("🔬 Deep Data – Power Rankings & Analiza")
@@ -5780,7 +5934,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
     with tab5:
         st.subheader("🎛️ Laboratorium modelu")
 
-        _lab_t1, _lab_t2 = st.tabs(["🧱 Bet Builder", "🔬 Symulacje Monte Carlo"])
+        _lab_t1, _lab_t2, _lab_t3 = st.tabs(["🧱 Bet Builder", "🔬 Symulacje Monte Carlo", "🤖 AutoML"])
 
         # ═══════════════════════════════════════════════════════════════════
         with _lab_t1:
@@ -6108,6 +6262,184 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     st.info("Brak meczów w tej kolejce")
             else:
                 st.warning("Brak danych")
+
+        # ═══════════════════════════════════════════════════════════════════
+        with _lab_t3:
+            st.markdown(
+                "<div style='background:#0d0d1f;border:1px solid #1e2a5a;border-radius:8px;"
+                "padding:10px 14px;margin-bottom:14px'>"
+                "<div style='font-size:0.88em;color:#4CAF50;font-weight:700;margin-bottom:4px'>"
+                "🤖 AutoML – Optymalizacja parametrów modelu</div>"
+                "<div style='font-size:0.80em;color:#6b7280'>"
+                "Walk-forward grid search na danych historycznych. Testuje kombinacje "
+                "SOT_BLEND_W, TAU_DAYS i progu pewności. Optymalizuje Brier Score (kalibracja) "
+                "lub Yield (zysk). Wyniki są sugestią – ostateczna decyzja należy do Ciebie."
+                "</div></div>",
+                unsafe_allow_html=True)
+
+            _aml_c1, _aml_c2 = st.columns(2)
+            with _aml_c1:
+                _aml_target = st.selectbox(
+                    "🎯 Optymalizuj pod kątem",
+                    ["Brier Score (kalibracja)", "Yield % (zysk flat)", "Hit Rate %"],
+                    key="_aml_target")
+                _aml_liga_sel = st.selectbox(
+                    "🏆 Liga",
+                    list(LIGI.keys()),
+                    index=list(LIGI.keys()).index(wybrana_liga),
+                    key="_aml_liga")
+            with _aml_c2:
+                _aml_min_n = st.number_input(
+                    "Min. próbka meczów (okno walk-forward)",
+                    min_value=20, max_value=200, value=50, step=10, key="_aml_min_n")
+
+            st.markdown("**⚙️ Zakresy parametrów:**")
+            _pc1, _pc2, _pc3 = st.columns(3)
+            with _pc1:
+                st.caption("SOT_BLEND_W")
+                _aml_sot_min = st.slider("Min", 0.0, 0.5, 0.0, 0.10, key="_aml_sot_min", format="%.2f")
+                _aml_sot_max = st.slider("Max", 0.1, 0.8, 0.50, 0.10, key="_aml_sot_max", format="%.2f")
+            with _pc2:
+                st.caption("TAU_DAYS")
+                _aml_tau_min = st.slider("Min", 10, 40, 15, 5, key="_aml_tau_min")
+                _aml_tau_max = st.slider("Max", 20, 90, 60, 5, key="_aml_tau_max")
+            with _pc3:
+                st.caption("PROG_PEWNY")
+                _aml_prog_min = st.slider("Min", 0.50, 0.65, 0.50, 0.02, key="_aml_prog_min", format="%.2f")
+                _aml_prog_max = st.slider("Max", 0.55, 0.75, 0.65, 0.02, key="_aml_prog_max", format="%.2f")
+
+            _aml_sot_vals  = [round(v, 2) for v in np.arange(_aml_sot_min, _aml_sot_max + 0.01, 0.10)]
+            _aml_tau_vals  = list(range(_aml_tau_min, _aml_tau_max + 1, 10))
+            _aml_prog_vals = [round(v, 2) for v in np.arange(_aml_prog_min, _aml_prog_max + 0.001, 0.02)]
+            _aml_n_combos  = max(1, len(_aml_sot_vals) * len(_aml_tau_vals) * len(_aml_prog_vals))
+
+            _aml_too_many = _aml_n_combos > 500
+            st.info(f"🔢 Kombinacji: **{_aml_n_combos}** "
+                    f"({len(_aml_sot_vals)} SOT × {len(_aml_tau_vals)} TAU × {len(_aml_prog_vals)} PROG)"
+                    + (" — zawęź zakresy!" if _aml_too_many else ""))
+
+            if st.button("🚀 Uruchom AutoML", key="_aml_run", disabled=_aml_too_many):
+                _aml_hist_data = load_historical(LIGI[_aml_liga_sel]["csv_code"])
+                if "_sezon" in _aml_hist_data.columns:
+                    _aml_hist_data = _aml_hist_data[_aml_hist_data["_sezon"] == "biezacy"]
+                if _aml_hist_data.empty or len(_aml_hist_data) < _aml_min_n * 2:
+                    st.error("Za mało danych historycznych.")
+                else:
+                    _aml_results = []
+                    _aml_pbar = st.progress(0, text="Inicjalizacja...")
+                    _aml_done = 0
+
+                    for _sw in _aml_sot_vals:
+                        for _tau in _aml_tau_vals:
+                            for _prog in _aml_prog_vals:
+                                _aml_done += 1
+                                _aml_pbar.progress(
+                                    _aml_done / _aml_n_combos,
+                                    text=f"SOT={_sw:.2f} · TAU={_tau} · PROG={_prog:.2f}")
+                                try:
+                                    _aml_df_s = _aml_hist_data.sort_values("Date").reset_index(drop=True)
+                                    n_tot = len(_aml_df_s)
+                                    _window = max(_aml_min_n, int(n_tot * 0.5))
+                                    _step   = max(10, int(n_tot * 0.1))
+                                    _aml_preds = []
+
+                                    for _st in range(_window, n_tot - 5, _step):
+                                        _train_s = _aml_df_s.iloc[:_st]
+                                        _test_s  = _aml_df_s.iloc[_st:_st + _step]
+                                        _sr_s = oblicz_srednie(_train_s, tau_days=float(_tau), sot_w=float(_sw))
+                                        if _sr_s is None or _sr_s.empty: continue
+                                        _sr_lig_s = _sr_s.mean()
+                                        _rho_s, _ = fit_rho(_train_s) if len(_train_s) >= 30 else (-0.13, {})
+                                        _fd_s = {k: {} for k in _sr_s.index}
+
+                                        for _, _tr in _test_s.iterrows():
+                                            try:
+                                                _th = str(_tr.get("HomeTeam",""))
+                                                _ta = str(_tr.get("AwayTeam",""))
+                                                if _th not in _sr_s.index or _ta not in _sr_s.index: continue
+                                                _lh_s, _la_s, *_ = oblicz_lambdy(
+                                                    _th, _ta, _sr_s, _sr_lig_s, _fd_s,
+                                                    csv_code=LIGI[_aml_liga_sel]["csv_code"])
+                                                _pr_s = predykcja_meczu(_lh_s, _la_s, rho=_rho_s,
+                                                    csv_code=LIGI[_aml_liga_sel]["csv_code"], n_train=len(_train_s))
+                                                _fg = int(_tr.get("FTHG", -1)); _ag = int(_tr.get("FTAG", -1))
+                                                if _fg < 0 or _ag < 0: continue
+                                                _r = "1" if _fg > _ag else ("X" if _fg==_ag else "2")
+                                                _pm = {"1":_pr_s["p_home"],"X":_pr_s["p_draw"],"2":_pr_s["p_away"]}
+                                                for _t in ["1","X","2"]:
+                                                    _aml_preds.append({
+                                                        "p":_pm[_t], "y":1 if _r==_t else 0,
+                                                        "fo":1/_pm[_t] if _pm[_t]>0 else 99,
+                                                    })
+                                            except Exception: continue
+
+                                    if len(_aml_preds) < 20: continue
+                                    _apdf = pd.DataFrame(_aml_preds)
+                                    _bs = float(((_apdf["p"] - _apdf["y"])**2).mean())
+                                    _vbp = _apdf[_apdf["p"] >= _prog]
+                                    if len(_vbp) >= 5:
+                                        _pnl_s = sum(r["fo"]-1 if r["y"]==1 else -1 for _,r in _vbp.iterrows())
+                                        _yld = _pnl_s / len(_vbp) * 100
+                                        _hr2 = _vbp["y"].mean()
+                                    else:
+                                        _yld = 0.0; _hr2 = 0.0
+                                    _aml_results.append({
+                                        "SOT_W": _sw, "TAU": _tau, "PROG": _prog,
+                                        "Brier": round(_bs,5), "Yield%": round(_yld,2),
+                                        "Hit%": round(_hr2*100,1), "N": len(_vbp),
+                                    })
+                                except Exception: continue
+
+                    _aml_pbar.empty()
+                    if not _aml_results:
+                        st.error("Brak wystarczających danych.")
+                    else:
+                        _aml_res_df = pd.DataFrame(_aml_results)
+                        _sort_col = ("Brier" if "Brier" in _aml_target
+                                     else ("Yield%" if "Yield" in _aml_target else "Hit%"))
+                        _asc = _sort_col == "Brier"
+                        _aml_res_df = _aml_res_df.sort_values(_sort_col, ascending=_asc)
+                        _best = _aml_res_df.iloc[0]
+
+                        st.success(
+                            f"✅ **Najlepsze parametry** ({_sort_col}): "
+                            f"SOT_W={_best['SOT_W']:.2f} · TAU={_best['TAU']:.0f} · "
+                            f"PROG={_best['PROG']:.2f} | "
+                            f"Brier={_best['Brier']:.5f} · "
+                            f"Yield={_best['Yield%']:+.2f}% · "
+                            f"Hit={_best['Hit%']:.1f}%")
+
+                        st.markdown("**Top 10 konfiguracji:**")
+                        _aml_html_rows = ""
+                        for _i, (_, _row) in enumerate(_aml_res_df.head(10).iterrows()):
+                            _bg = "background:#0d1a0d;" if _i == 0 else ""
+                            _yc = "#4CAF50" if _row["Yield%"] >= 0 else "#F44336"
+                            _aml_html_rows += (
+                                f"<tr style='{_bg}'>"
+                                f"<td style='padding:5px 10px;text-align:center;color:#666'>{_i+1}</td>"
+                                f"<td style='padding:5px 10px;text-align:center;color:#4CAF50;font-weight:700'>{_row['SOT_W']:.2f}</td>"
+                                f"<td style='padding:5px 10px;text-align:center;color:#2196F3;font-weight:700'>{_row['TAU']:.0f}</td>"
+                                f"<td style='padding:5px 10px;text-align:center;color:#FF9800;font-weight:700'>{_row['PROG']:.2f}</td>"
+                                f"<td style='padding:5px 10px;text-align:center;color:#aaa'>{_row['Brier']:.5f}</td>"
+                                f"<td style='padding:5px 10px;text-align:center;color:{_yc};font-weight:700'>{_row['Yield%']:+.2f}%</td>"
+                                f"<td style='padding:5px 10px;text-align:center;color:#888'>{_row['Hit%']:.1f}%</td>"
+                                f"<td style='padding:5px 10px;text-align:center;color:#555'>{_row['N']:.0f}</td>"
+                                f"</tr>")
+                        st.markdown(
+                            "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028'>"
+                            "<table style='width:100%;border-collapse:collapse'>"
+                            "<thead><tr style='background:#0d0f14;color:#444;font-size:0.70em;text-transform:uppercase'>"
+                            "<th style='padding:5px'>#</th><th style='padding:5px'>SOT_W</th>"
+                            "<th style='padding:5px'>TAU</th><th style='padding:5px'>PROG</th>"
+                            "<th style='padding:5px'>Brier↓</th><th style='padding:5px'>Yield</th>"
+                            "<th style='padding:5px'>Hit%</th><th style='padding:5px'>N</th>"
+                            f"</tr></thead><tbody>{_aml_html_rows}</tbody></table></div>",
+                            unsafe_allow_html=True)
+
+                        st.caption(
+                            f"Aktualnie: SOT_W={SOT_BLEND_W:.2f} · "
+                            f"TAU={LIGI[_aml_liga_sel]['tau']:.0f} · PROG={PROG_PEWNY:.2f} | "
+                            "⚠️ Aby zastosować — zaktualizuj stałe w app.py")
 
 
     # =========================================================================
