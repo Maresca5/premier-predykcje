@@ -2779,7 +2779,7 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
         _auto_hour = datetime.now().hour
         _auto_done = st.session_state.get(_auto_key, False)
         _stats_auto = _oa.get_usage_stats(_OA_DB)
-        _rem_auto = _stats_auto.get("requests_remaining", 500)
+        _rem_auto = _stats_auto.get("requests_remaining") or 500
         _last_auto = _stats_auto.get("last_per_liga", {}).get(_CSV_CODE)
         # Sprawdź czy dane są stare (>6h)
         _data_stale = True
