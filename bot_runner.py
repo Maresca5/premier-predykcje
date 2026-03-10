@@ -711,7 +711,68 @@ def handle_status(token: str, chat_id: str):
     except Exception as e:
         send_message(token, chat_id, f"❌ Błąd bazy: {e}")
 
-def handle_help(token: str, chat_id: str):
+def handle_debug(token: str, chat_id: str):
+    """Diagnostyka krok po kroku — co działa, co nie."""
+    lines = [f"🔧 <b>Debug bot_runner</b> · {datetime.now().strftime('%d.%m %H:%M:%S')}\n"]
+
+    # 1. Klucze API
+    lines.append(f"<b>Klucze:</b>")
+    lines.append(f"  TG token: {'✅ ok' if _TG_TOKEN else '❌ brak'}")
+    lines.append(f"  TG chat:  {'✅ ' + str(_TG_CHAT) if _TG_CHAT else '❌ brak'}")
+    lines.append(f"  FD key:   {'✅ ok' if _FD_API_KEY else '❌ brak'}")
+    lines.append(f"  Sezon:    {BIEZACY_SEZON}\n")
+
+    # 2. Per liga — dane
+    lines.append(f"<b>Dane per liga:</b>")
+    for liga_name, cfg in LIGI.items():
+        flag = LIGA_EMOJI.get(liga_name, "⚽")
+        try:
+            hl = load_historical(cfg["csv_code"])
+            sl = load_schedule(cfg["fd_org_id"])
+            if hl.empty and sl.empty:
+                lines.append(f"  {flag} {liga_name}: ❌ brak CSV i terminarza")
+                continue
+            if hl.empty:
+                lines.append(f"  {flag} {liga_name}: ❌ brak CSV historii")
+                continue
+            if sl.empty:
+                lines.append(f"  {flag} {liga_name}: ❌ brak terminarza")
+                continue
+            srl = oblicz_statystyki(hl)
+            avg = oblicz_srednie(hl)
+            kol = get_current_round(sl)
+            mecze = sl[sl["round"].isin([kol, kol + 1])]
+            idx = list(srl.index)
+            # Policz ile meczów ma dopasowane nazwy
+            n_ok = 0
+            for _, m in mecze.iterrows():
+                h_raw = map_nazwa(m["home_team"])
+                a_raw = map_nazwa(m["away_team"])
+                h = h_raw if h_raw in idx else next(
+                    (x for x in idx if x.lower() in h_raw.lower() or h_raw.lower() in x.lower()), None)
+                a = a_raw if a_raw in idx else next(
+                    (x for x in idx if x.lower() in a_raw.lower() or a_raw.lower() in x.lower()), None)
+                if h and a:
+                    n_ok += 1
+            lines.append(
+                f"  {flag} {liga_name}: ✅ CSV={len(hl)}m · sched={len(sl)}m · "
+                f"kol#{kol} · {len(mecze)} meczów · {n_ok} dopasowanych · "
+                f"stat={len(srl)} drużyn · rho={avg.get('rho', 0):.3f}")
+        except Exception as e:
+            lines.append(f"  {flag} {liga_name}: 💥 {type(e).__name__}: {str(e)[:60]}")
+
+    # 3. Test predykcji dla jednego meczu
+    lines.append(f"\n<b>Test predykcji (lam_h=1.8, lam_a=1.0, E0):</b>")
+    try:
+        pr = predykcja(1.8, 1.0, rho=-0.13, csv_code="E0", n_train=150)
+        lines.append(f"  typ={pr['typ']} p={pr['p_typ']:.3f} fo={pr['fo_typ']:.2f}")
+        lines.append(f"  >= PROG_PEWNY({PROG_PEWNY})? {pr['p_typ'] >= PROG_PEWNY}")
+    except Exception as e:
+        lines.append(f"  💥 {e}")
+
+    send_message(token, chat_id, "\n".join(lines))
+
+
     send_message(token, chat_id,
         "🤖 <b>Komendy bota predykcji</b>\n\n"
         "/value  – value bety z 5 lig (p≥58%)\n"
@@ -750,6 +811,8 @@ def _bot_loop():
 
                 if cmd == "/value":
                     handle_value(token, chat_id)
+                elif cmd == "/debug":
+                    handle_debug(token, chat_id)
                 elif cmd == "/status":
                     handle_status(token, chat_id)
                 elif cmd == "/help":
