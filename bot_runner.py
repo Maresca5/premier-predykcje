@@ -953,3 +953,4 @@ def start(tg_token: str = None, tg_chat: str = None, fd_api_key: str = None):
 if __name__ == "__main__":
     log.info("Running bot_runner standalone")
     _bot_loop()
+ 
