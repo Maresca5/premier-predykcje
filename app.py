@@ -79,121 +79,195 @@ st.set_page_config(page_title="⚽ Football Analytics", page_icon="⚽", layout=
 # ── Global CSS ────────────────────────────────────────────
 st.markdown("""
 <style>
+/* ═══════════════════════════════════════════════════════════
+   CSS CUSTOM PROPERTIES – dark/light na podstawie systemu
+   ═══════════════════════════════════════════════════════════ */
+:root {
+    /* Dark mode (domyślny – Streamlit domyślnie dark) */
+    --bg-app:        #0d0f14;
+    --bg-sidebar:    #111318;
+    --bg-card:       #14161c;
+    --bg-card2:      #1a1c24;
+    --bg-input:      #1e2028;
+    --border:        #1e2028;
+    --border-light:  #252d40;
+    --text-primary:  #e8e8e8;
+    --text-secondary:#ccc;
+    --text-muted:    #888;
+    --text-dim:      #666;
+    --text-dimmer:   #444;
+    --accent:        #4CAF50;
+    --accent-dim:    rgba(76,175,80,0.07);
+    --accent-bg:     #0d1f0d;
+    --accent-border: #2e7d32;
+    --danger:        #F44336;
+    --warn:          #FF9800;
+    --info:          #2196F3;
+    --expander-bg:   linear-gradient(90deg, #141824 0%, #0d0f14 100%);
+    --btn-bg:        linear-gradient(135deg, #1a4a1a, #2a6b2a);
+    --btn-hover:     linear-gradient(135deg, #2a6b2a, #388e3c);
+    --metric-bg:     #14161c;
+    --vb-card-bg:    linear-gradient(145deg, #0d1f0d, #111a11);
+    --pill-bg:       #14161c;
+    --onboard-bg:    linear-gradient(135deg, #0d1f3a, #0d1a0d);
+    --onboard-h:     #64b5f6;
+    --onboard-p:     #8899aa;
+    --rynek-row-bdr: #1a1a24;
+    --rynek-bg:      #1a1a24;
+    --section-text:  #e0e0e0;
+}
+
+/* Light mode override */
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg-app:        #f5f6fa;
+        --bg-sidebar:    #ffffff;
+        --bg-card:       #ffffff;
+        --bg-card2:      #f0f2f6;
+        --bg-input:      #e8eaf0;
+        --border:        #d1d5e0;
+        --border-light:  #c4cad8;
+        --text-primary:  #111318;
+        --text-secondary:#2c2f3a;
+        --text-muted:    #5a6070;
+        --text-dim:      #7a8090;
+        --text-dimmer:   #aab0bc;
+        --accent:        #2e7d32;
+        --accent-dim:    rgba(46,125,50,0.07);
+        --accent-bg:     #f0f9f0;
+        --accent-border: #4CAF50;
+        --danger:        #c62828;
+        --warn:          #e65100;
+        --info:          #1565c0;
+        --expander-bg:   linear-gradient(90deg, #f0f2f8 0%, #f5f6fa 100%);
+        --btn-bg:        linear-gradient(135deg, #2e7d32, #388e3c);
+        --btn-hover:     linear-gradient(135deg, #388e3c, #43a047);
+        --metric-bg:     #ffffff;
+        --vb-card-bg:    linear-gradient(145deg, #f0f9f0, #f5fff5);
+        --pill-bg:       #f0f2f6;
+        --onboard-bg:    linear-gradient(135deg, #e3f0ff, #f0fff0);
+        --onboard-h:     #1565c0;
+        --onboard-p:     #445566;
+        --rynek-row-bdr: #e0e4ef;
+        --rynek-bg:      #eef0f8;
+        --section-text:  #111318;
+    }
+}
+
 /* ── Tło i typografia ── */
-[data-testid="stAppViewContainer"] { background: #0d0f14; }
-[data-testid="stSidebar"]          { background: #111318; border-right: 1px solid #1e2028; }
-h1, h2, h3 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; }
+[data-testid="stAppViewContainer"] { background: var(--bg-app); }
+[data-testid="stSidebar"]          { background: var(--bg-sidebar); border-right: 1px solid var(--border); }
+h1, h2, h3 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; color: var(--text-primary); }
 
 /* ── Tabs ── */
 [data-testid="stTabs"] button {
     font-size: 0.82em; font-weight: 500; padding: 6px 14px;
-    border-radius: 6px 6px 0 0; color: #666; transition: all .2s;
+    border-radius: 6px 6px 0 0; color: var(--text-dim); transition: all .2s;
 }
 [data-testid="stTabs"] button[aria-selected="true"] {
-    color: #4CAF50 !important; border-bottom: 2px solid #4CAF50 !important;
-    background: rgba(76,175,80,0.07) !important;
+    color: var(--accent) !important; border-bottom: 2px solid var(--accent) !important;
+    background: var(--accent-dim) !important;
 }
-[data-testid="stTabs"] button:hover { color: #aaa !important; background: rgba(255,255,255,0.04) !important; }
+[data-testid="stTabs"] button:hover { color: var(--text-muted) !important; background: rgba(128,128,128,0.06) !important; }
 
 /* ── Metryki ── */
 [data-testid="stMetric"] {
-    background: #14161c; border: 1px solid #1e2028;
+    background: var(--metric-bg); border: 1px solid var(--border);
     border-radius: 10px; padding: 14px 16px;
 }
-[data-testid="stMetricLabel"] { font-size: 0.72em !important; color: #666 !important; text-transform: uppercase; letter-spacing: 0.05em; }
-[data-testid="stMetricValue"] { font-size: 1.55em !important; font-weight: 700 !important; color: #fff !important; }
+[data-testid="stMetricLabel"] { font-size: 0.72em !important; color: var(--text-dim) !important; text-transform: uppercase; letter-spacing: 0.05em; }
+[data-testid="stMetricValue"] { font-size: 1.55em !important; font-weight: 700 !important; color: var(--text-primary) !important; }
 [data-testid="stMetricDelta"]  { font-size: 0.78em !important; }
 
 /* ── Przyciski ── */
 [data-testid="stButton"] > button {
-    background: linear-gradient(135deg, #1a4a1a, #2a6b2a);
-    color: #fff; border: 1px solid #2e7d32; border-radius: 8px;
+    background: var(--btn-bg);
+    color: #fff; border: 1px solid var(--accent-border); border-radius: 8px;
     font-weight: 600; transition: all .2s;
 }
-[data-testid="stButton"] > button:hover { background: linear-gradient(135deg, #2a6b2a, #388e3c); border-color: #4CAF50; transform: translateY(-1px); }
+[data-testid="stButton"] > button:hover { background: var(--btn-hover); border-color: var(--accent); transform: translateY(-1px); }
 
 /* ── Tabele dataframe ── */
-[data-testid="stDataFrame"] { border: 1px solid #1e2028 !important; border-radius: 8px !important; }
+[data-testid="stDataFrame"] { border: 1px solid var(--border) !important; border-radius: 8px !important; }
 
 /* ── Divider ── */
-hr { border-color: #1e2028 !important; margin: 20px 0 !important; }
+hr { border-color: var(--border) !important; margin: 20px 0 !important; }
 
 /* ── Sidebar progress ── */
-[data-testid="stSidebar"] .stProgress > div > div { background: #4CAF50 !important; }
+[data-testid="stSidebar"] .stProgress > div > div { background: var(--accent) !important; }
 
 /* ── Expander ── */
-details { border: 1px solid #1e2028 !important; border-radius: 8px !important; background: #14161c !important; }
-details summary { font-weight: 600 !important; color: #ccc !important; }
+details { border: 1px solid var(--border) !important; border-radius: 8px !important; background: var(--bg-card) !important; }
+details summary { font-weight: 600 !important; color: var(--text-secondary) !important; }
 
 /* ── Tooltips helper ── */
 .tooltip-label {
     display: inline-block; font-size: 0.72em; font-weight: 600;
-    color: #888; text-transform: uppercase; letter-spacing: 0.06em;
-    border-bottom: 1px dashed #444; cursor: help; margin-bottom: 2px;
+    color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em;
+    border-bottom: 1px dashed var(--border-light); cursor: help; margin-bottom: 2px;
 }
 
 /* ── Hero value bet card ── */
 .vb-card {
-    background: linear-gradient(145deg, #0d1f0d, #111a11);
-    border: 1px solid #2e7d32; border-radius: 12px;
+    background: var(--vb-card-bg);
+    border: 1px solid var(--accent-border); border-radius: 12px;
     padding: 16px 14px; text-align: center;
     transition: transform .2s, border-color .2s;
 }
-.vb-card:hover { transform: translateY(-2px); border-color: #4CAF50; }
-.vb-card .date   { font-size: 0.7em; color: #555; margin-bottom: 4px; }
-.vb-card .match  { font-size: 0.88em; font-weight: 700; color: #e8e8e8; margin-bottom: 8px; line-height: 1.3; }
-.vb-card .bet    { font-size: 1.15em; font-weight: 800; color: #4CAF50; }
-.vb-card .meta   { font-size: 0.78em; color: #888; margin-top: 5px; }
-.vb-card .ev     { color: #4CAF50; font-weight: 700; }
-.vb-card .kelly  { font-size: 0.76em; color: #81C784; margin-top: 4px; }
+.vb-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.vb-card .date   { font-size: 0.7em; color: var(--text-dim); margin-bottom: 4px; }
+.vb-card .match  { font-size: 0.88em; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; line-height: 1.3; }
+.vb-card .bet    { font-size: 1.15em; font-weight: 800; color: var(--accent); }
+.vb-card .meta   { font-size: 0.78em; color: var(--text-muted); margin-top: 5px; }
+.vb-card .ev     { color: var(--accent); font-weight: 700; }
+.vb-card .kelly  { font-size: 0.76em; color: var(--accent); margin-top: 4px; }
 
 /* ── Stat pill ── */
 .stat-pill {
-    display: inline-block; background: #14161c; border: 1px solid #1e2028;
+    display: inline-block; background: var(--pill-bg); border: 1px solid var(--border);
     border-radius: 20px; padding: 3px 10px; font-size: 0.75em;
-    color: #888; margin: 2px;
+    color: var(--text-muted); margin: 2px;
 }
 
 /* ── Section header ── */
 .section-header {
-    font-size: 1.1em; font-weight: 700; color: #e0e0e0;
-    border-left: 3px solid #4CAF50; padding-left: 10px; margin: 18px 0 12px 0;
+    font-size: 1.1em; font-weight: 700; color: var(--section-text);
+    border-left: 3px solid var(--accent); padding-left: 10px; margin: 18px 0 12px 0;
 }
 
 /* ── Onboarding banner ── */
 .onboard-banner {
-    background: linear-gradient(135deg, #0d1f3a, #0d1a0d);
-    border: 1px solid #1e3a5f; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;
+    background: var(--onboard-bg);
+    border: 1px solid var(--border-light); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;
 }
-.onboard-banner h3 { color: #64b5f6; margin: 0 0 10px 0; font-size: 1.05em; }
-.onboard-banner p  { color: #8899aa; font-size: 0.83em; margin: 0; line-height: 1.6; }
+.onboard-banner h3 { color: var(--onboard-h); margin: 0 0 10px 0; font-size: 1.05em; }
+.onboard-banner p  { color: var(--onboard-p); font-size: 0.83em; margin: 0; line-height: 1.6; }
 
 /* ── Hit rate badge ── */
-.hr-badge-green  { color: #4CAF50; font-weight: 700; }
-.hr-badge-orange { color: #FF9800; font-weight: 700; }
-.hr-badge-red    { color: #F44336; font-weight: 700; }
-.hr-badge-gray   { color: #666; }
+.hr-badge-green  { color: var(--accent); font-weight: 700; }
+.hr-badge-orange { color: var(--warn); font-weight: 700; }
+.hr-badge-red    { color: var(--danger); font-weight: 700; }
+.hr-badge-gray   { color: var(--text-dim); }
 
 /* ── Rynek row w tabeli skuteczności ── */
-.rynek-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #1a1a24; }
-.rynek-name { font-weight: 600; color: #ddd; min-width: 140px; font-size: 0.88em; }
-.rynek-bar-wrap { flex: 1; background: #1a1a24; border-radius: 4px; height: 8px; overflow: hidden; }
+.rynek-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--rynek-row-bdr); }
+.rynek-name { font-weight: 600; color: var(--text-primary); min-width: 140px; font-size: 0.88em; }
+.rynek-bar-wrap { flex: 1; background: var(--rynek-bg); border-radius: 4px; height: 8px; overflow: hidden; }
 .rynek-bar { height: 8px; border-radius: 4px; }
-.rynek-stats { font-size: 0.75em; color: #666; min-width: 120px; text-align: right; }
+.rynek-stats { font-size: 0.75em; color: var(--text-dim); min-width: 120px; text-align: right; }
 
 /* ── Expander nagłówki – subtelny gradient ── */
 [data-testid="stExpander"] details summary {
-    background: linear-gradient(90deg, #141824 0%, #0d0f14 100%);
-    border-left: 2px solid #252d40;
+    background: var(--expander-bg);
+    border-left: 2px solid var(--border-light);
     padding-left: 8px !important;
     border-radius: 4px;
     transition: border-color 0.2s;
 }
 [data-testid="stExpander"] details[open] summary {
-    border-left-color: #3a5a8a;
+    border-left-color: var(--info);
 }
-/* ── Kontrast: #555 → #777 ── */
-[data-testid="stExpander"] details summary p { color: #c8cdd6 !important; }
+[data-testid="stExpander"] details summary p { color: var(--text-secondary) !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -2653,16 +2727,7 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
             except Exception:
                 pass
 
-    # 📲 Telegram: polling komend (raz per sesja / rerun)
-    if _TG_OK:
-        _tg_poll_key = f"_tg_polled_{datetime.now().strftime('%Y%m%d%H%M')}"
-        if not st.session_state.get(_tg_poll_key):
-            try:
-                _tg.poll_commands()  # sprawdź /value /status /help
-                st.session_state[_tg_poll_key] = True
-            except Exception:
-                pass
-
+    # 📲 Telegram polling przeniesiony poniżej — po załadowaniu modelu (wartości betów ze wszystkich lig)
     # 📲 Telegram: zbiorczy poranny digest ze WSZYSTKICH lig (raz dziennie, 8-10 rano)
     # Działa niezależnie od aktywnej ligi — ładuje dane każdej ligi osobno
     if _TG_OK and _tg.should_send_morning("_all_ligi_"):
@@ -3072,6 +3137,90 @@ if not historical.empty:
     rho         = srednie_lig["rho"]
     n_biezacy   = srednie_lig["n_biezacy"]
     w_prev      = waga_poprzedniego(n_biezacy)
+
+    # ── 📲 Telegram polling — po załadowaniu modelu ──────────────────────────
+    # Teraz mamy dostęp do danych wszystkich lig, więc /value działa bez wchodzenia na stronę
+    if _TG_OK:
+        _tg_poll_key = f"_tg_polled_{datetime.now().strftime('%Y%m%d%H%M')}"
+        if not st.session_state.get(_tg_poll_key):
+            try:
+                # Funkcja obliczająca value bety ze WSZYSTKICH lig (closure z dostępem do cache)
+                def _tg_compute_all_vbs():
+                    _all = []
+                    for _tgl in LIGI.keys():
+                        try:
+                            _hl = load_historical(LIGI[_tgl]["csv_code"])
+                            _sl = load_schedule(LIGI[_tgl]["fd_org_id"], LIGI[_tgl]["file"])
+                            if _hl.empty or _sl.empty: continue
+                            _srl = oblicz_wszystkie_statystyki(_hl.to_json())
+                            _avg = oblicz_srednie_ligowe(_hl.to_json())
+                            if _srl is None or _srl.empty: continue
+                            _rho_l = float(_avg.get("rho", -0.13))
+                            _kol_l = get_current_round(_sl)
+                            _mecze_l = _sl[_sl["round"] == _kol_l]
+                            for _, _m in _mecze_l.iterrows():
+                                try:
+                                    _h = map_nazwa(_m["home_team"])
+                                    _a = map_nazwa(_m["away_team"])
+                                    if _h not in _srl.index or _a not in _srl.index: continue
+                                    _lh, _la, *_ = oblicz_lambdy(_h, _a, _srl, _avg, {},
+                                        csv_code=LIGI[_tgl]["csv_code"])
+                                    _pr = predykcja_meczu(_lh, _la, rho=_rho_l,
+                                        csv_code=LIGI[_tgl]["csv_code"])
+                                    # Kurs fair jako proxy jeśli brak live
+                                    _fo = _pr.get("fo_typ", 0)
+                                    _p  = _pr.get("p_typ", 0)
+                                    if _fo <= 1 or _p <= 0: continue
+                                    # Sprawdź kursy live
+                                    _kurs = _fo; _ev = _p * (_fo - 1) - (1 - _p)
+                                    if _OA_OK and _oa_key and _oa_cached:
+                                        _o = _oa.znajdz_kursy(_h, _a, _oa_cached)
+                                        if _o:
+                                            _kdc_t, _ = _kurs_dc_live(
+                                                _pr["typ"], _o["odds_h"], _o["odds_d"], _o["odds_a"])
+                                            if _kdc_t:
+                                                _kurs = _kdc_t
+                                                _ev = _p * (_kdc_t - 1) - (1 - _p)
+                                    _br_l = st.session_state.get(
+                                        "bankroll_per_liga", {}).get(_tgl, 1000.0)
+                                    _kel = kelly_stake(_p, _kurs, bankroll=_br_l)
+                                    _all.append({
+                                        "home": _h, "away": _a, "liga": _tgl,
+                                        "typ": _pr["typ"], "kurs": _kurs,
+                                        "p_model": _p, "ev": _ev,
+                                        "stake_pln": _kel.get("stake_pln", 0),
+                                        "kolejka": int(_kol_l),
+                                        "live_odds": _OA_OK and _oa_key and _oa_cached,
+                                    })
+                                except Exception: continue
+                        except Exception: continue
+                    return _all
+
+                # Funkcja statystyk per liga
+                def _tg_stats_fn():
+                    _stats = {}
+                    try:
+                        _con_s = sqlite3.connect(DB_FILE)
+                        for _tgl2 in LIGI.keys():
+                            _r = _con_s.execute(
+                                "SELECT COUNT(*), SUM(trafione), AVG(fair_odds) "
+                                "FROM zdarzenia WHERE liga=? AND sezon=? "
+                                "AND trafione IS NOT NULL AND rynek='1X2'",
+                                (_tgl2, BIEZACY_SEZON)).fetchone()
+                            if _r and _r[0] > 0:
+                                _n2, _t2, _afo2 = _r
+                                _roi2 = ((_t2*(_afo2-1)) - (_n2-_t2)) / _n2 * 100 if _n2 else 0
+                                _stats[_tgl2] = {"hr": _t2/_n2, "roi": _roi2, "n": _n2}
+                        _con_s.close()
+                    except Exception: pass
+                    return _stats
+
+                _tg.poll_commands(
+                    all_value_bets_fn=_tg_compute_all_vbs,
+                    stats_fn=_tg_stats_fn)
+                st.session_state[_tg_poll_key] = True
+            except Exception:
+                pass
 
     # Pobierz dane do ostrzeżeń sędziowskich
     # Drużyny aktualnie grające w lidze = z terminarza bieżącego sezonu
@@ -3494,6 +3643,33 @@ if not historical.empty:
                                 f"{_ki} {_ks:.0f} zł · f={_frac:.3f}</span>")
                         else:
                             _kelly_html = ""
+
+                        # ── Marża bukmachera ────────────────────────────────
+                        _margin_html = ""
+                        try:
+                            _fair_p = float(row["P"])
+                            _fo_v   = float(row["Fair"]) if row["Fair"] > 1 else 0
+                            _buk_v  = float(_kb) if _kb and _kb > 1 else _fo_v
+                            if _buk_v > 1 and _fair_p > 0:
+                                # Marża = implied_buk / implied_fair - 1
+                                _impl_buk  = 1 / _buk_v
+                                _impl_fair = _fair_p
+                                _margin_pct = (_impl_fair - _impl_buk) / _impl_fair
+                                _mc = "#4CAF50" if _margin_pct > 0 else "#F44336"
+                                _margin_lbl = (
+                                    f"Edge: <b style='color:{_mc}'>{_margin_pct:+.1%}</b>"
+                                    f" &nbsp;·&nbsp; "
+                                    f"Marża buk: <b style='color:#FF9800'>"
+                                    f"{max(0,(1/_buk_v)/(1/_fo_v)-1) if _fo_v > 1 else 0:.1%}</b>"
+                                    if _fo_v > 1 else
+                                    f"Edge: <b style='color:{_mc}'>{_margin_pct:+.1%}</b>")
+                                _margin_html = (
+                                    f"<div style='font-size:0.75em;color:#666;margin-top:3px'>"
+                                    f"p={_fair_p:.1%} · Fair={_fo_v:.2f} · {_margin_lbl}"
+                                    f"</div>")
+                        except Exception:
+                            pass
+
                         _lm = row.get("LineMovement")
                         _lm_html = ""
                         if isinstance(_lm, tuple) and len(_lm) == 2:
@@ -3510,7 +3686,6 @@ if not historical.empty:
                         _af = row.get("AwayForm", [])
                         _hp = row.get("HomePos", 0)
                         _ap = row.get("AwayPos", 0)
-                        # Konwersja lista→string dla _forma_html (oczekuje "WWLDW")
                         _hf_str = "".join(_hf) if isinstance(_hf, list) else (str(_hf) if _hf and str(_hf) != "nan" else "")
                         _af_str = "".join(_af) if isinstance(_af, list) else (str(_af) if _af and str(_af) != "nan" else "")
                         _hp = int(_hp) if _hp and str(_hp) != "nan" else 0
@@ -3555,6 +3730,8 @@ if not historical.empty:
                             f"</span>"
                             f"{_kelly_html}"
                             f"</div>"
+                            # Wiersz 3: marża bukmachera
+                            f"{_margin_html}"
                             f"{_lm_html}"
                             f"</div>",
                             unsafe_allow_html=True)
@@ -6246,22 +6423,65 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         for _lbl, _pi in _bb_indep_ps:
                             _bb_all_ps.append((_lbl, _pi, "⚡ niezależne"))
 
+                        # ── Wskaźnik korelacji (edukacyjny) ──────────────────
+                        _corr_diff = _bb_p_combo - _bb_p_ind_all
+                        _n_events  = len(_bb_all_ps)
+                        if abs(_corr_diff) < 0.005 or _n_events < 2:
+                            _corr_label = "Neutralna"
+                            _corr_ico   = "⚪"
+                            _corr_c     = "var(--text-dim)"
+                            _corr_bg    = "var(--bg-card2)"
+                            _corr_bdr   = "var(--border)"
+                            _corr_tip   = ("Zdarzenia praktycznie niezależne – bukmacher "
+                                           "mnoży kursy poprawnie.")
+                        elif _corr_diff > 0:
+                            _corr_label = f"Pozytywna (+{_corr_diff:.1%})"
+                            _corr_ico   = "🟢"
+                            _corr_c     = "#4CAF50"
+                            _corr_bg    = "#0a1a0a"
+                            _corr_bdr   = "#2e7d32"
+                            _corr_tip   = (f"Model liczy combo o {_corr_diff:.1%} wyżej niż mnożenie. "
+                                           "Zdarzenia idą razem częściej niż losowo — "
+                                           "bukmacher NIEDOSZACUJE Twój kurs.")
+                        else:
+                            _corr_label = f"Negatywna ({_corr_diff:.1%})"
+                            _corr_ico   = "🔴"
+                            _corr_c     = "#F44336"
+                            _corr_bg    = "#1a0a0a"
+                            _corr_bdr   = "#c62828"
+                            _corr_tip   = (f"Model liczy combo o {abs(_corr_diff):.1%} niżej niż mnożenie. "
+                                           "Zdarzenia wykluczają się częściej niż losowo — "
+                                           "bukmacher PRZESZACUJE Twój kurs.")
+                        if _n_events >= 2:
+                            st.markdown(
+                                f"<div style='background:{_corr_bg};border:1px solid {_corr_bdr};"
+                                f"border-radius:8px;padding:8px 14px;margin:8px 0;"
+                                f"display:flex;align-items:center;gap:12px'>"
+                                f"<div style='font-size:1.4em'>{_corr_ico}</div>"
+                                f"<div>"
+                                f"<div style='font-size:0.80em;font-weight:700;color:{_corr_c}'>"
+                                f"Korelacja zdarzeń: {_corr_label}</div>"
+                                f"<div style='font-size:0.74em;color:var(--text-muted);margin-top:2px'>"
+                                f"{_corr_tip}</div>"
+                                f"</div></div>",
+                                unsafe_allow_html=True)
+
                         st.markdown("---")
                         st.markdown("#### 📊 Wynik analizy")
 
                         # Tabela indywidualnych zdarzeń
                         _bb_rows = "".join([
                             f"<tr>"
-                            f"<td style='padding:6px 10px;font-size:0.85em;color:#d1d5db'>{_lbl}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;font-size:0.72em;color:#4b5563'>{_src}</td>"
-                            f"<td style='padding:6px 10px;text-align:right;font-weight:700;color:#4CAF50'>{_pi:.1%}</td>"
-                            f"<td style='padding:6px 10px;text-align:right;color:#9ca3af'>{1/_pi:.2f}</td>"
+                            f"<td style='padding:6px 10px;font-size:0.85em;color:var(--text-secondary)'>{_lbl}</td>"
+                            f"<td style='padding:6px 8px;text-align:center;font-size:0.72em;color:var(--text-dim)'>{_src}</td>"
+                            f"<td style='padding:6px 10px;text-align:right;font-weight:700;color:var(--accent)'>{_pi:.1%}</td>"
+                            f"<td style='padding:6px 10px;text-align:right;color:var(--text-muted)'>{1/_pi:.2f}</td>"
                             f"</tr>"
                             for _lbl, _pi, _src in _bb_all_ps
                         ])
                         st.markdown(
                             "<table style='width:100%;border-collapse:collapse;margin-bottom:8px'>"
-                            "<thead><tr style='font-size:0.72em;color:#555;text-transform:uppercase;background:#0d1117'>"
+                            "<thead><tr style='font-size:0.72em;color:var(--text-dimmer);text-transform:uppercase;background:var(--bg-card2)'>"
                             "<th style='padding:5px 10px;text-align:left'>Zdarzenie</th>"
                             "<th style='padding:5px 8px;text-align:center'>Metoda</th>"
                             "<th style='padding:5px 10px;text-align:right'>P model</th>"
@@ -6270,46 +6490,44 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             unsafe_allow_html=True)
 
                         # Wynik kombo: Poisson vs mnożone
-                        _corr_diff = _bb_p_combo - _bb_p_ind_all
-                        _corr_sign = "↑ korelacja pozytywna" if _corr_diff > 0.005 else ("↓ korelacja negatywna" if _corr_diff < -0.005 else "≈ brak korelacji")
-                        _corr_col  = "#4CAF50" if _corr_diff > 0.005 else ("#F44336" if _corr_diff < -0.005 else "#888")
                         st.markdown(
-                            f"<div style='background:#111827;border-radius:10px;padding:14px;margin-top:4px'>"
+                            f"<div style='background:var(--bg-card);border-radius:10px;padding:14px;margin-top:4px;"
+                            f"border:1px solid var(--border)'>"
                             f"<div style='display:flex;justify-content:space-between;margin-bottom:10px'>"
                             f"<div style='text-align:center;flex:1'>"
-                            f"<div style='font-size:0.70em;color:#555;margin-bottom:3px;text-transform:uppercase'>P Poisson (poprawna)</div>"
-                            f"<div style='font-size:1.8em;font-weight:800;color:#4CAF50'>{_bb_p_combo:.1%}</div>"
-                            f"<div style='font-size:0.85em;color:#9ca3af'>Fair Odds: <b>{_bb_fair:.2f}</b></div>"
+                            f"<div style='font-size:0.70em;color:var(--text-dim);margin-bottom:3px;text-transform:uppercase'>P Poisson (poprawna)</div>"
+                            f"<div style='font-size:1.8em;font-weight:800;color:var(--accent)'>{_bb_p_combo:.1%}</div>"
+                            f"<div style='font-size:0.85em;color:var(--text-muted)'>Fair Odds: <b>{_bb_fair:.2f}</b></div>"
                             f"</div>"
-                            f"<div style='width:1px;background:#1f2937;margin:0 10px'></div>"
+                            f"<div style='width:1px;background:var(--border);margin:0 10px'></div>"
                             f"<div style='text-align:center;flex:1'>"
-                            f"<div style='font-size:0.70em;color:#555;margin-bottom:3px;text-transform:uppercase'>P mnożone (błędna)</div>"
-                            f"<div style='font-size:1.8em;font-weight:800;color:#6b7280'>{_bb_p_ind_all:.1%}</div>"
-                            f"<div style='font-size:0.85em;color:#6b7280'>Fair Odds: <b>{_bb_fair_ind:.2f}</b></div>"
+                            f"<div style='font-size:0.70em;color:var(--text-dim);margin-bottom:3px;text-transform:uppercase'>P mnożone (błędna)</div>"
+                            f"<div style='font-size:1.8em;font-weight:800;color:var(--text-dimmer)'>{_bb_p_ind_all:.1%}</div>"
+                            f"<div style='font-size:0.85em;color:var(--text-dimmer)'>Fair Odds: <b>{_bb_fair_ind:.2f}</b></div>"
                             f"</div></div>"
-                            f"<div style='border-top:1px solid #1f2937;padding-top:8px;"
+                            f"<div style='border-top:1px solid var(--border);padding-top:8px;"
                             f"display:flex;justify-content:space-between;align-items:center'>"
-                            f"<div style='font-size:0.78em;color:{_corr_col}'>"
-                            f"🔗 {_corr_sign} ({_corr_diff:+.1%})</div>"
-                            f"<div style='font-size:0.78em;color:#555'>Zdarzeń: {len(_bb_all_ps)}</div>"
+                            f"<div style='font-size:0.78em;color:{_corr_c}'>"
+                            f"{_corr_ico} {_corr_label} ({_corr_diff:+.1%})</div>"
+                            f"<div style='font-size:0.78em;color:var(--text-dim)'>Zdarzeń: {len(_bb_all_ps)}</div>"
                             f"</div></div>",
                             unsafe_allow_html=True)
 
                         # Werdykt vs kurs buka
                         if _bb_kurs_buk > 1.05:
-                            _verd_bg  = "#0d1f0d" if _bb_ev > 0 else "#1f0d0d"
-                            _verd_brd = "#4CAF50" if _bb_ev > 0 else "#F44336"
+                            _verd_bg  = "var(--accent-bg)" if _bb_ev > 0 else "var(--bg-card2)"
+                            _verd_brd = "var(--accent-border)" if _bb_ev > 0 else "var(--danger)"
                             _verd_ico = "✅ WARTOŚĆ" if _bb_ev > 0 else ("⚠️ NEUTRALNY" if _bb_ev > -0.05 else "❌ BRAK WARTOŚCI")
                             _margin_warn = ""
                             if _bb_fair > 0 and _bb_kurs_buk < _bb_fair * 0.85:
                                 _margin_warn = (
-                                    f"<div style='font-size:0.74em;color:#F44336;margin-top:4px'>"
+                                    f"<div style='font-size:0.74em;color:var(--danger);margin-top:4px'>"
                                     f"⚠️ Kurs buka o {(_bb_fair-_bb_kurs_buk)/_bb_fair:.0%} poniżej Fair "
                                     f"— marża bukmachera pochłania wartość.</div>")
                             st.markdown(
                                 f"<div style='background:{_verd_bg};border:1px solid {_verd_brd};"
                                 f"border-radius:8px;padding:12px 14px;margin-top:8px'>"
-                                f"<div style='font-size:0.72em;color:#555;text-transform:uppercase;"
+                                f"<div style='font-size:0.72em;color:var(--text-dim);text-transform:uppercase;"
                                 f"letter-spacing:.06em;margin-bottom:6px'>Werdykt</div>"
                                 f"<div style='display:flex;justify-content:space-between;"
                                 f"align-items:center;flex-wrap:wrap;gap:8px'>"
@@ -6317,7 +6535,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 f"{_verd_ico}</span></div>"
                                 f"<div style='text-align:right;font-size:0.85em'>"
                                 f"<div>Buk: <b>{_bb_kurs_buk:.2f}</b> vs Fair: "
-                                f"<b style='color:#4CAF50'>{_bb_fair:.2f}</b></div>"
+                                f"<b style='color:var(--accent)'>{_bb_fair:.2f}</b></div>"
                                 f"<div>EV: <b style='color:{_bb_ev_c}'>{_bb_ev:+.3f}</b> na jedn.</div>"
                                 f"</div></div>{_margin_warn}</div>",
                                 unsafe_allow_html=True)
@@ -7595,12 +7813,56 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             if "kolejka" in _diag_df.columns:
                 st.markdown("#### Drift modelu przez sezon")
                 _drift = _diag_df.groupby("kolejka").agg(
-                    hr=("hit","mean"), avg_p=("p_typ","mean")).reset_index()
+                    hr=("hit","mean"), avg_p=("p_typ","mean"),
+                    brier=("brier_pkt","mean") if "brier_pkt" in _diag_df.columns else ("hit","mean")
+                ).reset_index()
                 if len(_drift) >= 3:
                     _drift_chart = _drift.set_index("kolejka")[["hr","avg_p"]].rename(
                         columns={"hr":"Actual Hit Rate","avg_p":"Avg Model p"})
                     st.line_chart(_drift_chart, height=160)
                     st.caption("Zbieznosc linii = dobra kalibracja. Niebieska nad pomaranczowa = model niedoszacowuje.")
+
+                # ── Alert: Brier Score w ostatnich 10 meczach ─────────────────
+                if "brier_pkt" in _diag_df.columns and len(_diag_df) >= 10:
+                    _brier_recent = float(_diag_df.tail(10)["brier_pkt"].mean())
+                    _brier_all    = float(_diag_df["brier_pkt"].mean())
+                    _brier_delta  = _brier_recent - _brier_all
+                    _brier_thresh = 0.04  # +4pp powyżej średniej = niepokojący wzrost
+
+                    if _brier_delta > _brier_thresh:
+                        _drift_sev = "🔴 Krytyczny" if _brier_delta > 0.08 else "🟡 Umiarkowany"
+                        st.markdown(
+                            f"<div style='background:var(--bg-card2);border:1px solid var(--warn);"
+                            f"border-radius:8px;padding:10px 14px;margin:8px 0'>"
+                            f"<div style='font-size:0.82em;font-weight:700;color:var(--warn)'>"
+                            f"⚠️ {_drift_sev} drift Brier Score</div>"
+                            f"<div style='font-size:0.78em;color:var(--text-muted);margin-top:4px'>"
+                            f"Ostatnie 10 meczów: <b style='color:var(--warn)'>{_brier_recent:.4f}</b> "
+                            f"vs średnia sezonu: <b>{_brier_all:.4f}</b> "
+                            f"(Δ <b style='color:var(--warn)'>+{_brier_delta:.4f}</b>)"
+                            f"</div>"
+                            f"<div style='font-size:0.76em;color:var(--text-dim);margin-top:6px;"
+                            f"border-top:1px solid var(--border);padding-top:6px'>"
+                            f"💡 <b>Sugestia modelu:</b> Rozważ zwiększenie shrinkage — podwyż próg pewności "
+                            f"<code>PROG_PEWNY</code> o 2–4pp lub zmniejsz <code>KF</code> do trybu konserwatywnego. "
+                            f"Możliwa zmiana siły drużyn (kontuzje, forma) nieuwzględniona w danych."
+                            f"</div></div>",
+                            unsafe_allow_html=True)
+                    elif _brier_delta < -_brier_thresh:
+                        st.markdown(
+                            f"<div style='background:var(--bg-card2);border:1px solid var(--accent);"
+                            f"border-radius:8px;padding:10px 14px;margin:8px 0'>"
+                            f"<div style='font-size:0.82em;font-weight:700;color:var(--accent)'>"
+                            f"✅ Model poprawia się</div>"
+                            f"<div style='font-size:0.78em;color:var(--text-muted);margin-top:4px'>"
+                            f"Ostatnie 10 meczów: Brier <b style='color:var(--accent)'>{_brier_recent:.4f}</b> "
+                            f"vs średnia: <b>{_brier_all:.4f}</b> — kalibracja lepsza niż sezonowa.</div>"
+                            f"</div>",
+                            unsafe_allow_html=True)
+                    else:
+                        st.caption(
+                            f"📊 Brier (ostatnie 10): {_brier_recent:.4f} · "
+                            f"Sezon: {_brier_all:.4f} · Δ {_brier_delta:+.4f} — stabilny")
 
 else:
     st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
