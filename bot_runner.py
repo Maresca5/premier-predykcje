@@ -44,6 +44,11 @@ log = logging.getLogger("bot_runner")
 _BOT_STARTED = False
 _BOT_LOCK    = threading.Lock()
 
+# Klucze API — wstrzykiwane przez start() z kontekstu Streamlit
+_TG_TOKEN  = None
+_TG_CHAT   = None
+_FD_API_KEY = None
+
 # ── Konfiguracja (skopiowana z app.py, bez importowania Streamlit) ────────────
 LIGI = {
     "Premier League": {"csv_code": "E0",  "fd_org_id": 2021, "file": "terminarz_premier_2025.csv",  "tau": 30.0},
@@ -101,21 +106,10 @@ def _cache_set(key: str, value):
 # TELEGRAM API
 # ─────────────────────────────────────────────────────────────────────────────
 def _get_credentials():
-    """Pobiera token i chat_id z secrets lub zmiennych środowiskowych."""
-    token   = None
-    chat_id = None
-    # 1. Streamlit secrets (plik .streamlit/secrets.toml)
-    try:
-        import streamlit as _st
-        token   = _st.secrets.get("TELEGRAM_BOT_TOKEN")
-        chat_id = str(_st.secrets.get("TELEGRAM_CHAT_ID", ""))
-    except Exception:
-        pass
-    # 2. Zmienne środowiskowe (fallback dla lokalnego uruchomienia)
-    if not token:
-        token   = os.environ.get("TELEGRAM_BOT_TOKEN")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    return token, chat_id
+    """Zwraca (token, chat_id) — wstrzyknięte przez start() lub z env."""
+    token   = _TG_TOKEN   or os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = _TG_CHAT    or os.environ.get("TELEGRAM_CHAT_ID", "")
+    return token, str(chat_id)
 
 def _tg_api(token: str, method: str, **kwargs) -> dict:
     try:
@@ -327,16 +321,9 @@ def load_schedule(fd_org_id: int) -> pd.DataFrame:
     if cached is not None:
         return cached
 
-    token_fd = None
-    try:
-        import streamlit as _st
-        token_fd = _st.secrets.get("FOOTBALL_DATA_API_KEY")
-    except Exception:
-        pass
+    token_fd = _FD_API_KEY or os.environ.get("FOOTBALL_DATA_API_KEY")
     if not token_fd:
-        token_fd = os.environ.get("FOOTBALL_DATA_API_KEY")
-
-    if not token_fd:
+        log.warning(f"load_schedule: brak FOOTBALL_DATA_API_KEY")
         _cache_set(key, pd.DataFrame())
         return pd.DataFrame()
 
@@ -776,16 +763,20 @@ def _bot_loop():
 # ─────────────────────────────────────────────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────────────────────────────────────────────
-def start():
+def start(tg_token: str = None, tg_chat: str = None, fd_api_key: str = None):
     """Uruchamia bota jako daemon thread. Bezpieczne do wywołania wielokrotnie."""
-    global _BOT_STARTED
+    global _BOT_STARTED, _TG_TOKEN, _TG_CHAT, _FD_API_KEY
     with _BOT_LOCK:
+        # Zawsze zaktualizuj klucze (mogły być None przy pierwszym wywołaniu)
+        if tg_token:  _TG_TOKEN   = tg_token
+        if tg_chat:   _TG_CHAT    = tg_chat
+        if fd_api_key: _FD_API_KEY = fd_api_key
         if _BOT_STARTED:
             return
         _BOT_STARTED = True
         t = threading.Thread(target=_bot_loop, name="telegram-bot", daemon=True)
         t.start()
-        log.info("Telegram bot thread started (daemon)")
+        log.info(f"Telegram bot thread started — TG={'ok' if _TG_TOKEN else 'missing'} FD={'ok' if _FD_API_KEY else 'missing'}")
 
 if __name__ == "__main__":
     # Uruchomienie bezpośrednie: python bot_runner.py
