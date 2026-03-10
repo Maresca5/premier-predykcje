@@ -309,45 +309,51 @@ def _handle_value_command(token: str, chat_id: str, all_value_bets_fn):
 
     try:
         bets = all_value_bets_fn()
-        # all_value_bets_fn już filtruje po MIN_EV_DIGEST, ale zabezpieczamy
-        vbs = [b for b in bets if b.get("ev", 0) >= MIN_EV_DIGEST]
     except Exception as e:
         send_message(f"❌ Błąd pobierania danych: {e}", token, chat_id)
         return
 
+    # Filtruj: p_model >= 0.58 (identyczny próg jak na stronie)
+    # Bez live API kurs = fair odds → EV ≈ 0, więc filtrujemy po pewności modelu
+    vbs = [b for b in bets if b.get("p_model", 0) >= 0.58]
+
     if not vbs:
         send_message(
-            f"🔍 Brak value betów (EV ≥ {MIN_EV_DIGEST:.0%}) w żadnej lidze.\n\n"
-            "Sprawdź ponownie gdy terminarze kolejek będą znane.",
+            "🔍 Brak typów z pewnością modelu ≥ 58% w żadnej lidze.\n\n"
+            "Sprawdź ponownie gdy kolejka zostanie zaplanowana.",
             token, chat_id)
         return
 
-    # Grupuj per liga, w każdej lidze sortuj po EV malejąco
+    # Czy mamy live kursy z API?
+    has_live = any(b.get("live_odds") for b in vbs)
+    live_note = "" if has_live else "\n<i>⚠️ Brak live kursów (The Odds API) – kurs = fair odds modelu</i>"
+
+    # Grupuj per liga, sortuj po p_model malejąco
     by_liga = defaultdict(list)
     for b in vbs:
         by_liga[b.get("liga", "?")].append(b)
 
     now = datetime.now().strftime("%d.%m %H:%M")
-    sections = [f"💰 <b>Value Bets – wszystkie ligi</b>\n🕐 {now} · {len(vbs)} znaleziono\n"]
+    sections = [f"💰 <b>Value Bets – wszystkie ligi</b>\n🕐 {now} · {len(vbs)} typów{live_note}\n"]
 
     for liga, liga_bets in by_liga.items():
         flag = _LIGA_EMOJI.get(liga, "⚽")
-        liga_bets_sorted = sorted(liga_bets, key=lambda x: -x["ev"])[:5]  # max 5 per liga
+        liga_bets_sorted = sorted(liga_bets, key=lambda x: -x["p_model"])[:5]  # max 5 per liga
         sections.append(f"\n{flag} <b>{liga}</b>")
         for b in liga_bets_sorted:
             _data = f" · {b['data']}" if b.get("data") else ""
-            _live = " 🔴" if b.get("live_odds") else " ✦"
-            _stake = f" · 🏦 {b['stake_pln']:.0f} zł" if b.get("stake_pln", 0) > 0 else ""
+            _kurs_tag = "🔴live" if b.get("live_odds") else "✦fair"
+            _ev_str = f" · EV: {b['ev']:+.1%}" if abs(b.get("ev", 0)) > 0.001 else ""
+            _stake = f"\n  🏦 Kelly: {b['stake_pln']:.0f} zł" if b.get("stake_pln", 0) > 5 else ""
             sections.append(
                 f"  <b>{b['home']} – {b['away']}</b>{_data}\n"
-                f"  Typ: <b>{b['typ']}</b> @ <b>{b['kurs']:.2f}</b>{_live}"
-                f" · EV: <b>{b['ev']:+.1%}</b> · p={b['p_model']:.0%}{_stake}"
+                f"  Typ: <b>{b['typ']}</b> @ <b>{b['kurs']:.2f}</b> {_kurs_tag}"
+                f" · p=<b>{b['p_model']:.0%}</b>{_ev_str}{_stake}"
             )
 
     text = "\n".join(sections)
-    # Telegram limit 4096 znaków
     if len(text) > 4000:
-        text = text[:3900] + "\n\n<i>…(skrócono, za dużo betów)</i>"
+        text = text[:3900] + "\n\n<i>…(skrócono)</i>"
     send_message(text, token, chat_id)
 
 
