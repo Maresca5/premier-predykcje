@@ -6647,34 +6647,48 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _lr_html_rows = []
             for _lr in _lig_rows:
                 _bar_w = int(_lr["hr"] * 100)
-                _lr_logo_cell = _liga_img(_lr["liga"], size="20px",
-                                          style="margin-right:7px;vertical-align:middle")
+                _lr_logo_cell = _liga_img(_lr["liga"], size="26px",
+                    style="display:block;margin:0 auto 3px auto")
+                # Skrócona nazwa ligi pod logo
+                _lr_short = {"Premier League":"Premier L.","La Liga":"La Liga",
+                             "Bundesliga":"Bundesliga","Serie A":"Serie A","Ligue 1":"Ligue 1"}.get(_lr["liga"], _lr["liga"])
                 _lr_html_rows.append(
-                    f"<tr>"
-                    f"<td style='padding:8px 12px;font-weight:600;font-size:0.9em'>"
-                    f"{_lr_logo_cell}{_lr['liga']}</td>"
-                    f"<td style='padding:8px 10px;text-align:center;color:#888'>{_lr['n']}</td>"
-                    f"<td style='padding:8px 10px;width:140px'>"
-                    f"<div style='display:flex;align-items:center;gap:6px'>"
-                    f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:6px'>"
-                    f"<div style='background:{_lr['hr_col']};width:{_bar_w}%;height:6px;border-radius:3px'></div></div>"
-                    f"<span style='color:{_lr['hr_col']};font-weight:700;font-size:0.88em'>{_lr['hr']:.1%}</span>"
+                    f"<tr style='border-bottom:1px solid #1e1e2e'>"
+                    # Kolumna: logo + nazwa (pionowo)
+                    f"<td style='padding:10px 12px;min-width:90px'>"
+                    f"<div style='display:flex;flex-direction:column;align-items:center;gap:3px'>"
+                    f"{_lr_logo_cell}"
+                    f"<span style='font-size:0.72em;font-weight:600;color:#ccc;"
+                    f"text-align:center;white-space:nowrap'>{_lr_short}</span>"
                     f"</div></td>"
-                    f"<td style='padding:8px 10px;text-align:right;font-weight:700;color:{_lr['roi_col']}'>{_lr['roi']:+.1f}%</td>"
-                    f"<td style='padding:8px 10px;text-align:center;color:#888;font-size:0.84em'>{_lr['brier']:.4f}</td>"
-                    f"<td style='padding:8px 10px;text-align:center'>{_lr['status']}</td>"
+                    # Typów
+                    f"<td style='padding:10px 8px;text-align:center;color:#666;font-size:0.85em'>{_lr['n']}</td>"
+                    # Hit Rate (pasek)
+                    f"<td style='padding:10px 8px;min-width:100px'>"
+                    f"<div style='margin-bottom:3px'>"
+                    f"<span style='color:{_lr['hr_col']};font-weight:800;font-size:0.92em'>{_lr['hr']:.1%}</span>"
+                    f"</div>"
+                    f"<div style='background:#1a1c24;border-radius:3px;height:4px'>"
+                    f"<div style='background:{_lr['hr_col']};width:{_bar_w}%;height:4px;border-radius:3px'></div>"
+                    f"</div></td>"
+                    # ROI
+                    f"<td style='padding:10px 8px;text-align:right'>"
+                    f"<span style='font-weight:800;font-size:0.92em;color:{_lr['roi_col']}'>{_lr['roi']:+.1f}%</span>"
+                    f"</td>"
+                    # Brier
+                    f"<td style='padding:10px 8px;text-align:center;color:#555;font-size:0.80em'>{_lr['brier']:.4f}</td>"
                     f"</tr>"
                 )
             st.markdown(
                 "<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a3a'>"
                 "<table style='width:100%;border-collapse:collapse'>"
-                "<thead><tr style='background:#1e1e2e;color:#555;font-size:0.72em;text-transform:uppercase;letter-spacing:.05em'>"
-                "<th style='padding:8px 12px;text-align:left'>Liga</th>"
-                "<th style='padding:8px 10px;text-align:center'>Typów</th>"
-                "<th style='padding:8px 10px;text-align:left'>Hit Rate</th>"
-                "<th style='padding:8px 10px;text-align:right'>ROI</th>"
-                "<th style='padding:8px 10px;text-align:center'>Brier</th>"
-                "<th style='padding:8px 10px;text-align:center'>Status</th>"
+                "<thead><tr style='background:#1e1e2e;color:#444;font-size:0.68em;"
+                "text-transform:uppercase;letter-spacing:.06em'>"
+                "<th style='padding:7px 12px;text-align:center'>Liga</th>"
+                "<th style='padding:7px 8px;text-align:center'>Typów</th>"
+                "<th style='padding:7px 8px;text-align:left'>Hit Rate</th>"
+                "<th style='padding:7px 8px;text-align:right'>ROI</th>"
+                "<th style='padding:7px 8px;text-align:center'>Brier</th>"
                 f"</tr></thead><tbody>{''.join(_lr_html_rows)}</tbody></table></div>",
                 unsafe_allow_html=True
             )
@@ -6822,29 +6836,65 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 # Tabela
                 _ml_rows=[]
                 for _lname,_ld in sorted(_ml_results.items(),key=lambda x:-x[1]["bk"]):
-                    _lc=_ml_colors.get(_lname,"#888");_pnl=_ld["bk"]-_ML_KS
-                    _bkc="#4CAF50" if _ld["bk"]>=_ML_KS else "#F44336"
-                    _roic="#4CAF50" if _ld["roi"]>=0 else "#F44336"
-                    _icon="OK" if _ld["bk"]>=_ML_KS else "DD"
-                    _ml_logo_img = _liga_img(_lname, size="18px", style="margin-right:6px;vertical-align:middle")
+                    _lc   = _ml_colors.get(_lname,"#888")
+                    _pnl  = _ld["bk"] - _ML_KS
+                    _bkc  = "#4CAF50" if _ld["bk"] >= _ML_KS else "#F44336"
+                    _roic = "#4CAF50" if _ld["roi"] >= 0     else "#F44336"
+                    _is_ok = _ld["bk"] >= _ML_KS
+                    _status_dot = (
+                        f"<span style='display:inline-block;width:7px;height:7px;"
+                        f"border-radius:50%;background:{'#4CAF50' if _is_ok else '#F44336'};"
+                        f"margin-right:5px;vertical-align:middle'></span>")
+                    _ml_logo = _liga_img(_lname, size="22px",
+                        style="display:block;margin:0 auto 2px auto")
+                    _ml_short = {"Premier League":"PL","La Liga":"LaLiga",
+                                 "Bundesliga":"BL","Serie A":"SA","Ligue 1":"L1"}.get(_lname, _lname[:5])
                     _ml_rows.append(
-                        f"<tr><td style='padding:10px 12px'>"
-                        f"{_ml_logo_img}<span style='color:{_lc};font-weight:700'>{_icon} {_lname}</span></td>"
-                        f"<td style='padding:10px 12px;text-align:center'><span style='font-size:1.05em;font-weight:800;color:{_bkc}'>{_ld['bk']:.0f} zl</span></td>"
-                        f"<td style='padding:10px 10px;text-align:center'><span style='color:{_roic};font-weight:700'>{_pnl:+.0f} zl ({_ld['roi']:+.1f}%)</span></td>"
-                        f"<td style='padding:10px 10px;text-align:center;color:#aaa;font-size:0.85em'>{_ld['n']} - {_ld['hr']:.0%}</td>"
-                        f"<td style='padding:10px 10px;text-align:center;color:#F44336;font-size:0.82em'>{_ld['dd']:.1f}%</td>"
-                        f"<td style='padding:10px 10px;text-align:center;color:#666;font-size:0.82em'>{_ld['bk_flat']:.0f} zl</td></tr>"
+                        f"<tr style='border-bottom:1px solid #13141c'>"
+                        # Liga: logo + skrót
+                        f"<td style='padding:10px 12px;min-width:70px'>"
+                        f"<div style='display:flex;flex-direction:column;align-items:center;gap:2px'>"
+                        f"{_ml_logo}"
+                        f"<span style='font-size:0.70em;color:#aaa;font-weight:600;white-space:nowrap'>{_ml_short}</span>"
+                        f"</div></td>"
+                        # Bankroll Kelly – główna liczba
+                        f"<td style='padding:10px 12px;text-align:center'>"
+                        f"<div style='font-size:1.05em;font-weight:800;color:{_bkc}'>{_ld['bk']:.0f} zł</div>"
+                        f"<div style='font-size:0.72em;color:#555;margin-top:1px'>start {_ML_KS:.0f}</div>"
+                        f"</td>"
+                        # PnL + ROI badge
+                        f"<td style='padding:10px 10px;text-align:center'>"
+                        f"<div style='font-weight:700;color:{_roic}'>{_pnl:+.0f} zł</div>"
+                        f"<div style='display:inline-block;margin-top:3px;padding:1px 7px;"
+                        f"border-radius:10px;font-size:0.72em;font-weight:700;"
+                        f"background:{'#0d2a0d' if _is_ok else '#2a0d0d'};"
+                        f"color:{_roic}'>{_ld['roi']:+.1f}%</div>"
+                        f"</td>"
+                        # Typów / Hit
+                        f"<td style='padding:10px 10px;text-align:center'>"
+                        f"<div style='color:#aaa;font-size:0.85em'>{_ld['n']}</div>"
+                        f"<div style='color:#666;font-size:0.76em'>{_ld['hr']:.0%} hit</div>"
+                        f"</td>"
+                        # Max DD
+                        f"<td style='padding:10px 10px;text-align:center'>"
+                        f"<span style='color:#F44336;font-size:0.82em;font-weight:600'>"
+                        f"↓{_ld['dd']:.1f}%</span></td>"
+                        # Flat (ref)
+                        f"<td style='padding:10px 10px;text-align:center;color:#444;font-size:0.80em'>"
+                        f"{_ld['bk_flat']:.0f}</td>"
+                        f"</tr>"
                     )
                 st.markdown(
                     "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028;margin-top:8px'>"
                     "<table style='width:100%;border-collapse:collapse'>"
-                    "<thead><tr style='background:#13141c;color:#444;font-size:0.7em;text-transform:uppercase'>"
-                    "<th style='padding:8px 12px'>Liga</th><th style='padding:8px 12px;text-align:center'>Bankroll Kelly</th>"
-                    "<th style='padding:8px 12px;text-align:center'>PnL (ROI)</th>"
-                    "<th style='padding:8px 12px;text-align:center'>Typow - Hit</th>"
-                    "<th style='padding:8px 12px;text-align:center'>Max DD</th>"
-                    "<th style='padding:8px 12px;text-align:center'>Flat (ref)</th>"
+                    "<thead><tr style='background:#13141c;color:#444;font-size:0.68em;"
+                    "text-transform:uppercase;letter-spacing:.05em'>"
+                    "<th style='padding:7px 12px;text-align:center'>Liga</th>"
+                    "<th style='padding:7px 12px;text-align:center'>Bankroll</th>"
+                    "<th style='padding:7px 12px;text-align:center'>PnL / ROI</th>"
+                    "<th style='padding:7px 12px;text-align:center'>Typów / Hit</th>"
+                    "<th style='padding:7px 12px;text-align:center'>Max DD</th>"
+                    "<th style='padding:7px 12px;text-align:center'>Flat</th>"
                     f"</tr></thead><tbody>{''.join(_ml_rows)}</tbody></table></div>",
                     unsafe_allow_html=True)
                 st.caption(f"Globalnie: start {_ML_KS*len(_ml_results):.0f} zl - koncowy {_ml_global_bk:.0f} zl - PnL {_ml_total_pnl:+.0f} zl - ROI {_ml_global_roi:+.1f}%")
