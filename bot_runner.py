@@ -69,8 +69,13 @@ SOT_BLEND_W      = 0.30
 KELLY_BANKROLL   = 1000.0
 KELLY_PROB_SCALE = 0.85
 KELLY_FRAC_SCALE = 0.50
-PROG_PEWNY       = 0.58      # próg pewności (identyczny z app.py)
-MIN_EV_ALERT     = 0.08      # min EV dla powiadomień
+PROG_PEWNY       = 0.55      # identyczny z app.py (nie 0.58!)
+PROG_PODWOJNA    = 0.55      # próg dla 1X / X2
+MIN_EV_ALERT     = 0.08
+
+# Kalibracja shrinkage – identyczna z app.py
+KALIBRACJA_PER_LIGA = {"E0": 0.25, "SP1": 0.38, "D1": 0.40, "I1": 0.28, "F1": 0.45}
+SHRINK_ALPHA        = 0.25
 TELEGRAM_API     = "https://api.telegram.org/bot{token}/{method}"
 
 # ── Sezon ────────────────────────────────────────────────────────────────────
@@ -509,7 +514,39 @@ def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float, rho: float = -0.1
     s = M.sum()
     return M / s if s > 0 else M
 
-def predykcja(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
+def _get_shrink(csv_code: str, n_train: int = 200) -> float:
+    N_FULL  = 150
+    BONUS   = 0.20
+    base    = KALIBRACJA_PER_LIGA.get(csv_code, SHRINK_ALPHA)
+    dynamic = BONUS * max(0.0, 1.0 - min(n_train, N_FULL) / N_FULL)
+    return float(np.clip(base + dynamic, 0.0, 0.85))
+
+def kalibruj(p_home: float, p_draw: float, p_away: float,
+             csv_code: str = "E0", n_train: int = 200) -> tuple:
+    a = _get_shrink(csv_code, n_train)
+    ph = (1-a)*p_home + a/3
+    pd = (1-a)*p_draw + a/3
+    pa = (1-a)*p_away + a/3
+    s  = ph + pd + pa
+    return ph/s, pd/s, pa/s
+
+def wybierz_typ(p_home: float, p_draw: float, p_away: float,
+                csv_code: str = "E0", n_train: int = 200) -> tuple:
+    ph, pd, pa = kalibruj(p_home, p_draw, p_away, csv_code, n_train)
+    p_1x = ph + pd
+    p_x2 = pa + pd
+    is_bl = (csv_code == "D1")
+    if not is_bl:
+        if ph >= PROG_PEWNY: return "1",  ph
+        if pa >= PROG_PEWNY: return "2",  pa
+    if p_1x >= PROG_PODWOJNA or p_x2 >= PROG_PODWOJNA:
+        return ("1X", p_1x) if p_1x >= p_x2 else ("X2", p_x2)
+    probs = {"1": ph, "X": pd, "2": pa}
+    t = max(probs, key=probs.get)
+    return t, probs[t]
+
+def predykcja(lam_h: float, lam_a: float, rho: float = -0.13,
+              csv_code: str = "E0", n_train: int = 200) -> dict:
     max_g = int(np.clip(np.ceil(max(lam_h, lam_a) + 5), 8, 12))
     M = dixon_coles_adj(
         np.outer(poisson.pmf(range(max_g), lam_h),
@@ -517,19 +554,10 @@ def predykcja(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
         lam_h, lam_a, rho=rho)
     p_h = float(np.tril(M, -1).sum())
     p_d = float(np.trace(M))
-    p_a = float(np.triu(M, 1).sum())
-    # Kalibracja (KELLY_PROB_SCALE z app.py)
-    def cal(p):
-        excess = max(0, p - 0.5)
-        return 0.5 + excess * KELLY_PROB_SCALE
-    p_hc, p_dc, p_ac = cal(p_h), cal(p_d), cal(p_a)
-    s = p_hc + p_dc + p_ac
-    p_hc /= s; p_dc /= s; p_ac /= s
-    typ = max([("1", p_hc), ("X", p_dc), ("2", p_ac)], key=lambda x: x[1])
-    p_typ = typ[1]
+    p_a = float(np.triu(M,  1).sum())
+    typ, p_typ = wybierz_typ(p_h, p_d, p_a, csv_code, n_train)
     fo_typ = round(1 / p_typ, 2) if p_typ > 0 else 999
-    return {"typ": typ[0], "p_typ": p_typ, "fo_typ": fo_typ,
-            "p_home": p_hc, "p_draw": p_dc, "p_away": p_ac}
+    return {"typ": typ, "p_typ": p_typ, "fo_typ": fo_typ}
 
 def kelly_stake(p: float, kurs: float, bankroll: float = KELLY_BANKROLL) -> float:
     """Zwraca stawkę Kelly w PLN."""
@@ -590,7 +618,9 @@ def compute_value_bets() -> list:
                         n_skip_name += 1
                         continue
                     lam_h, lam_a = oblicz_lambdy(h, a, srl, avg)
-                    pr = predykcja(lam_h, lam_a, rho=rho)
+                    n_train = avg.get("n_biezacy", 200)
+                    pr = predykcja(lam_h, lam_a, rho=rho,
+                                   csv_code=cfg["csv_code"], n_train=n_train)
                     p  = pr["p_typ"]
                     fo = pr["fo_typ"]
                     if p < PROG_PEWNY or fo < 1.01:
