@@ -314,19 +314,29 @@ def _handle_value_command(token: str, chat_id: str, all_value_bets_fn):
         return
 
     # Filtruj: p_model >= 0.58 (identyczny próg jak na stronie)
-    # Bez live API kurs = fair odds → EV ≈ 0, więc filtrujemy po pewności modelu
     vbs = [b for b in bets if b.get("p_model", 0) >= 0.58]
+
+    # Debug info z session_state jeśli dostępny
+    _dbg = ""
+    try:
+        import streamlit as _st
+        _dbg_raw = _st.session_state.get("_tg_debug_last", "")
+        if _dbg_raw:
+            _dbg = f"\n\n<i>🔍 Diagnostyka:\n{_dbg_raw}</i>"
+    except Exception:
+        pass
 
     if not vbs:
         send_message(
             "🔍 Brak typów z pewnością modelu ≥ 58% w żadnej lidze.\n\n"
-            "Sprawdź ponownie gdy kolejka zostanie zaplanowana.",
+            "Sprawdź ponownie gdy kolejka zostanie zaplanowana."
+            + _dbg,
             token, chat_id)
         return
 
     # Czy mamy live kursy z API?
     has_live = any(b.get("live_odds") for b in vbs)
-    live_note = "" if has_live else "\n<i>⚠️ Brak live kursów (The Odds API) – kurs = fair odds modelu</i>"
+    live_note = "" if has_live else "\n<i>⚠️ Brak live kursów – kurs = fair odds modelu</i>"
 
     # Grupuj per liga, sortuj po p_model malejąco
     by_liga = defaultdict(list)
@@ -351,7 +361,7 @@ def _handle_value_command(token: str, chat_id: str, all_value_bets_fn):
                 f" · p=<b>{b['p_model']:.0%}</b>{_ev_str}{_stake}"
             )
 
-    text = "\n".join(sections)
+    text = "\n".join(sections) + _dbg
     if len(text) > 4000:
         text = text[:3900] + "\n\n<i>…(skrócono)</i>"
     send_message(text, token, chat_id)
