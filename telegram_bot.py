@@ -256,9 +256,7 @@ def _set_offset(offset: int):
 def poll_commands(all_value_bets_fn=None, stats_fn=None) -> list:
     """
     Sprawdź nowe wiadomości od użytkownika i odpowiedz na komendy.
-    all_value_bets_fn: callable() → lista dictów z value betami ze wszystkich lig
-    stats_fn:          callable() → dict z {'liga': {'hr':%, 'roi':%, 'n':int}}
-    Zwraca listę przetworzonych komend.
+    Polling przy każdym rerun Streamlit — offset zapobiega podwójnemu przetwarzaniu.
     """
     token, chat_id = _get_credentials()
     if not token or not chat_id:
@@ -270,32 +268,40 @@ def poll_commands(all_value_bets_fn=None, stats_fn=None) -> list:
         return []
 
     processed = []
-    for update in res.get("result", []):
+    updates = res.get("result", [])
+
+    # Jeśli brak updates i offset > 0, sprawdź czy nie przegapiliśmy czegoś
+    # (np. offset był ustawiony przez inną instancję bota)
+    if not updates and offset > 0:
+        # Nie resetuj — po prostu czekaj na następne wiadomości
+        pass
+
+    for update in updates:
         uid = update["update_id"]
-        _set_offset(uid + 1)
+        _set_offset(uid + 1)  # od razu przesuń offset żeby nie przetwarzać ponownie
 
         msg = update.get("message", {})
-        text = msg.get("text", "").strip().lower()
+        text = msg.get("text", "").strip()
         from_id = str(msg.get("chat", {}).get("id", ""))
 
         # Odpowiadaj tylko na wiadomości z chat_id właściciela
         if from_id != chat_id:
             continue
 
-        if text.startswith("/value"):
+        text_lower = text.lower()
+        if text_lower.startswith("/value"):
             _handle_value_command(token, chat_id, all_value_bets_fn)
             processed.append("value")
 
-        elif text.startswith("/status"):
+        elif text_lower.startswith("/status"):
             _handle_status_command(token, chat_id, stats_fn)
             processed.append("status")
 
-        elif text.startswith("/help"):
+        elif text_lower.startswith("/help"):
             _handle_help_command(token, chat_id)
             processed.append("help")
 
-        elif text.startswith("/digest"):
-            # Wymuś poranny digest na życzenie
+        elif text_lower.startswith("/digest"):
             processed.append("digest_requested")
 
     return processed
