@@ -1,0 +1,763 @@
+"""
+bot_runner.py – Samodzielny runner Telegram bota predykcji piłkarskich.
+
+Uruchamiany jako OSOBNY WĄTEK przy starcie Streamlit (przez app.py).
+Działa w tle niezależnie od tego czy użytkownik ma otwartą stronę.
+
+Architektura:
+  - NIE importuje streamlit (brak st.*, st.cache_data, st.session_state)
+  - Pobiera dane bezpośrednio przez HTTP (football-data.co.uk CSV)
+  - Odpowiada na komendy /value /status /help z opóźnieniem max 30s
+  - Własna pętla polling co 15 sekund (niezależna od reruns Streamlit)
+
+Uruchomienie z app.py:
+    import bot_runner
+    bot_runner.start()   # uruchamia wątek w tle, nie blokuje Streamlit
+"""
+
+import threading
+import time
+import sqlite3
+import json
+import os
+import requests
+import unicodedata
+import itertools
+import logging
+from io import StringIO
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+from scipy.stats import poisson
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [BOT] %(levelname)s %(message)s",
+    datefmt="%H:%M:%S"
+)
+log = logging.getLogger("bot_runner")
+
+# ── Singleton guard ───────────────────────────────────────────────────────────
+_BOT_STARTED = False
+_BOT_LOCK    = threading.Lock()
+
+# ── Konfiguracja (skopiowana z app.py, bez importowania Streamlit) ────────────
+LIGI = {
+    "Premier League": {"csv_code": "E0",  "fd_org_id": 2021, "file": "terminarz_premier_2025.csv",  "tau": 30.0},
+    "La Liga":        {"csv_code": "SP1", "fd_org_id": 2014, "file": "terminarz_la_liga_2025.csv",  "tau": 28.0},
+    "Bundesliga":     {"csv_code": "D1",  "fd_org_id": 2002, "file": "terminarz_bundesliga_2025.csv","tau": 28.0},
+    "Serie A":        {"csv_code": "I1",  "fd_org_id": 2019, "file": "terminarz_serie_a_2025.csv",  "tau": 28.0},
+    "Ligue 1":        {"csv_code": "F1",  "fd_org_id": 2015, "file": "terminarz_ligue_1_2025.csv",  "tau": 21.0},
+}
+
+LIGA_EMOJI = {
+    "Premier League": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    "La Liga":        "🇪🇸",
+    "Bundesliga":     "🇩🇪",
+    "Serie A":        "🇮🇹",
+    "Ligue 1":        "🇫🇷",
+}
+
+DB_FILE          = "predykcje.db"
+TG_DB_FILE       = "telegram_alerts.db"
+POLL_INTERVAL    = 15        # sekund między sprawdzeniami Telegrama
+DATA_TTL         = 900       # sekundy ważności cache danych (15 min)
+SOT_BLEND_W      = 0.30
+KELLY_BANKROLL   = 1000.0
+KELLY_PROB_SCALE = 0.85
+KELLY_FRAC_SCALE = 0.50
+PROG_PEWNY       = 0.58      # próg pewności (identyczny z app.py)
+MIN_EV_ALERT     = 0.08      # min EV dla powiadomień
+TELEGRAM_API     = "https://api.telegram.org/bot{token}/{method}"
+
+# ── Sezon ────────────────────────────────────────────────────────────────────
+def _biezacy_sezon() -> str:
+    y = datetime.now().year if datetime.now().month >= 7 else datetime.now().year - 1
+    return f"{str(y)[2:]}{str(y+1)[2:]}"
+
+BIEZACY_SEZON = _biezacy_sezon()
+
+# ── Cache danych (prosty dict z TTL) ─────────────────────────────────────────
+_data_cache: dict = {}   # key → (timestamp, value)
+
+def _cache_get(key: str):
+    entry = _data_cache.get(key)
+    if entry and time.time() - entry[0] < DATA_TTL:
+        return entry[1]
+    return None
+
+def _cache_set(key: str, value):
+    _data_cache[key] = (time.time(), value)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TELEGRAM API
+# ─────────────────────────────────────────────────────────────────────────────
+def _get_credentials():
+    """Pobiera token i chat_id z secrets lub zmiennych środowiskowych."""
+    token   = None
+    chat_id = None
+    # 1. Streamlit secrets (plik .streamlit/secrets.toml)
+    try:
+        import streamlit as _st
+        token   = _st.secrets.get("TELEGRAM_BOT_TOKEN")
+        chat_id = str(_st.secrets.get("TELEGRAM_CHAT_ID", ""))
+    except Exception:
+        pass
+    # 2. Zmienne środowiskowe (fallback dla lokalnego uruchomienia)
+    if not token:
+        token   = os.environ.get("TELEGRAM_BOT_TOKEN")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    return token, chat_id
+
+def _tg_api(token: str, method: str, **kwargs) -> dict:
+    try:
+        url = TELEGRAM_API.format(token=token, method=method)
+        r = requests.post(url, json=kwargs, timeout=10)
+        return r.json()
+    except Exception as e:
+        log.warning(f"Telegram API error ({method}): {e}")
+        return {}
+
+def send_message(token: str, chat_id: str, text: str) -> bool:
+    if not token or not chat_id or not text:
+        return False
+    res = _tg_api(token, "sendMessage",
+                  chat_id=chat_id, text=text[:4096],
+                  parse_mode="HTML", disable_web_page_preview=True)
+    ok = res.get("ok", False)
+    if not ok:
+        log.warning(f"sendMessage failed: {res.get('description','')}")
+    return ok
+
+def get_updates(token: str, offset: int) -> list:
+    res = _tg_api(token, "getUpdates", offset=offset, timeout=5)
+    if res.get("ok"):
+        return res.get("result", [])
+    return []
+
+# ── Offset persistence ────────────────────────────────────────────────────────
+def _get_offset() -> int:
+    try:
+        con = sqlite3.connect(TG_DB_FILE)
+        con.execute("CREATE TABLE IF NOT EXISTS bot_offset (id INTEGER PRIMARY KEY, val INTEGER)")
+        row = con.execute("SELECT val FROM bot_offset WHERE id=1").fetchone()
+        con.close()
+        return int(row[0]) if row else 0
+    except Exception:
+        return 0
+
+def _set_offset(val: int):
+    try:
+        con = sqlite3.connect(TG_DB_FILE)
+        con.execute("CREATE TABLE IF NOT EXISTS bot_offset (id INTEGER PRIMARY KEY, val INTEGER)")
+        con.execute("INSERT OR REPLACE INTO bot_offset (id, val) VALUES (1, ?)", (val,))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NAZWY DRUŻYN (uproszczona mapa — kluczowe mapowania z app.py)
+# ─────────────────────────────────────────────────────────────────────────────
+NAZWY_MAP = {
+    # Premier League
+    "Arsenal FC": "Arsenal", "Aston Villa FC": "Aston Villa",
+    "AFC Bournemouth": "Bournemouth", "Brentford FC": "Brentford",
+    "Brighton & Hove Albion FC": "Brighton", "Brighton & Hove Albion": "Brighton",
+    "Chelsea FC": "Chelsea", "Crystal Palace FC": "Crystal Palace",
+    "Everton FC": "Everton", "Fulham FC": "Fulham",
+    "Ipswich Town FC": "Ipswich", "Leicester City FC": "Leicester",
+    "Liverpool FC": "Liverpool", "Manchester City FC": "Man City",
+    "Manchester United FC": "Man United", "Newcastle United FC": "Newcastle",
+    "Nottingham Forest FC": "Nott'm Forest", "Southampton FC": "Southampton",
+    "Tottenham Hotspur FC": "Tottenham", "West Ham United FC": "West Ham",
+    "Wolverhampton Wanderers FC": "Wolves",
+    # shortNames
+    "Arsenal": "Arsenal", "Aston Villa": "Aston Villa", "Bournemouth": "Bournemouth",
+    "Brentford": "Brentford", "Brighton": "Brighton", "Chelsea": "Chelsea",
+    "Crystal Palace": "Crystal Palace", "Everton": "Everton", "Fulham": "Fulham",
+    "Ipswich": "Ipswich", "Leicester": "Leicester", "Liverpool": "Liverpool",
+    "Man City": "Man City", "Man United": "Man United", "Newcastle": "Newcastle",
+    "Nott'm Forest": "Nott'm Forest", "Southampton": "Southampton",
+    "Tottenham": "Tottenham", "West Ham": "West Ham", "Wolves": "Wolves",
+    # La Liga
+    "Club Atlético de Madrid": "Ath Madrid", "Athletic Club": "Ath Bilbao",
+    "CA Osasuna": "Osasuna", "Deportivo Alavés": "Alaves",
+    "Getafe CF": "Getafe", "Girona FC": "Girona",
+    "Rayo Vallecano de Madrid": "Vallecano", "RC Celta de Vigo": "Celta",
+    "RCD Espanyol de Barcelona": "Espanyol", "RCD Mallorca": "Mallorca",
+    "Real Betis Balompié": "Betis", "Real Madrid CF": "Real Madrid",
+    "Real Sociedad de Fútbol": "Sociedad", "Real Valladolid CF": "Valladolid",
+    "Sevilla FC": "Sevilla", "UD Las Palmas": "Las Palmas",
+    "Valencia CF": "Valencia", "Villarreal CF": "Villarreal",
+    "FC Barcelona": "Barcelona", "Leganés": "Leganes",
+    "Atlético Madrid": "Ath Madrid", "Ath Bilbao": "Ath Bilbao",
+    # Bundesliga
+    "1. FC Heidenheim 1846": "Heidenheim", "1. FC Köln": "Koln",
+    "1. FC Union Berlin": "Union Berlin", "1. FSV Mainz 05": "Mainz",
+    "Bayer 04 Leverkusen": "Leverkusen", "Borussia Dortmund": "Dortmund",
+    "Borussia Mönchengladbach": "Ein Frankfurt", "Eintracht Frankfurt": "Ein Frankfurt",
+    "FC Augsburg": "Augsburg", "FC Bayern München": "Bayern Munich",
+    "FC St. Pauli 1910": "St Pauli", "Holstein Kiel": "Kiel",
+    "RB Leipzig": "RB Leipzig", "SC Freiburg": "Freiburg",
+    "TSG 1899 Hoffenheim": "Hoffenheim", "VfB Stuttgart": "Stuttgart",
+    "VfL Bochum 1848": "Bochum", "VfL Wolfsburg": "Wolfsburg",
+    "Werder Bremen": "Werder Bremen", "Hamburger SV": "Hamburg",
+    "Bayern Munich": "Bayern Munich", "Dortmund": "Dortmund",
+    # Serie A
+    "AC Milan": "Milan", "ACF Fiorentina": "Fiorentina",
+    "AS Roma": "Roma", "Atalanta BC": "Atalanta",
+    "Bologna FC 1909": "Bologna", "Cagliari Calcio": "Cagliari",
+    "Empoli FC": "Empoli", "FC Internazionale Milano": "Inter",
+    "Frosinone Calcio": "Frosinone", "Genoa CFC": "Genoa",
+    "Hellas Verona FC": "Verona", "Inter": "Inter", "Juventus FC": "Juventus",
+    "Lazio": "Lazio", "Lecce": "Lecce", "Monza": "Monza",
+    "Napoli": "Napoli", "Parma Calcio 1913": "Parma",
+    "SS Lazio": "Lazio", "SSC Napoli": "Napoli",
+    "Salernitana": "Salernitana", "Sassuolo": "Sassuolo",
+    "Torino FC": "Torino", "UC Sampdoria": "Sampdoria",
+    "Udinese Calcio": "Udinese", "US Lecce": "Lecce",
+    "Venezia FC": "Venezia", "Como 1907": "Como",
+    # Ligue 1
+    "AJ Auxerre": "Auxerre", "AC Ajaccio": "Ajaccio",
+    "Angers SCO": "Angers", "AS Monaco FC": "Monaco",
+    "AS Saint-Étienne": "St Etienne", "Clermont Foot 63": "Clermont",
+    "FC Lorient": "Lorient", "FC Metz": "Metz",
+    "FC Nantes": "Nantes", "FC Toulouse": "Toulouse",
+    "LOSC Lille": "Lille", "Le Havre AC": "Le Havre",
+    "Montpellier HSC": "Montpellier", "OGC Nice": "Nice",
+    "Olympique Lyonnais": "Lyon", "Olympique de Marseille": "Marseille",
+    "Paris Saint-Germain FC": "Paris SG", "Stade Brestois 29": "Brest",
+    "Stade Rennais FC 1901": "Rennes", "RC Lens": "Lens",
+    "RC Strasbourg Alsace": "Strasbourg", "Stade de Reims": "Reims",
+}
+
+def _normalize(name: str) -> str:
+    if not isinstance(name, str):
+        return str(name)
+    n = unicodedata.normalize("NFKD", name).encode("ASCII", "ignore").decode("ASCII")
+    for suffix in [" FC", " CF", " UD", " CD", " RCD", " AS", " Stade", " 1."]:
+        n = n.replace(suffix, "")
+    return n.strip()
+
+def map_nazwa(nazwa: str) -> str:
+    if not isinstance(nazwa, str):
+        return str(nazwa)
+    if nazwa in NAZWY_MAP:
+        return NAZWY_MAP[nazwa]
+    def upros(s):
+        return s.replace(" ", "").replace("-", "").replace("'", "").lower()
+    for k, v in NAZWY_MAP.items():
+        if upros(k) == upros(nazwa):
+            return v
+    znorm = _normalize(nazwa)
+    if znorm in NAZWY_MAP:
+        return NAZWY_MAP[znorm]
+    return nazwa
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ŁADOWANIE DANYCH
+# ─────────────────────────────────────────────────────────────────────────────
+def _pobierz_csv(league_code: str, sezon: str) -> pd.DataFrame:
+    key = f"csv_{league_code}_{sezon}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    try:
+        url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{league_code}.csv"
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        df = pd.read_csv(StringIO(r.text))
+        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+        df = df.dropna(subset=["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"])
+        for col in ["HC", "AC", "HY", "AY", "HR", "AR", "HST", "AST"]:
+            if col not in df.columns:
+                df[col] = np.nan
+        df["total_gole"]   = df["FTHG"] + df["FTAG"]
+        df["total_kartki"] = df["HY"] + df["AY"] + (df["HR"] + df["AR"]) * 2
+        df["total_rozne"]  = df["HC"] + df["AC"]
+        for col in ["HST", "AST"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.sort_values("Date")
+        _cache_set(key, df)
+        return df
+    except Exception as e:
+        log.debug(f"CSV {league_code}/{sezon}: {e}")
+        empty = pd.DataFrame()
+        _cache_set(key, empty)
+        return empty
+
+def _waga_poprzedniego(n: int) -> float:
+    return float(np.clip(0.8 - (n / 30) * 0.6, 0.2, 0.8))
+
+def load_historical(csv_code: str) -> pd.DataFrame:
+    key = f"hist_{csv_code}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    df_now  = _pobierz_csv(csv_code, BIEZACY_SEZON)
+    df_prev = _pobierz_csv(csv_code, "2425")
+    if df_now.empty and df_prev.empty:
+        result = pd.DataFrame()
+    elif df_now.empty:
+        result = df_prev
+    elif df_prev.empty:
+        result = df_now
+    else:
+        n_now = len(df_now)
+        wp = _waga_poprzedniego(n_now)
+        n_prev = min(int(n_now * wp / (1 - wp)), len(df_prev))
+        dp = df_prev.tail(n_prev).copy(); dp["_sezon"] = "poprzedni"
+        dn = df_now.copy(); dn["_sezon"] = "biezacy"
+        result = pd.concat([dp, dn], ignore_index=True).sort_values("Date")
+    _cache_set(key, result)
+    return result
+
+def load_schedule(fd_org_id: int) -> pd.DataFrame:
+    key = f"sched_{fd_org_id}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    token_fd = None
+    try:
+        import streamlit as _st
+        token_fd = _st.secrets.get("FOOTBALL_DATA_API_KEY")
+    except Exception:
+        pass
+    if not token_fd:
+        token_fd = os.environ.get("FOOTBALL_DATA_API_KEY")
+
+    if not token_fd:
+        _cache_set(key, pd.DataFrame())
+        return pd.DataFrame()
+
+    today = datetime.today()
+    yr = today.year if today.month >= 7 else today.year - 1
+    for yr_try in [yr, yr - 1]:
+        try:
+            url = f"https://api.football-data.org/v4/competitions/{fd_org_id}/matches?season={yr_try}"
+            r = requests.get(url, headers={"X-Auth-Token": token_fd}, timeout=12)
+            if r.status_code != 200:
+                continue
+            matches = r.json().get("matches", [])
+            if not matches:
+                continue
+            rows = []
+            for m in matches:
+                ht = map_nazwa(m["homeTeam"].get("shortName") or m["homeTeam"].get("name", ""))
+                at = map_nazwa(m["awayTeam"].get("shortName") or m["awayTeam"].get("name", ""))
+                dt = pd.to_datetime(m["utcDate"]).tz_localize(None) \
+                    if not m["utcDate"].endswith("Z") \
+                    else pd.to_datetime(m["utcDate"]).tz_convert(None)
+                sc = m.get("score", {}).get("fullTime", {})
+                rows.append({
+                    "round":     m.get("matchday", 0),
+                    "date":      dt,
+                    "home_team": ht,
+                    "away_team": at,
+                    "is_played": m.get("status") == "FINISHED",
+                    "wynik_h":   sc.get("home"),
+                    "wynik_a":   sc.get("away"),
+                })
+            df = pd.DataFrame(rows)
+            df["round"] = pd.to_numeric(df["round"], errors="coerce").fillna(0).astype(int)
+            result = df.sort_values("date").reset_index(drop=True)
+            _cache_set(key, result)
+            return result
+        except Exception as e:
+            log.debug(f"schedule {fd_org_id}/{yr_try}: {e}")
+            continue
+
+    _cache_set(key, pd.DataFrame())
+    return pd.DataFrame()
+
+def get_current_round(schedule: pd.DataFrame) -> int:
+    if schedule.empty:
+        return 0
+    dzisiaj = datetime.now().date()
+    sch = schedule.copy()
+    sch["_d"] = sch["date"].dt.date
+    for runda in sorted(sch["round"].unique()):
+        mecze = sch[sch["round"] == runda]
+        n_przyszle = (mecze["_d"] >= dzisiaj).sum()
+        n_przeszle = len(mecze) - n_przyszle
+        if n_przyszle >= n_przeszle and n_przyszle > 0:
+            return int(runda)
+    return int(schedule["round"].max())
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODEL STATYSTYCZNY (skopiowany z app.py, bez dekoratorów)
+# ─────────────────────────────────────────────────────────────────────────────
+def weighted_mean(values: pd.Series, dates: pd.Series = None, tau: float = 30.0) -> float:
+    if len(values) == 0:
+        return 0.0
+    if dates is not None and len(dates) == len(values):
+        try:
+            dates_dt = pd.to_datetime(dates)
+            ref = dates_dt.max()
+            days_ago = (ref - dates_dt).dt.total_seconds() / 86400
+            weights = np.exp(-days_ago.values / tau)
+            weights = np.clip(weights, 0.01, None)
+        except Exception:
+            weights = np.linspace(1, 2, len(values))
+    else:
+        weights = np.linspace(1, 2, len(values))
+    return float(np.average(values, weights=weights))
+
+def oblicz_statystyki(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    druzyny = pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel())
+    dane = {}
+    for d in druzyny:
+        home = df[df["HomeTeam"] == d].tail(10)
+        away = df[df["AwayTeam"] == d].tail(10)
+        if len(home) < 2 or len(away) < 2:
+            continue
+        h_dates = home["Date"] if "Date" in home.columns else None
+        a_dates = away["Date"] if "Date" in away.columns else None
+        home_sot = home["HST"].dropna() if "HST" in home.columns else pd.Series([], dtype=float)
+        away_sot = away["AST"].dropna() if "AST" in away.columns else pd.Series([], dtype=float)
+        h_sot_d = home.loc[home["HST"].notna(), "Date"] if "HST" in home.columns else None
+        a_sot_d = away.loc[away["AST"].notna(), "Date"] if "AST" in away.columns else None
+        dane[d] = {
+            "Gole strzelone (dom)":    weighted_mean(home["FTHG"], h_dates),
+            "Gole stracone (dom)":     weighted_mean(home["FTAG"], h_dates),
+            "Gole strzelone (wyjazd)": weighted_mean(away["FTAG"], a_dates),
+            "Gole stracone (wyjazd)":  weighted_mean(away["FTHG"], a_dates),
+            "Różne (dom)":             weighted_mean(home["total_rozne"], h_dates) if "total_rozne" in home.columns else 0,
+            "Różne (wyjazd)":          weighted_mean(away["total_rozne"], a_dates) if "total_rozne" in away.columns else 0,
+            "Kartki (dom)":            weighted_mean(home["total_kartki"], h_dates) if "total_kartki" in home.columns else 0,
+            "Kartki (wyjazd)":         weighted_mean(away["total_kartki"], a_dates) if "total_kartki" in away.columns else 0,
+            "SOT (dom)":    (weighted_mean(home.loc[home["HST"].notna(), "HST"], h_sot_d) if len(home_sot) >= 2 else None),
+            "SOT (wyjazd)": (weighted_mean(away.loc[away["AST"].notna(), "AST"], a_sot_d) if len(away_sot) >= 2 else None),
+            "Konwersja (dom)":    (float(home["FTHG"].sum() / home_sot.sum()) if home_sot.sum() > 0 else None),
+            "Konwersja (wyjazd)": (float(away["FTAG"].sum() / away_sot.sum()) if away_sot.sum() > 0 else None),
+        }
+    return pd.DataFrame(dane).T.round(2)
+
+def oblicz_srednie(df: pd.DataFrame) -> dict:
+    if df.empty:
+        return {"avg_home": 1.5, "avg_away": 1.2, "rho": -0.13, "n_biezacy": 0}
+    n_biezacy = int((df.get("_sezon", pd.Series()) == "biezacy").sum()) if "_sezon" in df.columns else len(df)
+    avg_h = float(df["FTHG"].mean())
+    avg_a = float(df["FTAG"].mean())
+    n = len(df)
+    obs_00 = len(df[(df["FTHG"] == 0) & (df["FTAG"] == 0)]) / n
+    obs_11 = len(df[(df["FTHG"] == 1) & (df["FTAG"] == 1)]) / n
+    from scipy.stats import poisson as _p
+    exp_00 = _p.pmf(0, avg_h) * _p.pmf(0, avg_a)
+    exp_11 = _p.pmf(1, avg_h) * _p.pmf(1, avg_a)
+    rho_00 = (obs_00 / exp_00 - 1) / (avg_h * avg_a) if exp_00 > 0 else -0.13
+    rho_11 = -(obs_11 / exp_11 - 1) if exp_11 > 0 else -0.13
+    rho = float(np.clip(np.mean([rho_00, rho_11]), -0.25, 0.0))
+    avg_sot_h = float(df["HST"].dropna().mean()) if "HST" in df.columns and df["HST"].notna().sum() > 10 else None
+    avg_sot_a = float(df["AST"].dropna().mean()) if "AST" in df.columns and df["AST"].notna().sum() > 10 else None
+    return {"avg_home": avg_h, "avg_away": avg_a, "rho": rho,
+            "n_biezacy": n_biezacy, "avg_sot_home": avg_sot_h, "avg_sot_away": avg_sot_a}
+
+def oblicz_lambdy(h: str, a: str, srl: pd.DataFrame, avg: dict) -> tuple:
+    """Zwraca (lam_h, lam_a)."""
+    ALPHA_OFF, ALPHA_DEF = 0.10, 0.20
+    avg_h = avg.get("avg_home", 1.5)
+    avg_a = avg.get("avg_away", 1.2)
+    avg_sot_h = avg.get("avg_sot_home")
+    avg_sot_a = avg.get("avg_sot_away")
+
+    gs_h = float(srl.loc[h, "Gole strzelone (dom)"])   if h in srl.index else avg_h
+    gc_h = float(srl.loc[h, "Gole stracone (dom)"])    if h in srl.index else avg_a
+    gs_a = float(srl.loc[a, "Gole strzelone (wyjazd)"]) if a in srl.index else avg_a
+    gc_a = float(srl.loc[a, "Gole stracone (wyjazd)"])  if a in srl.index else avg_h
+
+    gs_h = gs_h * (1-ALPHA_OFF) + avg_h * ALPHA_OFF
+    gc_h = gc_h * (1-ALPHA_DEF) + avg_a * ALPHA_DEF
+    gs_a = gs_a * (1-ALPHA_OFF) + avg_a * ALPHA_OFF
+    gc_a = gc_a * (1-ALPHA_DEF) + avg_h * ALPHA_DEF
+
+    lam_h = max(0.3, (gs_h + gc_a) / 2)
+    lam_a = max(0.3, (gs_a + gc_h) / 2)
+
+    # SOT blend
+    if SOT_BLEND_W > 0 and avg_sot_h and avg_sot_a:
+        try:
+            sot_h = float(srl.loc[h, "SOT (dom)"])    if h in srl.index and pd.notna(srl.loc[h, "SOT (dom)"])    else avg_sot_h
+            sot_a = float(srl.loc[a, "SOT (wyjazd)"]) if a in srl.index and pd.notna(srl.loc[a, "SOT (wyjazd)"]) else avg_sot_a
+            conv_h = float(srl.loc[h, "Konwersja (dom)"])    if h in srl.index and pd.notna(srl.loc[h, "Konwersja (dom)"])    else (avg_h / avg_sot_h if avg_sot_h else 0.3)
+            conv_a = float(srl.loc[a, "Konwersja (wyjazd)"]) if a in srl.index and pd.notna(srl.loc[a, "Konwersja (wyjazd)"]) else (avg_a / avg_sot_a if avg_sot_a else 0.3)
+            lam_sot_h = sot_h * conv_h
+            lam_sot_a = sot_a * conv_a
+            lam_h = lam_h * (1 - SOT_BLEND_W) + lam_sot_h * SOT_BLEND_W
+            lam_a = lam_a * (1 - SOT_BLEND_W) + lam_sot_a * SOT_BLEND_W
+            lam_h = max(0.3, lam_h)
+            lam_a = max(0.3, lam_a)
+        except Exception:
+            pass
+    return lam_h, lam_a
+
+def dixon_coles_adj(M: np.ndarray, lam_h: float, lam_a: float, rho: float = -0.13) -> np.ndarray:
+    M = M.copy()
+    t = max(1e-6, lam_h * lam_a)
+    corr = {(0,0): 1 - lam_h*lam_a*rho, (0,1): 1 + lam_h*rho,
+            (1,0): 1 + lam_a*rho,        (1,1): 1 - rho}
+    for (i,j), v in corr.items():
+        if i < M.shape[0] and j < M.shape[1]:
+            M[i,j] = max(0, M[i,j] * v)
+    s = M.sum()
+    return M / s if s > 0 else M
+
+def predykcja(lam_h: float, lam_a: float, rho: float = -0.13) -> dict:
+    max_g = int(np.clip(np.ceil(max(lam_h, lam_a) + 5), 8, 12))
+    M = dixon_coles_adj(
+        np.outer(poisson.pmf(range(max_g), lam_h),
+                 poisson.pmf(range(max_g), lam_a)),
+        lam_h, lam_a, rho=rho)
+    p_h = float(np.tril(M, -1).sum())
+    p_d = float(np.trace(M))
+    p_a = float(np.triu(M, 1).sum())
+    # Kalibracja (KELLY_PROB_SCALE z app.py)
+    def cal(p):
+        excess = max(0, p - 0.5)
+        return 0.5 + excess * KELLY_PROB_SCALE
+    p_hc, p_dc, p_ac = cal(p_h), cal(p_d), cal(p_a)
+    s = p_hc + p_dc + p_ac
+    p_hc /= s; p_dc /= s; p_ac /= s
+    typ = max([("1", p_hc), ("X", p_dc), ("2", p_ac)], key=lambda x: x[1])
+    p_typ = typ[1]
+    fo_typ = round(1 / p_typ, 2) if p_typ > 0 else 999
+    return {"typ": typ[0], "p_typ": p_typ, "fo_typ": fo_typ,
+            "p_home": p_hc, "p_draw": p_dc, "p_away": p_ac}
+
+def kelly_stake(p: float, kurs: float, bankroll: float = KELLY_BANKROLL) -> float:
+    """Zwraca stawkę Kelly w PLN."""
+    p_adj = 0.5 + max(0, p - 0.5) * KELLY_PROB_SCALE
+    b = kurs - 1
+    if b <= 0 or p_adj <= 0:
+        return 0.0
+    f = (p_adj * b - (1 - p_adj)) / b
+    f = max(0, f) * KELLY_FRAC_SCALE
+    stake = bankroll * f
+    return round(min(stake, bankroll * 0.05), 1)  # max 5% bankrollu
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBLICZANIE VALUE BETÓW
+# ─────────────────────────────────────────────────────────────────────────────
+def compute_value_bets() -> list:
+    """
+    Oblicza value bety ze wszystkich 5 lig.
+    Zwraca listę dictów posortowaną po p_model malejąco.
+    Działa w pełni niezależnie od Streamlit.
+    """
+    all_bets = []
+    debug_lines = []
+
+    for liga_name, cfg in LIGI.items():
+        try:
+            hl = load_historical(cfg["csv_code"])
+            sl = load_schedule(cfg["fd_org_id"])
+            if hl.empty:
+                debug_lines.append(f"{liga_name}: ❌ brak CSV")
+                continue
+            if sl.empty:
+                debug_lines.append(f"{liga_name}: ❌ brak terminarza (sprawdź FOOTBALL_DATA_API_KEY)")
+                continue
+
+            srl = oblicz_statystyki(hl)
+            avg = oblicz_srednie(hl)
+            if srl.empty:
+                debug_lines.append(f"{liga_name}: ❌ brak statystyk")
+                continue
+
+            rho   = avg.get("rho", -0.13)
+            kol   = get_current_round(sl)
+            mecze = sl[sl["round"].isin([kol, kol + 1])]
+            idx   = list(srl.index)
+            n_added = 0; n_skip_name = 0; n_skip_prog = 0
+
+            for _, m in mecze.iterrows():
+                try:
+                    h_raw = map_nazwa(m["home_team"])
+                    a_raw = map_nazwa(m["away_team"])
+                    # Fuzzy match
+                    h = h_raw if h_raw in idx else next(
+                        (x for x in idx if x.lower() in h_raw.lower() or h_raw.lower() in x.lower()), None)
+                    a = a_raw if a_raw in idx else next(
+                        (x for x in idx if x.lower() in a_raw.lower() or a_raw.lower() in x.lower()), None)
+                    if not h or not a:
+                        n_skip_name += 1
+                        continue
+                    lam_h, lam_a = oblicz_lambdy(h, a, srl, avg)
+                    pr = predykcja(lam_h, lam_a, rho=rho)
+                    p  = pr["p_typ"]
+                    fo = pr["fo_typ"]
+                    if p < PROG_PEWNY or fo < 1.01:
+                        n_skip_prog += 1
+                        continue
+                    ev    = round(p * fo - 1.0, 3)
+                    stake = kelly_stake(p, fo)
+                    data_str = str(m.get("date", ""))[:10]
+                    all_bets.append({
+                        "liga":     liga_name,
+                        "home":     str(m.get("home_team", h_raw)),
+                        "away":     str(m.get("away_team", a_raw)),
+                        "typ":      pr["typ"],
+                        "p_model":  p,
+                        "kurs":     fo,
+                        "ev":       ev,
+                        "stake":    stake,
+                        "kolejka":  int(kol),
+                        "data":     data_str,
+                    })
+                    n_added += 1
+                except Exception:
+                    continue
+
+            debug_lines.append(
+                f"{liga_name}: ✅ kol#{kol} · {len(mecze)}m · +{n_added}typ "
+                f"(skip_nazwy={n_skip_name} skip_prog={n_skip_prog})")
+        except Exception as e:
+            debug_lines.append(f"{liga_name}: 💥 {type(e).__name__}: {str(e)[:80]}")
+            continue
+
+    log.info("compute_value_bets: " + " | ".join(debug_lines))
+    return sorted(all_bets, key=lambda x: -x["p_model"])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBSŁUGA KOMEND TELEGRAM
+# ─────────────────────────────────────────────────────────────────────────────
+def handle_value(token: str, chat_id: str):
+    bets = compute_value_bets()
+    if not bets:
+        send_message(token, chat_id,
+            "🔍 Brak typów z pewnością ≥58% w żadnej lidze.\n\n"
+            "Sprawdź ponownie po zaplanowaniu kolejki.")
+        return
+
+    by_liga = defaultdict(list)
+    for b in bets:
+        by_liga[b["liga"]].append(b)
+
+    now = datetime.now().strftime("%d.%m %H:%M")
+    lines = [f"💰 <b>Value Bets – wszystkie ligi</b>  🕐 {now}\n"
+             f"<i>✦ kurs = fair odds modelu (bez live API)</i>\n"]
+
+    for liga, lb in by_liga.items():
+        flag = LIGA_EMOJI.get(liga, "⚽")
+        lines.append(f"\n{flag} <b>{liga}</b>")
+        for b in sorted(lb, key=lambda x: -x["p_model"])[:5]:
+            _d = f" · {b['data']}" if b.get("data") else ""
+            _s = f"\n     🏦 Kelly: {b['stake']:.0f} zł" if b.get("stake", 0) > 5 else ""
+            lines.append(
+                f"  <b>{b['home']} – {b['away']}</b>{_d}\n"
+                f"     Typ: <b>{b['typ']}</b> @ {b['kurs']:.2f} · "
+                f"p=<b>{b['p_model']:.0%}</b>{_s}")
+
+    text = "\n".join(lines)
+    # Podziel jeśli za długi
+    if len(text) > 4000:
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 > 3900:
+                send_message(token, chat_id, chunk)
+                chunk = line
+            else:
+                chunk += "\n" + line
+        if chunk:
+            send_message(token, chat_id, chunk)
+    else:
+        send_message(token, chat_id, text)
+
+def handle_status(token: str, chat_id: str):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        lines = [f"📊 <b>Status modelu</b> · {datetime.now().strftime('%d.%m %H:%M')}\n"]
+        for liga in LIGI:
+            row = con.execute(
+                "SELECT COUNT(*), SUM(trafione), AVG(fair_odds) FROM zdarzenia "
+                "WHERE liga=? AND sezon=? AND trafione IS NOT NULL AND rynek='1X2'",
+                (liga, BIEZACY_SEZON)).fetchone()
+            if row and row[0] and row[0] > 0:
+                n, t, afo = row
+                hr  = t / n
+                roi = ((t * (afo - 1)) - (n - t)) / n * 100 if n else 0
+                hr_c  = "🟢" if hr >= 0.60 else ("🟡" if hr >= 0.50 else "🔴")
+                roi_c = "🟢" if roi >= 0 else "🔴"
+                flag  = LIGA_EMOJI.get(liga, "⚽")
+                lines.append(f"{flag} <b>{liga}</b>\n"
+                              f"   {hr_c} Hit: {hr:.1%} · {roi_c} ROI: {roi:+.1f}% · {n} typów")
+        con.close()
+        send_message(token, chat_id, "\n".join(lines) if len(lines) > 1
+                     else "📭 Brak danych w bazie – zacznij typować w aplikacji.")
+    except Exception as e:
+        send_message(token, chat_id, f"❌ Błąd bazy: {e}")
+
+def handle_help(token: str, chat_id: str):
+    send_message(token, chat_id,
+        "🤖 <b>Komendy bota predykcji</b>\n\n"
+        "/value  – value bety z 5 lig (p≥58%)\n"
+        "/status – hit rate i ROI per liga\n"
+        "/help   – ta wiadomość\n\n"
+        "<i>Bot działa w tle – odpowiada w ciągu 30 sekund od wysłania komendy.</i>")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GŁÓWNA PĘTLA BOTA
+# ─────────────────────────────────────────────────────────────────────────────
+def _bot_loop():
+    log.info("Bot runner started — polling every %ds", POLL_INTERVAL)
+    while True:
+        try:
+            token, chat_id = _get_credentials()
+            if not token or not chat_id:
+                time.sleep(60)
+                continue
+
+            offset = _get_offset()
+            updates = get_updates(token, offset)
+
+            for upd in updates:
+                uid = upd["update_id"]
+                _set_offset(uid + 1)
+
+                msg  = upd.get("message", {})
+                text = msg.get("text", "").strip()
+                from_id = str(msg.get("chat", {}).get("id", ""))
+
+                if from_id != chat_id:
+                    continue
+
+                cmd = text.lower().split()[0] if text else ""
+                log.info(f"Command: {cmd!r} from {from_id}")
+
+                if cmd == "/value":
+                    handle_value(token, chat_id)
+                elif cmd == "/status":
+                    handle_status(token, chat_id)
+                elif cmd == "/help":
+                    handle_help(token, chat_id)
+
+        except Exception as e:
+            log.error(f"Bot loop error: {e}")
+
+        time.sleep(POLL_INTERVAL)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PUBLIC API
+# ─────────────────────────────────────────────────────────────────────────────
+def start():
+    """Uruchamia bota jako daemon thread. Bezpieczne do wywołania wielokrotnie."""
+    global _BOT_STARTED
+    with _BOT_LOCK:
+        if _BOT_STARTED:
+            return
+        _BOT_STARTED = True
+        t = threading.Thread(target=_bot_loop, name="telegram-bot", daemon=True)
+        t.start()
+        log.info("Telegram bot thread started (daemon)")
+
+if __name__ == "__main__":
+    # Uruchomienie bezpośrednie: python bot_runner.py
+    log.info("Running bot_runner standalone")
+    _bot_loop()
