@@ -4110,8 +4110,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     ch_c   = chaos_colors.get(pred["chaos_label"], "#888")
                                     bar_w  = int(pred["chaos_pct"] * 100)
                                     # Pre-compute Quality Score dla pro card
-                                    _pc_smh = sot_momentum(home_name, historical)
-                                    _pc_sma = sot_momentum(away_name, historical)
+                                    _pc_smh = sot_momentum(h, historical)
+                                    _pc_sma = sot_momentum(a, historical)
                                     _pc_qs, _pc_qs_str, _pc_qs_label, _pc_qs_tip = quality_score(
                                         pred["p_typ"], pred["entropy"], _pc_smh, _pc_sma, ev=0.0)
                                     _pc_qs_c = {5:"#1a6b1a",4:"#2e7d32",3:"#f57c00",2:"#888",1:"#c62828"}.get(_pc_qs,"#888")
