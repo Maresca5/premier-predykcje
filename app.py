@@ -1877,6 +1877,104 @@ def chaos_label(entropy: float) -> tuple:
     elif pct < 0.90: return "Otwarty",  "⚡", pct
     else:            return "Chaos",    "🌀", pct
 
+
+def sot_momentum(team: str, historical: pd.DataFrame) -> float | None:
+    """
+    SOT Momentum = (avg SOT ostatnie 3 mecze) / (avg SOT sezon).
+    > 1.3 → drużyna 'puka do bramki' silniej niż zwykle (under-rewarded jeśli goli mało).
+    < 0.7 → drużyna wygasła.
+    Zwraca ratio lub None jeśli brak danych.
+    """
+    if historical.empty or "HST" not in historical.columns:
+        return None
+    try:
+        home_m = historical[historical["HomeTeam"] == team][["Date", "FTHG", "HST"]].rename(
+            columns={"HST": "sot", "FTHG": "gole"})
+        away_m = historical[historical["AwayTeam"] == team][["Date", "FTAG", "AST"]].rename(
+            columns={"AST": "sot", "FTAG": "gole"})
+        all_m = pd.concat([home_m, away_m]).dropna(subset=["sot"])
+        all_m = all_m.sort_values("Date") if "Date" in all_m.columns else all_m
+        if len(all_m) < 5:
+            return None
+        season_avg = float(all_m["sot"].mean())
+        recent_avg = float(all_m.tail(3)["sot"].mean())
+        if season_avg < 0.5:
+            return None
+        return round(recent_avg / season_avg, 2)
+    except Exception:
+        return None
+
+
+def quality_score(p_typ: float, entropy: float,
+                  sot_mom_h: float | None, sot_mom_a: float | None,
+                  ev: float = 0.0) -> tuple[int, str, str]:
+    """
+    Quality Score 1-5 gwiazdek dla zakładu.
+    Kryteria:
+      • p_typ    → siła sygnału modelu
+      • entropy  → pewność (niski chaos)
+      • SOT mom  → atak pod presją
+      • EV       → wartość vs rynek
+    Zwraca (gwiazdki: int, label: str, tooltip: str)
+    """
+    score = 0.0
+    reasons = []
+
+    # 1. Prawdopodobieństwo (0-2 pkt)
+    if p_typ >= 0.75:
+        score += 2.0; reasons.append("p≥75%")
+    elif p_typ >= 0.62:
+        score += 1.2; reasons.append("p≥62%")
+    elif p_typ >= 0.55:
+        score += 0.6; reasons.append("p≥55%")
+
+    # 2. Entropy (chaos) (0-1.5 pkt)
+    ent_norm = entropy / np.log2(3)
+    if ent_norm < 0.55:
+        score += 1.5; reasons.append("Chaos Low")
+    elif ent_norm < 0.75:
+        score += 0.9; reasons.append("Chaos Med")
+    elif ent_norm < 0.90:
+        score += 0.3; reasons.append("Chaos High")
+    # chaos pełny: 0 pkt
+
+    # 3. SOT Momentum (0-1 pkt) — atak pod presją
+    mom_h = sot_mom_h or 1.0
+    mom_a = sot_mom_a or 1.0
+    best_mom = max(mom_h, mom_a)
+    if best_mom >= 1.35:
+        score += 1.0; reasons.append("🔥 SOT Momentum")
+    elif best_mom >= 1.15:
+        score += 0.5; reasons.append("SOT ↑")
+
+    # 4. EV vs rynek (0-0.5 pkt)
+    if ev >= 0.12:
+        score += 0.5; reasons.append("EV≥12%")
+    elif ev >= 0.06:
+        score += 0.25; reasons.append("EV≥6%")
+
+    # Normalizuj do 1-5 gwiazdek (max raw ≈ 5.0)
+    stars = int(np.clip(round(score), 1, 5))
+    star_str = "★" * stars + "☆" * (5 - stars)
+    label = {5: "Wzorcowy", 4: "Silny", 3: "Dobry", 2: "Umiarkowany", 1: "Ryzykowny"}[stars]
+    tooltip = " · ".join(reasons) if reasons else "brak sygnałów"
+    return stars, star_str, label, tooltip
+
+
+def entropy_kelly_multiplier(entropy: float) -> float:
+    """
+    Płynny bezpiecznik Kelly na podstawie chaosu macierzy.
+    entropy ~0.5 (pewny) → 1.0×   (pełna stawka)
+    entropy ~1.0 (otwarty) → 0.70×
+    entropy ~1.3 (chaos) → 0.45×
+    entropy ≥1.5 → 0.30×
+    """
+    # Liniowa interpolacja w kawałkach
+    if entropy <= 0.5:  return 1.00
+    if entropy <= 1.0:  return 1.00 - 0.30 * (entropy - 0.5) / 0.5   # 1.00 → 0.70
+    if entropy <= 1.3:  return 0.70 - 0.25 * (entropy - 1.0) / 0.3   # 0.70 → 0.45
+    return max(0.30, 0.45 - 0.15 * (entropy - 1.3) / 0.2)            # 0.45 → 0.30
+
 def confidence_score(p_home: float, p_draw: float, p_away: float) -> tuple:
     vals  = sorted([p_home, p_draw, p_away], reverse=True)
     spread = vals[0] - vals[2]
@@ -3286,6 +3384,9 @@ if not historical.empty:
                 _sev = _sp["p_typ"] * (_skdc or _sp["fo_typ"]) - 1
                 _smn = market_noise_check(_sp["p_typ"], _sidc) if _so and _skdc else None
                 _kurs_ok = (_skdc is None) or (_skdc <= 3.50)
+                # SOT Momentum per drużyna
+                _smh = sot_momentum(_sh, historical)
+                _sma = sot_momentum(_sa, historical)
                 _start_top.append({
                     "mecz": f"{_sh} – {_sa}",
                     "h": _sh, "a": _sa,
@@ -3294,6 +3395,8 @@ if not historical.empty:
                     "ev": _sev, "is_val": _sev >= 0.04,
                     "noise": _smn["noise"] if _smn else False,
                     "data": _sm.get("date",""),
+                    "entropy": _sp["entropy"],
+                    "sot_mom_h": _smh, "sot_mom_a": _sma,
                 })
             except Exception: continue
         _top_val = sorted([x for x in _start_top if x["is_val"] and not x["noise"]],
@@ -3308,23 +3411,55 @@ if not historical.empty:
             for _tvc, _tv in zip(_tv_cols, _top_val):
                 _kb  = st.session_state.get("bankroll", 1000.0)
                 _kf2 = st.session_state.get("kelly_frac", 0.125)
-                _kl  = kelly_stake(_tv["p"], _tv["kurs_buk"] or _tv["fo"], bankroll=_kb, fraction=_kf2)
+                # Dynamic Kelly: mnożnik entropy
+                _ent   = _tv.get("entropy", 1.0)
+                _ekm   = entropy_kelly_multiplier(_ent)
+                _kl    = kelly_stake(_tv["p"], _tv["kurs_buk"] or _tv["fo"],
+                                     bankroll=_kb, fraction=_kf2 * _ekm)
                 _kurs_str  = f"{_tv['kurs_buk']:.2f}" if _tv["kurs_buk"] else f"{_tv['fo']:.2f}✦"
                 _ev_pct    = f"{_tv['ev']:+.1%}"
                 _buk_p     = 1 / (_tv['kurs_buk'] or _tv['fo'])
                 _edge_pp   = (_tv['p'] - _buk_p) * 100
-                _kelly_str = (f"<div class='kelly'>💰 Kelly: <b>{int(_kl['stake_pln'])} zł</b></div>"
-                              if _kl['safe'] else "")
-                # Sygnalizacja świetlna wg EV
+                # Quality Score
+                _qs, _qs_str, _qs_label, _qs_tip = quality_score(
+                    _tv["p"], _ent,
+                    _tv.get("sot_mom_h"), _tv.get("sot_mom_a"),
+                    ev=_tv["ev"])
+                # SOT Momentum badge
+                _smh, _sma = _tv.get("sot_mom_h"), _tv.get("sot_mom_a")
+                _sot_badge = ""
+                if _smh and _smh >= 1.35:
+                    _sot_badge += f"<span class='stat-pill' title='Gospodarz {_smh:.0%} więcej strzałów celnych niż sezonowo'>🔥 Atak H +{(_smh-1)*100:.0f}%</span>"
+                elif _smh and _smh >= 1.15:
+                    _sot_badge += f"<span class='stat-pill' title='SOT Momentum Gospodarz'>↑SOT H +{(_smh-1)*100:.0f}%</span>"
+                if _sma and _sma >= 1.35:
+                    _sot_badge += f"<span class='stat-pill' title='Gość {_sma:.0%} więcej strzałów celnych niż sezonowo'>🔥 Atak A +{(_sma-1)*100:.0f}%</span>"
+                elif _sma and _sma >= 1.15:
+                    _sot_badge += f"<span class='stat-pill' title='SOT Momentum Gość'>↑SOT A +{(_sma-1)*100:.0f}%</span>"
+                # EV sygnalizacja
                 if _tv['ev'] >= 0.15:
                     _sig_color = "#2e7d32"; _sig_label = "🟢 Wysoki EV"
                 elif _tv['ev'] >= 0.05:
                     _sig_color = "#f57c00"; _sig_label = "🟡 Umiarkowany EV"
                 else:
                     _sig_color = "#c62828"; _sig_label = "🔴 Niski EV"
+                # Quality color
+                _qs_c = {5:"#1a6b1a", 4:"#2e7d32", 3:"#f57c00", 2:"#888", 1:"#c62828"}.get(_qs, "#888")
+                # Kelly z korektą entropy
+                _kelly_str = ""
+                if _kl['safe']:
+                    _ekm_note = f" ×{_ekm:.2f}" if _ekm < 0.95 else ""
+                    _kelly_str = (f"<div class='kelly'>💰 Kelly: <b>{int(_kl['stake_pln'])} zł</b>"
+                                  f"<span style='color:#666;font-size:0.85em'>{_ekm_note}</span></div>")
                 _tvc.markdown(
                     f"<div class='vb-card' style='border-color:{_sig_color}'>"
+                    # Quality Score — górny prawy
+                    f"<div style='display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px'>"
                     f"<div class='date'>{str(_tv['data'])[:10] if _tv['data'] else ''}</div>"
+                    f"<div title='Quality Score: {_qs_tip}' style='font-size:0.78em;color:{_qs_c};"
+                    f"font-weight:700;letter-spacing:1px'>{_qs_str}"
+                    f"<span style='font-size:0.72em;font-weight:400;margin-left:3px;color:{_qs_c}88'>{_qs_label}</span>"
+                    f"</div></div>"
                     # Herby + nazwy
                     f"<div style='display:flex;align-items:center;justify-content:center;gap:6px;margin:4px 0'>"
                     f"{(chr(60)+'img src='+chr(39)+_sbn.get(_tv.get('h',''),{}).get('crest','')+chr(39)+' style='+chr(39)+'width:22px;height:22px;object-fit:contain;vertical-align:middle'+chr(39)+' onerror='+chr(34)+'this.style.display='+chr(39)+'none'+chr(39)+chr(34)+chr(62)) if _sbn.get(_tv.get('h',''),{}).get('crest') else ''}"
@@ -3339,9 +3474,10 @@ if not historical.empty:
                     f" &nbsp;·&nbsp; "
                     f"<span class='ev' style='color:{_sig_color}' title='Expected Value'>EV: {_ev_pct}</span>"
                     f"</div>"
-                    f"<div style='margin-top:6px'>"
+                    f"<div style='margin-top:6px;display:flex;flex-wrap:wrap;gap:4px'>"
                     f"<span class='stat-pill' style='border-color:{_sig_color}33;color:{_sig_color}'>{_sig_label}</span>"
-                    f"<span class='stat-pill' title='Edge = różnica między p modelu a implied prob bukmachera (1/kurs). Im wyższy, tym silniejszy sygnał.'>EDGE +{_edge_pp:.1f}pp</span>"
+                    f"<span class='stat-pill' title='Edge = różnica między p modelu a implied prob bukmachera'>EDGE +{_edge_pp:.1f}pp</span>"
+                    f"{_sot_badge}"
                     f"</div>"
                     f"{_kelly_str}"
                     f"</div>",
@@ -3349,8 +3485,9 @@ if not historical.empty:
             st.markdown(
                 "<p style='font-size:0.72em;color:#444;margin:8px 0 16px 0'>"
                 "✦ = fair odds (brak danych bukmachera) · "
-                "EV = prawdopodobieństwo modelu × kurs − 1 · "
-                "Kelly = Conservative Kelly (p×0.85, Half-KF) · bankroll 1000 zł</p>",
+                "EV = p × kurs − 1 · "
+                "★★★★★ = Quality Score (p + Chaos + SOT Momentum + EV) · "
+                "Kelly ×N = korekta na Chaos Index</p>",
                 unsafe_allow_html=True)
             st.markdown("---")
 
@@ -3972,6 +4109,23 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     conf_c = conf_colors.get(pred["conf_level"], "#888")
                                     ch_c   = chaos_colors.get(pred["chaos_label"], "#888")
                                     bar_w  = int(pred["chaos_pct"] * 100)
+                                    # Pre-compute Quality Score dla pro card
+                                    _pc_smh = sot_momentum(home_name, historical)
+                                    _pc_sma = sot_momentum(away_name, historical)
+                                    _pc_qs, _pc_qs_str, _pc_qs_label, _pc_qs_tip = quality_score(
+                                        pred["p_typ"], pred["entropy"], _pc_smh, _pc_sma, ev=0.0)
+                                    _pc_qs_c = {5:"#1a6b1a",4:"#2e7d32",3:"#f57c00",2:"#888",1:"#c62828"}.get(_pc_qs,"#888")
+                                    _pc_qs_html = (
+                                        f"<div style='margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;align-items:center'>"
+                                        f"<span title='Quality Score: {_pc_qs_tip}' style='font-size:0.85em;color:{_pc_qs_c};"
+                                        f"font-weight:700;letter-spacing:1px'>{_pc_qs_str} "
+                                        f"<span style='font-size:0.72em;font-weight:400'>{_pc_qs_label}</span></span>"
+                                        + (f"<span class='stat-pill' title='Gospodarz {_pc_smh:.0%} więcej SOT niż sezonowo'>🔥 Atak H +{(_pc_smh-1)*100:.0f}%</span>" if _pc_smh and _pc_smh >= 1.35 else "")
+                                        + (f"<span class='stat-pill'>↑SOT H +{(_pc_smh-1)*100:.0f}%</span>" if _pc_smh and 1.15 <= _pc_smh < 1.35 else "")
+                                        + (f"<span class='stat-pill' title='Gość {_pc_sma:.0%} więcej SOT niż sezonowo'>🔥 Atak A +{(_pc_sma-1)*100:.0f}%</span>" if _pc_sma and _pc_sma >= 1.35 else "")
+                                        + (f"<span class='stat-pill'>↑SOT A +{(_pc_sma-1)*100:.0f}%</span>" if _pc_sma and 1.15 <= _pc_sma < 1.35 else "")
+                                        + f"</div>"
+                                    )
                                     st.markdown(
                                         f"<div style='text-align:center;margin-bottom:4px'>"
                                         f"Typ: {badge_typ(pred['typ'])}&nbsp;&nbsp;"
@@ -3989,6 +4143,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                         f" ({pred['entropy']:.2f} bits)</div>"
                                         f"<div style='background:var(--bg-card2);border-radius:4px;height:4px;margin-top:4px'>"
                                         f"<div style='background:{ch_c};width:{bar_w}%;height:4px;border-radius:4px'></div>"
+                                        f"</div>"
+                                        f"{_pc_qs_html}"
                                         f"</div></div>",
                                         unsafe_allow_html=True,
                                     )
@@ -4699,7 +4855,213 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 # 📲 Telegram digest obsługiwany przez bot_runner.py
                 # (wysyła automatycznie o DIGEST_HOUR, wszystkie ligi, raz dziennie)
 
+        # ── Briefing kolejki – Stability Score per liga ────────────────────────
+        with st.expander("🛡️ Briefing kolejki – stabilność lig", expanded=False):
+            st.caption("Która liga jest dziś wiarygodna dla modelu? Chaos Index per liga w bieżącej kolejce.")
 
+            _brf_rows   = []   # dane per liga do tabeli i telegramu
+            _brf_value  = []   # value bety z stabilnych lig
+
+            for _brf_liga, _brf_cfg in LIGI.items():
+                try:
+                    _brf_hist = load_historical(_brf_cfg["csv_code"])
+                    _brf_sch  = load_schedule(_brf_cfg["fd_org_id"], _brf_cfg["file"])
+                    if _brf_hist.empty or _brf_sch.empty:
+                        continue
+                    _brf_avg  = oblicz_srednie_ligowe(_brf_hist.to_json())
+                    _brf_srl  = oblicz_wszystkie_statystyki(_brf_hist.to_json())
+                    if _brf_srl is None or _brf_srl.empty:
+                        continue
+                    _brf_rho  = float(_brf_avg.get("rho", -0.13))
+                    _brf_kol  = get_current_round(_brf_sch)
+                    _brf_mecze = _brf_sch[_brf_sch["round"] == _brf_kol]
+                    if _brf_mecze.empty:
+                        continue
+
+                    # Entropy per mecz → średni Chaos Index kolejki
+                    _brf_ents = []
+                    _brf_vbs  = []
+                    _brf_forma = {}   # uproszczony forma_dict (pusty — nie mamy go per liga)
+                    for _, _bm in _brf_mecze.iterrows():
+                        _bh = map_nazwa(_bm["home_team"])
+                        _ba = map_nazwa(_bm["away_team"])
+                        if _bh not in _brf_srl.index or _ba not in _brf_srl.index:
+                            continue
+                        try:
+                            _blh, _bla, *_ = oblicz_lambdy(
+                                _bh, _ba, _brf_srl, _brf_avg, _brf_forma,
+                                csv_code=_brf_cfg["csv_code"])
+                            _bpr = predykcja_meczu(
+                                _blh, _bla, rho=_brf_rho,
+                                csv_code=_brf_cfg["csv_code"])
+                            _brf_ents.append(_bpr["entropy"])
+                            # Value bety z tej ligi
+                            if _bpr["p_typ"] >= PROG_PEWNY:
+                                _brf_vbs.append({
+                                    "liga": _brf_liga,
+                                    "home": _bm.get("home_team", _bh),
+                                    "away": _bm.get("away_team", _ba),
+                                    "typ":  _bpr["typ"],
+                                    "p":    _bpr["p_typ"],
+                                    "fo":   _bpr["fo_typ"],
+                                    "ent":  _bpr["entropy"],
+                                    "chaos":_bpr["chaos_label"],
+                                })
+                        except Exception:
+                            continue
+
+                    if not _brf_ents:
+                        continue
+
+                    _avg_ent = float(np.mean(_brf_ents))
+                    # Stability score: entropia 0.5 (pewny) → 100%, 1.5 (losowy) → 0%
+                    _stab = max(0.0, min(1.0, 1.0 - (_avg_ent - 0.5) / 1.0))
+                    _stab_pct = int(_stab * 100)
+
+                    if   _stab_pct >= 65: _rec = "✅ Graj";     _rec_c = "#4CAF50"; _stars = "●●●"
+                    elif _stab_pct >= 45: _rec = "⚠️ Ostrożnie"; _rec_c = "#FF9800"; _stars = "●●○"
+                    else:                 _rec = "🚫 Odpuść";    _rec_c = "#F44336"; _stars = "●○○"
+
+                    _brf_rows.append({
+                        "liga": _brf_liga,
+                        "flag": _LIGA_FLAGS.get(_brf_liga, "⚽"),
+                        "stab": _stab_pct,
+                        "rec":  _rec,
+                        "rec_c":_rec_c,
+                        "stars":_stars,
+                        "kol":  _brf_kol,
+                        "n_mecze": len(_brf_ents),
+                        "avg_ent": round(_avg_ent, 3),
+                    })
+                    # Zbierz value bety tylko z lig "Graj"
+                    if _stab_pct >= 65:
+                        _brf_value.extend(_brf_vbs)
+
+                except Exception:
+                    continue
+
+            if _brf_rows:
+                # Sortuj: najstabilniejsze na górze
+                _brf_rows.sort(key=lambda x: -x["stab"])
+
+                # ── Nagłówek ──
+                st.markdown(
+                    "<div class='section-header'>🛡️ Stability Score – bieżąca kolejka</div>",
+                    unsafe_allow_html=True)
+
+                # ── Tabela per liga ──
+                _tbl_rows = []
+                for _br in _brf_rows:
+                    _bar_w  = _br["stab"]
+                    _bar_c  = "#4CAF50" if _br["stab"] >= 65 else ("#FF9800" if _br["stab"] >= 45 else "#F44336")
+                    _bar_bg = "var(--bg-card2)"
+                    _tbl_rows.append(
+                        f"<tr style='border-bottom:1px solid var(--border)'>"
+                        f"<td style='padding:8px 12px;font-size:0.88em;font-weight:600;color:var(--text-primary)'>"
+                        f"  {_br['flag']} {_br['liga']}</td>"
+                        f"<td style='padding:8px 10px;text-align:center'>"
+                        f"  <div style='display:flex;align-items:center;gap:8px'>"
+                        f"    <div style='flex:1;background:{_bar_bg};border-radius:4px;height:8px;overflow:hidden'>"
+                        f"      <div style='width:{_bar_w}%;height:8px;border-radius:4px;background:{_bar_c}'></div>"
+                        f"    </div>"
+                        f"    <span style='font-size:0.82em;color:{_bar_c};font-weight:700;min-width:32px'>{_bar_w}%</span>"
+                        f"  </div></td>"
+                        f"<td style='padding:8px 10px;text-align:center;font-size:0.82em;color:#888'>"
+                        f"  {_br['stars']}</td>"
+                        f"<td style='padding:8px 10px;text-align:center;font-size:0.85em;"
+                        f"  font-weight:700;color:{_br['rec_c']}'>{_br['rec']}</td>"
+                        f"<td style='padding:8px 10px;text-align:center;font-size:0.78em;color:var(--text-muted)'>"
+                        f"  kol.{_br['kol']} · {_br['n_mecze']}M</td>"
+                        f"</tr>"
+                    )
+
+                st.markdown(
+                    f"<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse'>"
+                    f"<thead><tr style='border-bottom:2px solid var(--border)'>"
+                    f"<th style='padding:7px 12px;text-align:left;font-size:0.78em;color:var(--text-muted);text-transform:uppercase'>Liga</th>"
+                    f"<th style='padding:7px 10px;text-align:left;font-size:0.78em;color:var(--text-muted);text-transform:uppercase'>Stabilność</th>"
+                    f"<th style='padding:7px 10px;text-align:center;font-size:0.78em;color:var(--text-muted);text-transform:uppercase'>Model</th>"
+                    f"<th style='padding:7px 10px;text-align:center;font-size:0.78em;color:var(--text-muted);text-transform:uppercase'>Rekomendacja</th>"
+                    f"<th style='padding:7px 10px;text-align:center;font-size:0.78em;color:var(--text-muted);text-transform:uppercase'>Kolejka</th>"
+                    f"</tr></thead><tbody>{''.join(_tbl_rows)}</tbody></table></div>",
+                    unsafe_allow_html=True)
+
+                # ── Top value bety z stabilnych lig ──
+                if _brf_value:
+                    st.markdown(
+                        "<div class='section-header' style='margin-top:20px'>"
+                        "💎 Value bety z lig o wysokiej stabilności</div>",
+                        unsafe_allow_html=True)
+                    _brf_value.sort(key=lambda x: (x["ent"], -x["p"]))  # niski chaos, wysoka p
+                    _vb_html = []
+                    for _bv in _brf_value[:8]:
+                        _flag = _LIGA_FLAGS.get(_bv["liga"], "⚽")
+                        _ch_c = "#4CAF50" if _bv["chaos"] == "Stabilny" else "#FF9800"
+                        _vb_html.append(
+                            f"<div style='padding:8px 12px;border-left:3px solid {_ch_c};"
+                            f"background:var(--bg-card);border-radius:0 6px 6px 0;margin-bottom:6px'>"
+                            f"<span style='font-size:0.8em;color:var(--text-muted)'>{_flag} {_bv['liga']}</span>"
+                            f"<div style='font-weight:600;color:var(--text-primary);font-size:0.9em'>"
+                            f"  {_bv['home']} – {_bv['away']}</div>"
+                            f"<div style='font-size:0.82em;color:var(--text-muted);margin-top:2px'>"
+                            f"  Typ: <b style='color:var(--accent)'>{_bv['typ']}</b>"
+                            f"  · p={_bv['p']:.1%}"
+                            f"  · kurs fair {_bv['fo']:.2f}"
+                            f"  · <span style='color:{_ch_c}'>{_bv['chaos']}</span>"
+                            f"</div></div>"
+                        )
+                    st.markdown("".join(_vb_html), unsafe_allow_html=True)
+                else:
+                    st.info("Brak value betów z lig o wysokiej stabilności w bieżącej kolejce.")
+
+                # ── Przycisk wyślij na Telegram ──
+                if _TG_OK:
+                    st.markdown("")
+                    if st.button("📲 Wyślij Briefing na Telegram", key="_brf_tg_send",
+                                 use_container_width=True):
+                        try:
+                            _brf_now = datetime.now().strftime("%d.%m.%Y %H:%M")
+                            _brf_lines = [
+                                f"🛡️ <b>Briefing kolejki</b>  ·  {_brf_now}\n"
+                            ]
+                            for _br in _brf_rows:
+                                _bar_chars = "●" * round(_br["stab"]/33.3) + "○" * (3 - round(_br["stab"]/33.3))
+                                _brf_lines.append(
+                                    f"{_br['flag']} <b>{_br['liga']}</b>  kol.{_br['kol']}\n"
+                                    f"   Stabilność: <b>{_br['stab']}%</b>  {_bar_chars}  {_br['rec']}"
+                                )
+                            if _brf_value:
+                                _brf_lines.append(f"\n💎 <b>Value bety (stabilne ligi):</b>")
+                                for _bv in _brf_value[:6]:
+                                    _flag = _LIGA_FLAGS.get(_bv["liga"], "⚽")
+                                    _brf_lines.append(
+                                        f"{_flag} <b>{_bv['home']} – {_bv['away']}</b>\n"
+                                        f"   {_bv['typ']}  ·  p={_bv['p']:.0%}"
+                                        f"  ·  fair {_bv['fo']:.2f}  ·  {_bv['chaos']}"
+                                    )
+                            else:
+                                _brf_lines.append("\n_Brak value betów spełniających kryteria._")
+
+                            _brf_lines.append(
+                                f"\n<i>Stability Score = przewidywalność modelu (Chaos Index kolejki)."
+                                f" ✅ ≥65% · ⚠️ 45-64% · 🚫 &lt;45%</i>"
+                            )
+                            _brf_msg = "\n".join(_brf_lines)
+                            _ok = _tg.send_message(_brf_msg)
+                            if _ok:
+                                st.success("✅ Briefing wysłany na Telegram!")
+                            else:
+                                st.error("Błąd wysyłania — sprawdź token i chat_id.")
+                        except Exception as _brf_e:
+                            st.error(f"Błąd: {_brf_e}")
+
+                st.caption(
+                    "Stability Score = 1 − (avg_entropy − 0.5).  "
+                    "Im niższa entropia macierzy wyników, tym bardziej zdecydowany model.  "
+                    "●●● ≥65% · ●●○ 45-64% · ●○○ <45%"
+                )
+            else:
+                st.info("Ładowanie danych wszystkich lig...")
 
     # =========================================================================
     with tab3:
