@@ -358,8 +358,12 @@ TEAM_NAME_MAP = {
     "Atalanta":                     "Atalanta",
     "Juventus":                     "Juventus",
     # ── LIGUE 1 ──────────────────────────────────────────────────────────────
+       "Paris Saint Germain":          "Paris SG",
     "Paris Saint-Germain":          "Paris SG",
+    "Paris SG":                     "Paris SG",
     "PSG":                          "Paris SG",
+    "Paris SG FC":                  "Paris SG",
+    "Paris Saint-Germain FC":       "Paris SG",
     "Olympique de Marseille":       "Marseille",
     "Marseille":                    "Marseille",
     "Olympique Lyonnais":           "Lyon",
