@@ -559,7 +559,72 @@ def predykcja(lam_h: float, lam_a: float, rho: float = -0.13,
     p_a = float(np.triu(M,  1).sum())
     typ, p_typ = wybierz_typ(p_h, p_d, p_a, csv_code, n_train)
     fo_typ = round(1 / p_typ, 2) if p_typ > 0 else 999
-    return {"typ": typ, "p_typ": p_typ, "fo_typ": fo_typ}
+    # Entropy macierzy — miara chaosu (niższa = bardziej zdecydowany model)
+    M_flat = M.flatten()
+    M_flat = M_flat[M_flat > 0]
+    ent = float(-np.sum(M_flat * np.log(M_flat)))
+    return {"typ": typ, "p_typ": p_typ, "fo_typ": fo_typ, "entropy": ent}
+
+
+def compute_stability() -> list:
+    """
+    Oblicza Stability Score dla każdej ligi w bieżącej kolejce.
+    Zwraca listę dictów posortowaną po stability malejąco.
+    """
+    results = []
+    for liga_name, cfg in LIGI.items():
+        try:
+            hl = load_historical(cfg["csv_code"])
+            sl = load_schedule(cfg["fd_org_id"])
+            if hl.empty or sl.empty:
+                continue
+            srl = oblicz_statystyki(hl)
+            avg = oblicz_srednie(hl)
+            rho = avg.get("rho", -0.13)
+            kol = get_current_round(sl)
+            mecze = sl[sl["round"] == kol]
+            idx = list(srl.index)
+
+            ents = []
+            for _, m in mecze.iterrows():
+                h = map_nazwa(m.get("home_team", ""))
+                a = map_nazwa(m.get("away_team", ""))
+                if h not in idx or a not in idx:
+                    continue
+                try:
+                    lam_h, lam_a = oblicz_lambdy(h, a, srl, avg, {})[0:2]
+                    pr = predykcja(lam_h, lam_a, rho=rho, csv_code=cfg["csv_code"])
+                    ents.append(pr["entropy"])
+                except Exception:
+                    continue
+
+            if not ents:
+                continue
+
+            avg_ent = float(np.mean(ents))
+            stab = max(0.0, min(1.0, 1.0 - (avg_ent - 0.5) / 1.0))
+            stab_pct = int(stab * 100)
+
+            if   stab_pct >= 65: rec = "✅ Graj";      stars = "●●●"
+            elif stab_pct >= 45: rec = "⚠️ Ostrożnie"; stars = "●●○"
+            else:                rec = "🚫 Odpuść";    stars = "●○○"
+
+            results.append({
+                "liga":  liga_name,
+                "flag":  LIGA_EMOJI.get(liga_name, "⚽"),
+                "stab":  stab_pct,
+                "rec":   rec,
+                "stars": stars,
+                "kol":   int(kol),
+                "n":     len(ents),
+            })
+        except Exception as e:
+            log.debug(f"stability {liga_name}: {e}")
+            continue
+
+    results.sort(key=lambda x: -x["stab"])
+    return results
+
 
 def kelly_stake(p: float, kurs: float, bankroll: float = KELLY_BANKROLL) -> float:
     """Zwraca stawkę Kelly w PLN."""
