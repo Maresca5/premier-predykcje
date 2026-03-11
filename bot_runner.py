@@ -52,6 +52,15 @@ _BOT_LOCKFILE = "/tmp/zipybets_bot.lock"
 _TG_TOKEN   = None
 _TG_CHAT    = None
 _FD_API_KEY = None
+OA_DB       = "predykcje.db"  # ten sam plik co app.py
+
+# Import odds_api (opcjonalny)
+try:
+    import odds_api as _oa
+    _OA_OK = True
+except ImportError:
+    _oa    = None
+    _OA_OK = False
 
 # ── Konfiguracja (skopiowana z app.py, bez importowania Streamlit) ────────────
 LIGI = {
@@ -596,6 +605,14 @@ def compute_value_bets() -> list:
             kol   = get_current_round(sl)
             mecze = sl[sl["round"] == kol]   # tylko bieżąca kolejka
             idx   = list(srl.index)
+
+            # Kursy z cache SQLite (pobrane przez aplikację) — zero nowych requestów
+            oa_cached = {}
+            if _OA_OK:
+                try:
+                    oa_cached = _oa.get_cached_odds(cfg["csv_code"], OA_DB)
+                except Exception:
+                    pass
             n_added = 0; n_skip_name = 0; n_skip_prog = 0
 
             for _, m in mecze.iterrows():
@@ -620,7 +637,27 @@ def compute_value_bets() -> list:
                         n_skip_prog += 1
                         continue
                     ev    = round(p * fo - 1.0, 3)
-                    stake = kelly_stake(p, fo)
+
+                    # Live kurs bukmachera
+                    kurs_buk = None
+                    ev_buk   = None
+                    if oa_cached:
+                        try:
+                            o = _oa.znajdz_kursy(h, a, oa_cached)
+                            if o:
+                                kmap = {"1": o["odds_h"], "X": o["odds_d"], "2": o["odds_a"],
+                                        "1X": max(o["odds_h"], o["odds_d"]),
+                                        "X2": max(o["odds_d"], o["odds_a"])}
+                                kb = kmap.get(pr["typ"])
+                                if kb and kb > 1.01:
+                                    kurs_buk = round(kb, 2)
+                                    ev_buk   = round(p * kb - 1.0, 3)
+                        except Exception:
+                            pass
+                    # Kelly od kursu buka jeśli dostępny
+                    kurs_kelly = kurs_buk if kurs_buk else fo
+                    stake = kelly_stake(p, kurs_kelly)
+
                     data_str = str(m.get("date", ""))[:10]
                     all_bets.append({
                         "liga":     liga_name,
@@ -629,7 +666,10 @@ def compute_value_bets() -> list:
                         "typ":      pr["typ"],
                         "p_model":  p,
                         "kurs":     fo,
-                        "ev":       ev,
+                        "kurs_buk": kurs_buk,
+                        "ev":       ev_buk if ev_buk is not None else ev,
+                        "ev_fair":  ev,
+                        "live":     kurs_buk is not None,
                         "stake":    stake,
                         "kolejka":  int(kol),
                         "data":     data_str,
@@ -651,67 +691,50 @@ def compute_value_bets() -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 # FORMATOWANIE WIADOMOŚCI
 # ─────────────────────────────────────────────────────────────────────────────
-def _format_value_message(bets: list, title: str = "💰 Value Bets",
-                           app_url: str = "https://zipybets.streamlit.app") -> str:
+def _format_value_message(bets: list, title: str = "🔔 VALUE BETS") -> str:
     if not bets:
-        return "🔍 <b>Brak typów</b> spełniających kryteria (p≥55%) w bieżącej kolejce."
+        return "🔍 <b>Brak value betów</b> w bieżącej kolejce (p≥55%).\nSprawdź ponownie po zaplanowaniu meczy."
 
     by_liga = defaultdict(list)
     for b in bets:
         by_liga[b["liga"]].append(b)
 
     now = datetime.now().strftime("%d.%m.%Y  %H:%M")
-    TYP_ICON = {"1": "🏠", "X": "🤝", "2": "✈️", "1X": "🏠🤝", "X2": "🤝✈️"}
+    has_live = any(b.get("live") for b in bets)
 
-    def conf_dots(p):
-        return "●●●" if p >= 0.72 else ("●●○" if p >= 0.63 else "●○○")
+    def p_icon(p: float) -> str:
+        return "🟢" if p >= 0.65 else ("🟡" if p >= 0.58 else "🔵")
 
-    def ev_tag(ev):
-        return "🔥" if ev >= 0.12 else ("📈" if ev >= 0.06 else "➕")
+    lines = [f"<b>{title}</b>  ·  {now}", ""]
 
-    lines = [
-        f"<b>{title}</b>",
-        f"🕐 {now}  ·  {len(bets)} typów z {len(by_liga)} lig",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-    ]
-
-    # TOP 3 — najwyższe EV
-    top3 = sorted(bets, key=lambda x: -x.get("ev", 0))[:3]
-    if top3:
-        lines.append("\n🏆 <b>TOP 3 OKAZJE KOLEJKI</b>")
-        for i, b in enumerate(top3, 1):
-            flag = LIGA_EMOJI.get(b["liga"], "⚽")
-            ti   = TYP_ICON.get(b["typ"], "⚽")
-            ev_p = b.get("ev", 0)
-            lines.append(
-                f"  {i}. {flag} <b>{b['home']} – {b['away']}</b>"
-                f"\n     {ti} <b>{b['typ']}</b>  ·  p=<b>{b['p_model']:.0%}</b>"
-                f"  ·  {ev_tag(ev_p)} EV: <b>{ev_p:+.1%}</b>"
-            )
-        lines.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-    # Per liga
     for liga, lb in by_liga.items():
-        flag      = LIGA_EMOJI.get(liga, "⚽")
-        lb_sorted = sorted(lb, key=lambda x: -x.get("ev", 0))[:5]
-        kol_nr    = lb_sorted[0]["kolejka"]
-        lines.append(f"\n{flag}  <b>{liga}</b>  ·  kol. {kol_nr}")
+        flag = LIGA_EMOJI.get(liga, "⚽")
+        kol  = lb[0]["kolejka"]
+        for b in sorted(lb, key=lambda x: -x.get("ev", 0))[:5]:
+            pi       = p_icon(b["p_model"])
+            ev_val   = b.get("ev", 0)
+            data_fmt = b["data"][5:].replace("-", ".") if b.get("data") else ""
+            date_str = f"  📅 {data_fmt}" if data_fmt else ""
+            kelly_str = f"\n   💰 Stawka Kelly: <b>{b['stake']:.0f} zł</b>" if b.get("stake", 0) > 5 else ""
 
-        for b in lb_sorted:
-            ti       = TYP_ICON.get(b["typ"], "⚽")
-            ev_p     = b.get("ev", 0)
-            data_fmt = b["data"][5:].replace("-", ".") if b.get("data") else "?"
-            kelly_str = f"  💰 Kelly: <b>{b['stake']:.0f} zł</b>" if b.get("stake", 0) > 5 else ""
+            # Kurs: pokaż buka jeśli dostępny, inaczej fair
+            if b.get("kurs_buk"):
+                kurs_line = (f"Kurs fair: {b['kurs']:.2f}  →  "
+                             f"Buka: <b>{b['kurs_buk']:.2f}</b> 🔴live")
+            else:
+                kurs_line = f"Kurs fair: <b>{b['kurs']:.2f}</b> <i>(sprawdź u buka)</i>"
+
             lines.append(
-                f"\n⚽ <b>{b['home']} – {b['away']}</b>  📅 {data_fmt}"
-                f"\n   {ti} <b>{b['typ']}</b>  ·  {conf_dots(b['p_model'])} <b>{b['p_model']:.0%}</b>"
-                f"\n   💵 Kurs fair: <b>{b['kurs']:.2f}</b>  ·  {ev_tag(ev_p)} EV: <b>{ev_p:+.1%}</b>{kelly_str}"
+                f"{pi} <b>{b['home']} vs {b['away']}</b>{date_str}"
+                f"\n   {flag} {liga}  ·  kolejka {kol}"
+                f"\n   Typ: <b>{b['typ']}</b>  ·  {kurs_line}"
+                f"\n   P modelu: <b>{b['p_model']:.1%}</b>  ·  EV: <b>{ev_val:+.1%}</b>"
+                f"{kelly_str}"
             )
-        lines.append("")
+            lines.append("")
 
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"<i>EV = (p × kurs) − 1, kurs = fair odds modelu</i>")
-    lines.append(f"🌐 <a href='{app_url}'>Otwórz aplikację</a>")
+    note = "<i>EV liczone od kursu buka.</i>" if has_live else "<i>EV od fair odds — sprawdź kurs u buka przed postawieniem.</i>"
+    lines.append(note)
     return "\n".join(lines)
 
 
@@ -920,10 +943,6 @@ def _bot_loop():
 
 
 def start(tg_token: str = None, tg_chat: str = None, fd_api_key: str = None):
-    """
-    Uruchamia bota jako daemon thread.
-    File lock gwarantuje jeden wątek nawet przy wielokrotnych rerunach Streamlit.
-    """
     global _BOT_STARTED, _TG_TOKEN, _TG_CHAT, _FD_API_KEY
     with _BOT_LOCK:
         if tg_token:   _TG_TOKEN   = tg_token
@@ -953,4 +972,3 @@ def start(tg_token: str = None, tg_chat: str = None, fd_api_key: str = None):
 if __name__ == "__main__":
     log.info("Running bot_runner standalone")
     _bot_loop()
- 
