@@ -103,10 +103,11 @@ st.set_page_config(page_title="⚽ Football Analytics", page_icon="⚽", layout=
 st.markdown("""
 <style>
 /* ═══════════════════════════════════════════════════════════
-   CSS CUSTOM PROPERTIES – dark/light na podstawie systemu
+   CSS CUSTOM PROPERTIES
+   Streamlit ustawia [data-theme="light"|"dark"] na <body>
+   Domyślnie: dark
    ═══════════════════════════════════════════════════════════ */
-:root {
-    /* Dark mode (domyślny – Streamlit domyślnie dark) */
+:root, body[data-theme="dark"], .stApp[data-theme="dark"] {
     --bg-app:        #0d0f14;
     --bg-sidebar:    #111318;
     --bg-card:       #14161c;
@@ -138,54 +139,77 @@ st.markdown("""
     --rynek-row-bdr: #1a1a24;
     --rynek-bg:      #1a1a24;
     --section-text:  #e0e0e0;
+    --table-bg:      #14161c;
+    --table-header:  #1a1c24;
+    --table-text:    #e8e8e8;
+    --table-border:  #252d40;
+    --date-bar-bg:   #1a1c24;
+    --match-card-bg: #14161c;
+    --badge-text:    #ffffff;
+    --hero-bg:       #0d1f0d;
+    --stat-bg:       #0e1117;
+    --inline-code-bg:#1e2028;
 }
 
-/* Light mode override */
-@media (prefers-color-scheme: light) {
-    :root {
-        --bg-app:        #f5f6fa;
-        --bg-sidebar:    #ffffff;
-        --bg-card:       #ffffff;
-        --bg-card2:      #f0f2f6;
-        --bg-input:      #e8eaf0;
-        --border:        #d1d5e0;
-        --border-light:  #c4cad8;
-        --text-primary:  #111318;
-        --text-secondary:#2c2f3a;
-        --text-muted:    #5a6070;
-        --text-dim:      #7a8090;
-        --text-dimmer:   #aab0bc;
-        --accent:        #2e7d32;
-        --accent-dim:    rgba(46,125,50,0.07);
-        --accent-bg:     #f0f9f0;
-        --accent-border: #4CAF50;
-        --danger:        #c62828;
-        --warn:          #e65100;
-        --info:          #1565c0;
-        --expander-bg:   linear-gradient(90deg, #f0f2f8 0%, #f5f6fa 100%);
-        --btn-bg:        linear-gradient(135deg, #2e7d32, #388e3c);
-        --btn-hover:     linear-gradient(135deg, #388e3c, #43a047);
-        --metric-bg:     #ffffff;
-        --vb-card-bg:    linear-gradient(145deg, #f0f9f0, #f5fff5);
-        --pill-bg:       #f0f2f6;
-        --onboard-bg:    linear-gradient(135deg, #e3f0ff, #f0fff0);
-        --onboard-h:     #1565c0;
-        --onboard-p:     #445566;
-        --rynek-row-bdr: #e0e4ef;
-        --rynek-bg:      #eef0f8;
-        --section-text:  #111318;
-    }
+body[data-theme="light"], .stApp[data-theme="light"] {
+    --bg-app:        #f5f6fa;
+    --bg-sidebar:    #ffffff;
+    --bg-card:       #ffffff;
+    --bg-card2:      #f0f2f6;
+    --bg-input:      #e8eaf0;
+    --border:        #d1d5e0;
+    --border-light:  #c4cad8;
+    --text-primary:  #111318;
+    --text-secondary:#2c2f3a;
+    --text-muted:    #5a6070;
+    --text-dim:      #7a8090;
+    --text-dimmer:   #aab0bc;
+    --accent:        #2e7d32;
+    --accent-dim:    rgba(46,125,50,0.08);
+    --accent-bg:     #f0f9f0;
+    --accent-border: #4CAF50;
+    --danger:        #c62828;
+    --warn:          #e65100;
+    --info:          #1565c0;
+    --expander-bg:   linear-gradient(90deg, #f0f2f8 0%, #f5f6fa 100%);
+    --btn-bg:        linear-gradient(135deg, #2e7d32, #388e3c);
+    --btn-hover:     linear-gradient(135deg, #388e3c, #43a047);
+    --metric-bg:     #ffffff;
+    --vb-card-bg:    linear-gradient(145deg, #f0f9f0, #f5fff5);
+    --pill-bg:       #f0f2f6;
+    --onboard-bg:    linear-gradient(135deg, #e3f0ff, #f0fff0);
+    --onboard-h:     #1565c0;
+    --onboard-p:     #445566;
+    --rynek-row-bdr: #e0e4ef;
+    --rynek-bg:      #eef0f8;
+    --section-text:  #111318;
+    --table-bg:      #ffffff;
+    --table-header:  #f0f2f6;
+    --table-text:    #111318;
+    --table-border:  #d1d5e0;
+    --date-bar-bg:   #e8eaf0;
+    --match-card-bg: #ffffff;
+    --badge-text:    #ffffff;
+    --hero-bg:       #f0f9f0;
+    --stat-bg:       #f5f6fa;
+    --inline-code-bg:#e8eaf0;
 }
 
 /* ── Tło i typografia ── */
-[data-testid="stAppViewContainer"] { background: var(--bg-app); }
-[data-testid="stSidebar"]          { background: var(--bg-sidebar); border-right: 1px solid var(--border); }
-h1, h2, h3 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; color: var(--text-primary); }
+[data-testid="stAppViewContainer"] { background: var(--bg-app) !important; }
+[data-testid="stSidebar"]          { background: var(--bg-sidebar) !important; border-right: 1px solid var(--border) !important; }
+[data-testid="stSidebar"] * { color: var(--text-primary) !important; }
+h1, h2, h3 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; color: var(--text-primary) !important; }
+p, li, span, label { color: var(--text-primary); }
+
+/* ── Główna treść ── */
+[data-testid="stMain"] { background: var(--bg-app) !important; }
+[data-testid="stMain"] * { color: inherit; }
 
 /* ── Tabs ── */
 [data-testid="stTabs"] button {
     font-size: 0.82em; font-weight: 500; padding: 6px 14px;
-    border-radius: 6px 6px 0 0; color: var(--text-dim); transition: all .2s;
+    border-radius: 6px 6px 0 0; color: var(--text-dim) !important; transition: all .2s;
 }
 [data-testid="stTabs"] button[aria-selected="true"] {
     color: var(--accent) !important; border-bottom: 2px solid var(--accent) !important;
@@ -195,8 +219,8 @@ h1, h2, h3 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; color: v
 
 /* ── Metryki ── */
 [data-testid="stMetric"] {
-    background: var(--metric-bg); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px;
+    background: var(--metric-bg) !important; border: 1px solid var(--border) !important;
+    border-radius: 10px !important; padding: 14px 16px !important;
 }
 [data-testid="stMetricLabel"] { font-size: 0.72em !important; color: var(--text-dim) !important; text-transform: uppercase; letter-spacing: 0.05em; }
 [data-testid="stMetricValue"] { font-size: 1.55em !important; font-weight: 700 !important; color: var(--text-primary) !important; }
@@ -204,24 +228,61 @@ h1, h2, h3 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; color: v
 
 /* ── Przyciski ── */
 [data-testid="stButton"] > button {
-    background: var(--btn-bg);
-    color: #fff; border: 1px solid var(--accent-border); border-radius: 8px;
-    font-weight: 600; transition: all .2s;
+    background: var(--btn-bg) !important;
+    color: #fff !important; border: 1px solid var(--accent-border) !important; border-radius: 8px !important;
+    font-weight: 600 !important; transition: all .2s !important;
 }
-[data-testid="stButton"] > button:hover { background: var(--btn-hover); border-color: var(--accent); transform: translateY(-1px); }
+[data-testid="stButton"] > button:hover { background: var(--btn-hover) !important; }
 
 /* ── Tabele dataframe ── */
 [data-testid="stDataFrame"] { border: 1px solid var(--border) !important; border-radius: 8px !important; }
+[data-testid="stDataFrame"] table { background: var(--table-bg) !important; color: var(--table-text) !important; }
+[data-testid="stDataFrame"] th { background: var(--table-header) !important; color: var(--table-text) !important; border-color: var(--table-border) !important; }
+[data-testid="stDataFrame"] td { background: var(--table-bg) !important; color: var(--table-text) !important; border-color: var(--table-border) !important; }
+
+/* ── Selectbox / inputs ── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stMultiSelect"] > div > div,
+[data-testid="stTextInput"] > div > div > input {
+    background: var(--bg-input) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border) !important;
+}
+[data-testid="stSelectbox"] label,
+[data-testid="stMultiSelect"] label,
+[data-testid="stTextInput"] label,
+[data-testid="stSlider"] label,
+[data-testid="stNumberInput"] label,
+[data-testid="stRadio"] label { color: var(--text-secondary) !important; }
+
+/* ── Toggle ── */
+[data-testid="stToggle"] label { color: var(--text-secondary) !important; }
 
 /* ── Divider ── */
 hr { border-color: var(--border) !important; margin: 20px 0 !important; }
 
-/* ── Sidebar progress ── */
+/* ── Sidebar ── */
 [data-testid="stSidebar"] .stProgress > div > div { background: var(--accent) !important; }
 
 /* ── Expander ── */
 details { border: 1px solid var(--border) !important; border-radius: 8px !important; background: var(--bg-card) !important; }
 details summary { font-weight: 600 !important; color: var(--text-secondary) !important; }
+[data-testid="stExpander"] details summary {
+    background: var(--expander-bg) !important;
+    border-left: 2px solid var(--border-light) !important;
+    padding-left: 8px !important;
+    border-radius: 4px !important;
+    transition: border-color 0.2s;
+}
+[data-testid="stExpander"] details[open] summary { border-left-color: var(--info) !important; }
+[data-testid="stExpander"] details summary p { color: var(--text-secondary) !important; }
+
+/* ── Caption / info / warning / error boxes ── */
+[data-testid="stCaptionContainer"] { color: var(--text-muted) !important; }
+[data-testid="stInfo"]    { background: color-mix(in srgb, var(--info) 10%, var(--bg-card)) !important; border-color: var(--info) !important; color: var(--text-primary) !important; }
+[data-testid="stWarning"] { background: color-mix(in srgb, var(--warn) 10%, var(--bg-card)) !important; border-color: var(--warn) !important; color: var(--text-primary) !important; }
+[data-testid="stError"]   { background: color-mix(in srgb, var(--danger) 10%, var(--bg-card)) !important; border-color: var(--danger) !important; color: var(--text-primary) !important; }
+[data-testid="stSuccess"] { background: color-mix(in srgb, var(--accent) 10%, var(--bg-card)) !important; border-color: var(--accent) !important; color: var(--text-primary) !important; }
 
 /* ── Tooltips helper ── */
 .tooltip-label {
@@ -263,8 +324,8 @@ details summary { font-weight: 600 !important; color: var(--text-secondary) !imp
     background: var(--onboard-bg);
     border: 1px solid var(--border-light); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;
 }
-.onboard-banner h3 { color: var(--onboard-h); margin: 0 0 10px 0; font-size: 1.05em; }
-.onboard-banner p  { color: var(--onboard-p); font-size: 0.83em; margin: 0; line-height: 1.6; }
+.onboard-banner h3 { color: var(--onboard-h) !important; margin: 0 0 10px 0; font-size: 1.05em; }
+.onboard-banner p  { color: var(--onboard-p) !important; font-size: 0.83em; margin: 0; line-height: 1.6; }
 
 /* ── Hit rate badge ── */
 .hr-badge-green  { color: var(--accent); font-weight: 700; }
@@ -272,79 +333,59 @@ details summary { font-weight: 600 !important; color: var(--text-secondary) !imp
 .hr-badge-red    { color: var(--danger); font-weight: 700; }
 .hr-badge-gray   { color: var(--text-dim); }
 
-/* ── Rynek row w tabeli skuteczności ── */
+/* ── Rynek row ── */
 .rynek-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--rynek-row-bdr); }
 .rynek-name { font-weight: 600; color: var(--text-primary); min-width: 140px; font-size: 0.88em; }
 .rynek-bar-wrap { flex: 1; background: var(--rynek-bg); border-radius: 4px; height: 8px; overflow: hidden; }
 .rynek-bar { height: 8px; border-radius: 4px; }
 .rynek-stats { font-size: 0.75em; color: var(--text-dim); min-width: 120px; text-align: right; }
 
-/* ── Expander nagłówki – subtelny gradient ── */
-[data-testid="stExpander"] details summary {
-    background: var(--expander-bg);
-    border-left: 2px solid var(--border-light);
-    padding-left: 8px !important;
-    border-radius: 4px;
-    transition: border-color 0.2s;
+/* ── Date bar (nagłówki sobota/niedziela w liście meczy) ── */
+.date-bar {
+    background: var(--date-bar-bg) !important;
+    color: var(--text-secondary) !important;
+    padding: 4px 10px; border-radius: 6px; font-size: 0.8em;
+    font-weight: 600; margin: 10px 0 4px 0;
 }
-[data-testid="stExpander"] details[open] summary {
-    border-left-color: var(--info);
+
+/* ── Match card ── */
+.match-card {
+    background: var(--match-card-bg) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    color: var(--text-primary) !important;
 }
-[data-testid="stExpander"] details summary p { color: var(--text-secondary) !important; }
+.match-card * { color: inherit !important; }
+
+/* ── Stat table (xG, SOT itp.) ── */
+.stat-table { background: var(--stat-bg) !important; border-radius: 8px; }
+.stat-table td, .stat-table th { color: var(--table-text) !important; background: transparent !important; }
+
+/* ── inline code ── */
+code { background: var(--inline-code-bg) !important; color: var(--text-secondary) !important; padding: 1px 5px; border-radius: 3px; }
+
+/* ── Plotly / Altair chart backgrounds ── */
+[data-testid="stPlotlyChart"] { background: transparent !important; }
+
+/* ── Wszelkie niezdefiniowane białe tła w light mode ── */
+body[data-theme="light"] .element-container,
+body[data-theme="light"] [data-testid="stVerticalBlock"] {
+    background: transparent !important;
+}
+
+/* ── Streamlit domyślny tekst ── */
+body[data-theme="light"] .stMarkdown,
+body[data-theme="light"] .stText,
+body[data-theme="light"] p {
+    color: var(--text-primary) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Auto-theme: wykryj preferencję systemową i przełącz Streamlit theme ────
-# Streamlit ignoruje CSS @media prefers-color-scheme – trzeba kliknąć jego własny toggle.
-# Skrypt uruchamia się raz przy ładowaniu, czyta matchMedia i ustawia data-theme na <html>.
-st.markdown("""
-<script>
-(function() {
-    // Uruchom dopiero gdy Streamlit skończy renderować
-    function applyTheme() {
-        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        var html = document.documentElement;
-        var currentTheme = html.getAttribute('data-theme');
 
-        // Ustaw zmienne CSS bezpośrednio na :root w zależności od systemu
-        // (jako fallback gdy Streamlit nie zdąży przełączyć)
-        if (!prefersDark) {
-            html.style.setProperty('color-scheme', 'light');
-            html.setAttribute('data-theme', 'light');
-        } else {
-            html.style.setProperty('color-scheme', 'dark');
-            html.setAttribute('data-theme', 'dark');
-        }
+# ── Auto-theme: Streamlit ustawia data-theme na body automatycznie ──────────
+# Nasze CSS używa body[data-theme="light/dark"] - nie potrzebujemy JS.
 
-        // Spróbuj też kliknąć Streamlit's own theme toggle jeśli nie zgadza się
-        // (działa na Streamlit >= 1.28)
-        try {
-            var themeBtn = document.querySelector('[data-testid="baseButton-headerNoPadding"]');
-            if (!themeBtn) return;
-            var body = document.body;
-            var isDarkNow = body.classList.contains('dark') ||
-                            getComputedStyle(body).backgroundColor === 'rgb(14, 17, 23)';
-            if (prefersDark && !isDarkNow) { themeBtn.click(); }
-            if (!prefersDark && isDarkNow) { themeBtn.click(); }
-        } catch(e) {}
-    }
-
-    // Czekaj na pełne załadowanie DOM
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(applyTheme, 300);
-        });
-    } else {
-        setTimeout(applyTheme, 300);
-    }
-
-    // Reaguj na zmianę ustawień systemu w locie
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
-        setTimeout(applyTheme, 100);
-    });
-})();
-</script>
-""", unsafe_allow_html=True)
 
 # ===========================================================================
 def normalize_name(name: str) -> str:
@@ -2382,7 +2423,7 @@ def _stat_bar(val, avg_liga, label, unit="", higher_better=True) -> str:
             f"<span style='font-size:0.75em;color:#666'>{label}</span>"
             f"<span style='font-size:0.75em;color:{c};font-weight:600'>"
             f"{val:.2f}{unit} <span style='color:#444'>({sign}{diff:.2f})</span></span></div>"
-            f"<div style='background:#1a1c24;border-radius:3px;height:4px'>"
+            f"<div style='background:var(--bg-card2);border-radius:3px;height:4px'>"
             f"<div style='background:{c};width:{bar_w}%;height:4px;border-radius:3px'></div>"
             f"</div></div>")
 
@@ -2447,7 +2488,7 @@ def render_forma_kontekst(home: str, away: str, pred: dict,
                 if abs(rozb) >= 0.08:
                     dv_c = "#4CAF50" if rozb > 0 else "#ef5350"
                     dv_label = "⚡ Rynek płaci więcej niż fair" if rozb > 0 else "⚠️ Rynek poniżej fair"
-                    dv_html = (f"<div style='margin-top:8px;background:#13141c;border-left:3px solid {dv_c};"
+                    dv_html = (f"<div style='margin-top:8px;background:var(--bg-card);border-left:3px solid {dv_c};"
                                f"padding:6px 10px;border-radius:0 4px 4px 0;font-size:0.8em'>"
                                f"<span style='color:{dv_c};font-weight:700'>{dv_label}:</span> "
                                f"fair={fo:.2f} · buk={k_buk:.2f} · różnica {rozb:+.0%}</div>")
@@ -2463,11 +2504,11 @@ def render_forma_kontekst(home: str, away: str, pred: dict,
     if konflikty:
         konflikty_html = "".join(
             f"<div style='font-size:0.78em;color:#aaa;margin:3px 0;padding:4px 8px;"
-            f"background:#13141c;border-radius:4px'>{k}</div>"
+            f"background:var(--bg-card);border-radius:4px'>{k}</div>"
             for k in konflikty)
 
     html = (
-        f"<div style='background:#0d0f14;border:1px solid #1e2028;border-radius:8px;"
+        f"<div style='background:var(--bg-app);border:1px solid var(--border);border-radius:8px;"
         f"padding:12px 14px;font-family:inherit'>"
         # Wiersz drużyn
         f"<div style='display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:start'>"
@@ -2529,7 +2570,7 @@ def badge_typ(typ: str) -> str:
     else:
         kolory = {"1": "#2196F3", "X": "#FF9800", "2": "#E91E63"}
         styl   = f"background:{kolory.get(typ, '#888')}"
-    return (f"<span style='{styl};color:white;padding:2px 14px;"
+    return (f"<span style='{styl};color:var(--text-primary);padding:2px 14px;"
             f"border-radius:12px;font-weight:bold;font-size:0.95em'>{typ}</span>")
 
 def render_macierz_html(M: np.ndarray, home: str, away: str) -> str:
@@ -2746,7 +2787,7 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
             st.markdown(
                 f"<div style='font-size:0.78em;color:#888;margin-bottom:4px'>"
                 f"Requestów: <b style='color:{_bc}'>{_rem}/500</b></div>"
-                f"<div style='background:#333;border-radius:3px;height:4px'>"
+                f"<div style='background:var(--bg-card2);border-radius:3px;height:4px'>"
                 f"<div style='background:{_bc};width:{min(int(_rem/5),100)}%;height:4px;border-radius:3px'></div></div>",
                 unsafe_allow_html=True)
         if _last:
@@ -2805,128 +2846,8 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
             except Exception:
                 pass
 
-    # 📲 Telegram polling przeniesiony poniżej — po załadowaniu modelu (wartości betów ze wszystkich lig)
-    # 📲 Telegram: zbiorczy poranny digest ze WSZYSTKICH lig (raz dziennie, 8-10 rano)
-    # Działa niezależnie od aktywnej ligi — ładuje dane każdej ligi osobno
-    if _TG_OK and _tg.should_send_morning("_all_ligi_"):
-        _tg_all_key = f"_tg_all_digest_{datetime.now().strftime('%Y%m%d')}"
-        if not st.session_state.get(_tg_all_key):
-            try:
-                _tg_all_vbs = {}   # liga → lista value betów
-                _tg_all_errs = []
-
-                for _tg_lig in LIGI.keys():
-                    try:
-                        _tg_h_lig = load_historical(LIGI[_tg_lig]["csv_code"])
-                        _tg_s_lig = load_schedule(LIGI[_tg_lig]["fd_org_id"],
-                                                   LIGI[_tg_lig]["file"])
-                        if _tg_h_lig.empty or _tg_s_lig.empty:
-                            continue
-                        # Oblicz statystyki i rho dla tej ligi
-                        _tg_sr_lig  = oblicz_wszystkie_statystyki(_tg_h_lig.to_json())
-                        _tg_srl_avg = oblicz_srednie_ligowe(_tg_h_lig.to_json())
-                        if _tg_sr_lig is None or _tg_sr_lig.empty:
-                            continue
-                        _tg_rho_lig = float(_tg_srl_avg.get("rho", -0.13))
-                        _tg_fd_lig  = {}  # brak formy – uproszczony digest
-                        _tg_kol_lig = get_current_round(_tg_s_lig)
-                        _tg_mecze_lig = _tg_s_lig[_tg_s_lig["round"] == _tg_kol_lig]
-                        _tg_lig_vbs = []
-
-                        for _, _tg_m in _tg_mecze_lig.iterrows():
-                            try:
-                                _th2 = map_nazwa(_tg_m["home_team"])
-                                _ta2 = map_nazwa(_tg_m["away_team"])
-                                if _th2 not in _tg_sr_lig.index or _ta2 not in _tg_sr_lig.index:
-                                    continue
-                                _lh2, _la2, *_ = oblicz_lambdy(
-                                    _th2, _ta2, _tg_sr_lig, _tg_srl_avg, _tg_fd_lig,
-                                    csv_code=LIGI[_tg_lig]["csv_code"])
-                                _pr2 = predykcja_meczu(
-                                    _lh2, _la2, rho=_tg_rho_lig,
-                                    csv_code=LIGI[_tg_lig]["csv_code"])
-                                # Kursy live jeśli dostępne
-                                if _OA_OK and _oa_key and _oa_cached:
-                                    _tg_o2 = _oa.znajdz_kursy(_th2, _ta2, _oa_cached)
-                                    if _tg_o2:
-                                        _kdc2, _ = _kurs_dc_live(
-                                            _pr2["typ"], _tg_o2["odds_h"],
-                                            _tg_o2["odds_d"], _tg_o2["odds_a"])
-                                        if _kdc2:
-                                            _ev2 = (_pr2["p_typ"] * (_kdc2 - 1)
-                                                    - (1 - _pr2["p_typ"]))
-                                            _br2 = st.session_state.get(
-                                                "bankroll_per_liga", {}
-                                            ).get(_tg_lig, 1000.0)
-                                            _kel2 = kelly_stake(
-                                                _pr2["p_typ"], _kdc2, bankroll=_br2)
-                                            if _ev2 >= _tg.MIN_EV_DIGEST:
-                                                _tg_lig_vbs.append({
-                                                    "home": _th2, "away": _ta2,
-                                                    "liga": _tg_lig,
-                                                    "typ":  _pr2["typ"],
-                                                    "kurs": _kdc2,
-                                                    "p_model": _pr2["p_typ"],
-                                                    "ev":   _ev2,
-                                                    "stake_pln": _kel2.get("stake_pln", 0),
-                                                })
-                            except Exception:
-                                continue
-
-                        if _tg_lig_vbs:
-                            _tg_all_vbs[_tg_lig] = _tg_lig_vbs
-                    except Exception:
-                        _tg_all_errs.append(_tg_lig)
-                        continue
-
-                # Wyślij jedną zbiorczą wiadomość ze wszystkich lig
-                _total_vbs = sum(len(v) for v in _tg_all_vbs.values())
-                _now_s = datetime.now().strftime("%d.%m.%Y %H:%M")
-                if _total_vbs == 0:
-                    _digest_txt = (
-                        f"☀️ <b>Poranny raport</b> · {_now_s}\n\n"
-                        f"Brak value betów (EV ≥ {_tg.MIN_EV_DIGEST:.0%}) "
-                        f"we wszystkich ligach.\n"
-                        f"<i>Sprawdź po odświeżeniu kursów.</i>")
-                else:
-                    _digest_parts = [
-                        f"☀️ <b>Poranny raport – wszystkie ligi</b> · {_now_s}\n"]
-                    for _tg_lig2, _vbs_l in sorted(
-                            _tg_all_vbs.items(),
-                            key=lambda x: -max(b["ev"] for b in x[1])):
-                        _flag2  = _tg._LIGA_EMOJI.get(_tg_lig2, "⚽")
-                        _kol2   = get_current_round(
-                            _tg_s_lig  # przybliżone – użyjemy już załadowanego
-                            if _tg_lig2 == _tg_lig  # ostatnia iteracja pętli
-                            else load_schedule(
-                                LIGI[_tg_lig2]["fd_org_id"],
-                                LIGI[_tg_lig2]["file"]))
-                        _digest_parts.append(
-                            f"\n{_flag2} <b>{_tg_lig2}</b> · kolejka {_kol2}")
-                        for _vb in sorted(_vbs_l, key=lambda x: -x["ev"])[:3]:
-                            _ev_ico = "🟢" if _vb["ev"] >= 0.15 else "🟡"
-                            _digest_parts.append(
-                                f"{_ev_ico} <b>{_vb['home']} vs {_vb['away']}</b>\n"
-                                f"   {_vb['typ']} @ {_vb['kurs']:.2f} · "
-                                f"EV <b>{_vb['ev']:+.1%}</b> · {_vb['stake_pln']:.0f} zł")
-                    _digest_parts.append(
-                        f"\n<i>Łącznie: {_total_vbs} value bet"
-                        f"{'ów' if _total_vbs != 1 else ''} · "
-                        f"Dixon-Coles · Kelly 1/8</i>")
-                    _digest_txt = "\n".join(_digest_parts)
-
-                _ok_all = _tg.send_message(_digest_txt)
-                if _ok_all:
-                    st.session_state[_tg_all_key] = True
-                    for _tg_lig3 in LIGI.keys():
-                        _tg._mark_digest_sent(_tg_lig3)
-                    st.toast(
-                        f"📲 Poranny digest wysłany · {_total_vbs} value betów",
-                        icon="☀️")
-            except Exception:
-                pass
-
-    elif not _OA_OK:
+    # 📲 Telegram digest — przeniesiony do bot_runner.py (daemon thread)
+    # Stary digest usunięty: wysyłał per-liga przy każdym rerun Streamlit
         st.caption("ℹ️ Plik `odds_api.py` nie znaleziony.")
 
 # ── Telegram – sidebar panel ─────────────────────────────────────────────────
@@ -3184,7 +3105,7 @@ _hc1, _hc2, _hc3 = st.columns([5, 2, 2])
 with _hc1:
     _flag_h = _liga_img(wybrana_liga, size="36px", style="margin-right:8px;vertical-align:middle")
     st.markdown(
-        f"<h1 style='margin:0 0 2px 0;font-size:1.9em;font-weight:800;color:#fff;"
+        f"<h1 style='margin:0 0 2px 0;font-size:1.9em;font-weight:800;color:var(--text-primary);"
         f"display:flex;align-items:center;gap:6px'>"
         f"{_flag_h} {wybrana_liga}</h1>"
         f"<p style='margin:0;color:#444;font-size:0.8em;letter-spacing:0.04em'>"
@@ -3209,7 +3130,7 @@ with _hc3:
         if _hr_n > 0:
             _hr_col = "#4CAF50" if _hr_v >= 62 else ("#FF9800" if _hr_v >= 55 else "#F44336")
             st.markdown(
-                f"<div style='background:#14161c;border:1px solid #1e2028;border-radius:10px;"
+                f"<div style='background:var(--bg-card);border:1px solid var(--border);border-radius:10px;"
                 f"padding:12px 16px;text-align:center'>"
                 f"<div style='font-size:0.68em;color:#555;text-transform:uppercase;letter-spacing:.05em'>Hit Rate (1X2)</div>"
                 f"<div style='font-size:2em;font-weight:800;color:{_hr_col};line-height:1.1'>{_hr_v:.1f}%</div>"
@@ -3333,7 +3254,7 @@ if not historical.empty:
                 _sc = "#4CAF50" if 0.05 <= _ad <= 0.15 else ("#FF9800" if _ad < 0.05 else "#F44336")
                 _label = "✅ Sweet Spot" if 0.05 <= _ad <= 0.15 else ("⚠️ Zbyt blisko" if _ad < 0.05 else "⚠️ Zbyt daleko")
                 st.markdown(
-                    f"<div style='background:#0e1117;border:1px solid #2a2a3a;border-radius:8px;padding:10px'>"
+                    f"<div style='background:var(--stat-bg);border:1px solid var(--border);border-radius:8px;padding:10px'>"
                     f"<div style='font-size:1.4em;font-weight:bold;color:{_sc};text-align:center'>{_ad:.1%}</div>"
                     f"<div style='font-size:0.78em;color:{_sc};text-align:center;margin-bottom:6px'>{_label}</div>"
                     f"<div style='display:flex;justify-content:space-around;font-size:0.72em;color:#666'>"
@@ -3723,11 +3644,11 @@ if not historical.empty:
                         _typ_badge_color = {"1":"#1b5e20","X":"#4a3000","2":"#0d2a4a"}.get(row["Typ"],"#1a1a2e")
                         _typ_text_color  = {"1":"#4CAF50","X":"#FFC107","2":"#42a5f5"}.get(row["Typ"],"#aaa")
                         st.markdown(
-                            f"<div style='background:#0a1628;border-left:3px solid {_ec};"
+                            f"<div style='background:var(--bg-card);border-left:3px solid {_ec};"
                             f"border-radius:8px;padding:10px 14px;margin:5px 0'>"
                             # Wiersz 1: mecz + badge typu
                             f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:5px'>"
-                            f"<b style='color:#fff;font-size:0.90em'>{row['Mecz']}</b>"
+                            f"<b style='color:var(--text-primary);font-size:0.90em'>{row['Mecz']}</b>"
                             f"<span style='background:{_typ_badge_color};color:{_typ_text_color};"
                             f"font-size:0.76em;font-weight:700;padding:2px 9px;border-radius:12px;"
                             f"margin-left:8px;flex-shrink:0'>{row['Typ']} · {row['Rynek']}</span>"
@@ -3736,7 +3657,7 @@ if not historical.empty:
                             f"<div style='display:flex;align-items:center;justify-content:space-between'>"
                             f"<span style='color:#888;font-size:0.80em'>"
                             f"<span style='color:#aaa'>p</span> {row['P']:.0%}"
-                            f" &nbsp;·&nbsp; <span style='color:#aaa'>kurs</span> <b style='color:#fff'>{_kd}</b>"
+                            f" &nbsp;·&nbsp; <span style='color:#aaa'>kurs</span> <b style='color:var(--text-primary)'>{_kd}</b>"
                             f" &nbsp;·&nbsp; <b style='color:{_ec}'>EV {row['EV']:+.3f}</b>"
                             f"</span>"
                             f"{_kelly_html}"
@@ -3807,7 +3728,7 @@ if not historical.empty:
                                 st.markdown(
                                     f"<div style='display:flex;align-items:center;gap:10px;margin:4px 0'>"
                                     f"<span style='font-size:0.79em;color:#aaa;min-width:135px'>{_lbl}</span>"
-                                    f"<div style='flex:1;background:#1a1a2e;border-radius:4px;height:7px'>"
+                                    f"<div style='flex:1;background:var(--bg-card2);border-radius:4px;height:7px'>"
                                     f"<div style='background:{_clr};width:{_pct*100:.0f}%;height:7px;border-radius:4px'></div>"
                                     f"</div>"
                                     f"<span style='font-size:0.82em;color:{_clr};font-weight:bold;min-width:20px'>{_val}</span>"
@@ -3952,7 +3873,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
 
                     # Nagłówek dnia
                     st.markdown(
-                        f"<div style='background:linear-gradient(90deg,#1a1a2e 0%,#16213e 100%);"
+                        f"<div style='background:var(--date-bar-bg);"
                         f"padding:8px 16px;border-radius:8px;margin:18px 0 8px;"
                         f"border-left:3px solid #4CAF50'>"
                         f"<span style='font-size:0.95em;font-weight:bold;color:#ddd'>"
@@ -4002,18 +3923,18 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         with kolumna:
                             # ── Karta nagłówkowa – zawsze widoczna ──────
                             st.markdown(
-                                f"<div style='background:#0d1117;border:1px solid #1e2028;"
+                                f"<div style='background:var(--stat-bg);border:1px solid var(--border);"
                                 f"border-top:3px solid {_conf_col_l};"
                                 f"border-radius:10px 10px 0 0;padding:11px 14px 10px'>"
                                 # Wiersz 1: herb + nazwa | data | nazwa + herb
                                 f"<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:7px'>"
                                 f"<div style='display:flex;align-items:center;gap:7px;flex:1;min-width:0'>"
                                 f"{_mc_h_img}"
-                                f"<b style='color:#fff;font-size:0.93em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{h}</b>"
+                                f"<b style='color:var(--text-primary);font-size:0.93em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{h}</b>"
                                 f"</div>"
                                 f"<span style='color:#4b5563;font-size:0.70em;padding:0 6px;flex-shrink:0'>{data_meczu}</span>"
                                 f"<div style='display:flex;align-items:center;gap:7px;flex:1;min-width:0;justify-content:flex-end'>"
-                                f"<b style='color:#fff;font-size:0.93em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl'>{a}</b>"
+                                f"<b style='color:var(--text-primary);font-size:0.93em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl'>{a}</b>"
                                 f"{_mc_a_img}"
                                 f"</div>"
                                 f"</div>"
@@ -4022,7 +3943,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 f"<span style='background:{_typ_bg};color:{_typ_fg};font-size:0.75em;"
                                 f"font-weight:700;padding:3px 11px;border-radius:12px;flex-shrink:0'>"
                                 f"{pred['typ']} @ {pred['fo_typ']:.2f}</span>"
-                                f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:4px'>"
+                                f"<div style='flex:1;background:var(--bg-card2);border-radius:3px;height:4px'>"
                                 f"<div style='background:{_conf_col_l};width:{_conf_pct_l}%;height:4px;border-radius:3px'></div></div>"
                                 f"<span style='color:{_conf_col_l};font-size:0.70em;font-weight:700;flex-shrink:0'>{_conf_pct_l}%</span>"
                                 f"</div>"
@@ -4066,7 +3987,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                         f"<div style='font-size:0.78em;color:#888'>"
                                         f"{pred['chaos_emoji']} Chaos Index: <b style='color:{ch_c}'>{pred['chaos_label']}</b>"
                                         f" ({pred['entropy']:.2f} bits)</div>"
-                                        f"<div style='background:#333;border-radius:4px;height:4px;margin-top:4px'>"
+                                        f"<div style='background:var(--bg-card2);border-radius:4px;height:4px;margin-top:4px'>"
                                         f"<div style='background:{ch_c};width:{bar_w}%;height:4px;border-radius:4px'></div>"
                                         f"</div></div>",
                                         unsafe_allow_html=True,
@@ -4129,7 +4050,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                 _mn2 = market_noise_check(pred["p_typ"], _idc)
                                                 if _mn2["noise"]:
                                                     st.markdown(
-                                                        f"<div style='background:#1a0000;border:1px solid #F44336;"
+                                                        f"<div style='background:var(--bg-card);border:1px solid #F44336;"
                                                         f"border-radius:5px;padding:4px 10px;margin:3px 0;"
                                                         f"font-size:0.76em;color:#F44336'>"
                                                         f"⚠️ <b>Market Noise</b> – różnica: "
@@ -4137,7 +4058,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                         unsafe_allow_html=True)
 
                                                 st.markdown(
-                                                    f"<div style='background:#0a1628;border:1px solid "
+                                                    f"<div style='background:var(--bg-card);border:1px solid "
                                                     f"{'#2a6b2a' if _is_val else '#1e2a3a'};"
                                                     f"border-radius:8px;padding:9px 14px;margin:4px 0'>"
                                                     f"<div style='font-size:0.74em;color:#555;margin-bottom:4px'>"
@@ -4171,7 +4092,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                     _gauge_pct = min(100, max(0, int((_fair_p - _buk_p) / _gauge_max * 50) + 50))
                                                     st.markdown(
                                                         f"<div style='margin:6px 0;padding:8px 12px;"
-                                                        f"background:#0a1010;border:1px solid #1a3a2a;border-radius:8px'>"
+                                                        f"background:var(--bg-card);border:1px solid var(--border);border-radius:8px'>"
                                                         f"<div style='font-size:0.68em;color:#555;margin-bottom:5px;"
                                                         f"text-transform:uppercase;letter-spacing:.06em'>📐 Margines bezpieczeństwa</div>"
                                                         f"<div style='display:flex;align-items:center;"
@@ -4239,7 +4160,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                                     f"<tr><td style='padding:4px 8px;font-size:0.88em'>{emoji} {nazwa}</td>"
                                                     f"<td style='padding:4px 8px;width:110px'>"
                                                     f"<div style='display:flex;align-items:center;gap:5px'>"
-                                                    f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                                                    f"<div style='flex:1;background:var(--bg-card2);border-radius:3px;height:5px'>"
                                                     f"<div style='background:{kc};width:{bw}%;height:5px;border-radius:3px'></div></div>"
                                                     f"<span style='color:{kc};font-size:0.82em;min-width:30px'>{p:.0%}</span></div></td>"
                                                     f"<td style='padding:4px 8px;text-align:right;color:{fc};font-weight:bold;font-size:0.88em'>{fo:.2f}</td></tr>"
@@ -4262,7 +4183,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     _sot_d = f"{lam_sot:.1f}" if (lam_sot and lam_sot > 0) else "–"
                                     st.markdown(
                                         f"<div style='display:flex;justify-content:space-around;"
-                                        f"background:#1a1a2e;border-radius:6px;padding:5px 4px;margin:4px 0'>"
+                                        f"background:var(--bg-card2);border-radius:6px;padding:5px 4px;margin:4px 0'>"
                                         f"<div style='text-align:center'>"
                                         f"<div style='font-size:0.62em;color:#555'>⚽ Śr. gole</div>"
                                         f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_h+lam_a:.2f}</div>"
@@ -4413,8 +4334,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                             _hw, _aw = _hm["home"], _hm["away"]
                                             _dt2h = _hm["date"][:7] if len(_hm["date"]) >= 7 else _hm["date"]
                                             _res_c = "#4CAF50" if _hg > _ag else ("#F44336" if _hg < _ag else "#FF9800")
-                                            _bold_h = "font-weight:700;color:#fff" if _hw == h else "color:#aaa"
-                                            _bold_a = "font-weight:700;color:#fff" if _aw == h else "color:#aaa"
+                                            _bold_h = "font-weight:700;color:var(--text-primary)" if _hw == h else "color:#aaa"
+                                            _bold_a = "font-weight:700;color:var(--text-primary)" if _aw == h else "color:#aaa"
                                             _h2h_rows.append(
                                                 f"<tr style='border-bottom:1px solid #111827'>"
                                                 f"<td style='padding:5px 6px;color:#4b5563;font-size:0.75em'>{_dt2h}</td>"
@@ -4700,7 +4621,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         f"<div style='font-size:0.78em;color:#666;margin-bottom:4px'>"
                         f"Rozkład PnL (10 000 scenariuszy) · 🟢 plus · 🔴 minus</div>"
                         f"<svg width='{_svg_w}' height='{_svg_h}' "
-                        f"style='background:#0e1117;border-radius:6px;display:block'>"
+                        f"style='background:var(--stat-bg);border-radius:6px;display:block'>"
                         f"{''.join(_bar_svgs)}</svg>"
                         f"<div style='font-size:0.74em;color:#555;margin-top:3px'>"
                         f"Szansa na breakeven lub lepiej: <b style='color:#4CAF50'>{_p_breakeven:.0%}</b> · "
@@ -4763,7 +4684,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 f"</tr>"
                             )
                         st.markdown(
-                            f"<div style='border-radius:8px;border:1px solid #2a2a3a;overflow:hidden'>"
+                            f"<div style='border-radius:8px;border:1px solid var(--border);overflow:hidden'>"
                             f"<table style='width:100%;border-collapse:collapse'>"
                             f"<thead><tr style='background:#1e1e2e;color:#555;font-size:0.72em;text-transform:uppercase'>"
                             f"<th style='padding:6px 10px;text-align:left'>Mecz</th>"
@@ -4775,51 +4696,8 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             unsafe_allow_html=True)
                         st.caption("🟢 Sweet spot (5-15%) · 🔵 Zbieżne (<5%) · 🔴 Market Noise (>15%)")
 
-                # 📲 Telegram: poranny digest (w dniu kolejki, 8-10 rano, raz dziennie)
-                if _TG_OK and not schedule.empty and not srednie_df.empty:
-                    try:
-                        _tg_digest_key = f"_tg_digest_{wybrana_liga}_{datetime.now().strftime('%Y%m%d')}"
-                        if (not st.session_state.get(_tg_digest_key) and
-                                _tg.should_send_morning(wybrana_liga)):
-                            # Zbierz value bety z bieżącej kolejki
-                            _tg_vbs = []
-                            _tg_mecze = schedule[schedule["round"] == aktualna_kolejka]
-                            for _, _tg_m in _tg_mecze.iterrows():
-                                _tg_h = map_nazwa(_tg_m["home_team"])
-                                _tg_a = map_nazwa(_tg_m["away_team"])
-                                if _tg_h not in srednie_df.index or _tg_a not in srednie_df.index:
-                                    continue
-                                _tg_lh, _tg_la, _, _, _, _ = oblicz_lambdy(
-                                    _tg_h, _tg_a, srednie_df, srednie_lig, forma_dict,
-                                    csv_code=LIGI[wybrana_liga]["csv_code"])
-                                _tg_pred = predykcja_meczu(
-                                    _tg_lh, _tg_la, rho=rho,
-                                    csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
-                                # Sprawdź czy są kursy live
-                                if _OA_OK and _oa_key and _oa_cached:
-                                    _tg_o = _oa.znajdz_kursy(_tg_h, _tg_a, _oa_cached)
-                                    if _tg_o:
-                                        _tg_kdc, _tg_idc = _kurs_dc_live(
-                                            _tg_pred["typ"],
-                                            _tg_o["odds_h"], _tg_o["odds_d"], _tg_o["odds_a"])
-                                        if _tg_kdc:
-                                            _tg_ev = _tg_pred["p_typ"] * (_tg_kdc - 1) - (1 - _tg_pred["p_typ"])
-                                            _tg_br = st.session_state.get("bankroll_per_liga", {}).get(wybrana_liga, 1000.0)
-                                            _tg_kel = kelly_stake(_tg_pred["p_typ"], _tg_kdc, bankroll=_tg_br)
-                                            if _tg_ev >= _tg.MIN_EV_DIGEST:
-                                                _tg_vbs.append({
-                                                    "home": _tg_h, "away": _tg_a, "liga": wybrana_liga,
-                                                    "typ": _tg_pred["typ"], "kurs": _tg_kdc,
-                                                    "p_model": _tg_pred["p_typ"], "ev": _tg_ev,
-                                                    "stake_pln": _tg_kel.get("stake_pln", 0),
-                                                })
-                            ok_digest = _tg.send_morning_digest(
-                                wybrana_liga, _tg_vbs, kolejka=int(aktualna_kolejka))
-                            if ok_digest:
-                                st.session_state[_tg_digest_key] = True
-                                st.toast(f"📲 Poranny digest wysłany na Telegram [{wybrana_liga}]", icon="☀️")
-                    except Exception:
-                        pass
+                # 📲 Telegram digest obsługiwany przez bot_runner.py
+                # (wysyła automatycznie o DIGEST_HOUR, wszystkie ligi, raz dziennie)
 
 
 
@@ -4891,7 +4769,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     f"<td style='padding:5px 4px;text-align:center;color:{_poz_col};font-size:0.72em;font-weight:700'>{int(_r['Poz']) if _r['Poz'] else '–'}</td>"
                     f"<td style='padding:5px 6px'>{_ci}</td>"
                     f"<td style='padding:5px 4px;color:#e5e7eb;font-size:0.78em;white-space:nowrap'>{_r['Drużyna'][:14]}</td>"
-                    f"<td style='padding:5px 4px;text-align:center;color:#fff;font-weight:700;font-size:0.80em'>{int(_r['Pkt']) if _r['Pkt'] else '–'}</td>"
+                    f"<td style='padding:5px 4px;text-align:center;color:var(--text-primary);font-weight:700;font-size:0.80em'>{int(_r['Pkt']) if _r['Pkt'] else '–'}</td>"
                     f"<td style='padding:5px 4px;text-align:center;color:#6b7280;font-size:0.72em'>{int(_r['W'])}/{int(_r['R'])}/{int(_r['P'])}</td>"
                     f"<td style='padding:5px 4px;text-align:center;color:{_gd_col};font-size:0.72em'>{int(_r['G+'])}:{int(_r['G-'])}</td>"
                     f"<td style='padding:5px 4px;text-align:center;color:#60a5fa;font-size:0.72em'>{_r['Gole/M']:.2f}</td>"
@@ -4903,7 +4781,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 )
             st.markdown(
                 "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
-                "<table style='width:100%;border-collapse:collapse;background:#0d1117;"
+                "<table style='width:100%;border-collapse:collapse;background:var(--stat-bg);"
                 "border:1px solid #1f2937;border-radius:8px;overflow:hidden'>"
                 "<thead><tr style='background:#111827'>"
                 "<th style='padding:6px 4px;text-align:center;color:#4b5563;font-size:0.68em'>#</th>"
@@ -4980,7 +4858,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     )
                 svg_sed = (
                     f'<svg width="{W_sed}" height="{H_sed}" '
-                    f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
+                    f'style="background:var(--stat-bg);border-radius:8px;display:block;margin:auto">'
                     f'<text x="{W_sed//2}" y="18" text-anchor="middle" '
                     f'font-size="11" fill="#888" font-family="sans-serif">Całkowite kartki/mecz (Y+2R)</text>'
                     f'{"".join(bars_sed)}</svg>'
@@ -5091,7 +4969,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         f"<span style='color:#555'>{int(rk['n_typow'])}</span>"
                         f"<span style='color:#888'>{wyn_str}</span>"
                         f"<div style='padding:0 12px'>"
-                        f"<div style='background:#1a1a24;border-radius:3px;height:6px'>"
+                        f"<div style='background:var(--bg-card2);border-radius:3px;height:6px'>"
                         f"<div style='width:{_bar_w}%;background:{hr_c};height:6px;border-radius:3px'></div>"
                         f"</div></div>"
                         f"<span style='text-align:right;font-weight:700;color:{hr_c}'>{status_ico} {hr_str}</span>"
@@ -5107,7 +4985,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     "</div>",
                     unsafe_allow_html=True)
                 st.markdown(
-                    f"<div style='border:1px solid #1e2028;border-radius:10px;overflow:hidden'>"
+                    f"<div style='border:1px solid var(--border);border-radius:10px;overflow:hidden'>"
                     f"{''.join(_rows_hk)}</div>",
                     unsafe_allow_html=True)
                 st.caption("⏳ = predykcje zapisane, wyniki jeszcze nie dostępne w football-data.co.uk")
@@ -5442,7 +5320,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 )
                 st.markdown(
                     f"<div style='font-size:0.78em;color:{_n_warn_color};"
-                    f"background:#14161c;border:1px solid {_n_warn_color}44;"
+                    f"background:var(--bg-card);border:1px solid {_n_warn_color}44;"
                     f"border-radius:6px;padding:8px 12px;margin-top:6px'>{_n_warn_txt}</div>",
                     unsafe_allow_html=True)
 
@@ -5584,9 +5462,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             f"</tr>"
                         )
                     st.markdown(
-                        "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028;margin-top:8px'>"
+                        "<div style='overflow-x:auto;border-radius:8px;border:1px solid var(--border);margin-top:8px'>"
                         "<table style='width:100%;border-collapse:collapse'>"
-                        "<thead><tr style='background:#13141c;color:#444;font-size:0.7em;text-transform:uppercase'>"
+                        "<thead><tr style='background:var(--bg-card);color:#444;font-size:0.7em;text-transform:uppercase'>"
                         "<th style='padding:8px 12px'>Rynek</th>"
                         "<th style='padding:8px 12px;text-align:center'>Typów</th>"
                         "<th style='padding:8px 12px;text-align:center'>Hit%</th>"
@@ -5722,9 +5600,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                     )
                                 st.markdown(
                                     "<div style='overflow-x:auto;border-radius:8px;"
-                                    "border:1px solid #1e2028'>"
+                                    "border:1px solid var(--border)'>"
                                     "<table style='width:100%;border-collapse:collapse'>"
-                                    "<thead><tr style='background:#0d0f14;color:#444;"
+                                    "<thead><tr style='background:var(--bg-app);color:#444;"
                                     "font-size:0.70em;text-transform:uppercase'>"
                                     "<th style='padding:6px 12px;text-align:left'>Linia</th>"
                                     "<th style='padding:6px 10px;text-align:center'>Typów</th>"
@@ -5840,7 +5718,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             f"Próbka do wiarygodnej kalibracji: "
             f"<b style='color:{_prog_c}'>{_n_total_kal}/{_min_wiarygodne} zdarzeń "
             f"({_prog_kal:.0%})</b></div>"
-            f"<div style='background:#333;border-radius:3px;height:5px'>"
+            f"<div style='background:var(--bg-card2);border-radius:3px;height:5px'>"
             f"<div style='background:{_prog_c};width:{int(_prog_kal*100)}%;height:5px;border-radius:3px'></div>"
             f"</div></div>",
             unsafe_allow_html=True)
@@ -5860,7 +5738,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 bar_model = int(p_m * 100)
                 bar_hit   = int(hit * 100) if hit else 0
                 bar_html  = (
-                    f"<div style='position:relative;background:#1a1a2e;border-radius:3px;height:12px;width:120px;overflow:hidden'>"
+                    f"<div style='position:relative;background:var(--bg-card2);border-radius:3px;height:12px;width:120px;overflow:hidden'>"
                     f"<div style='position:absolute;background:#2196F3;opacity:0.5;height:12px;width:{bar_model}%'></div>"
                     f"<div style='position:absolute;background:#4CAF50;opacity:0.8;height:12px;width:{bar_hit}%'>"
                     f"</div></div>"
@@ -5877,7 +5755,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     f"</tr>"
                 )
             st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a3a'>"
+                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid var(--border)'>"
                 f"<table style='width:100%;border-collapse:collapse;font-size:0.86em'>"
                 f"<thead><tr style='background:#1e1e2e;color:#666;font-size:0.74em;text-transform:uppercase'>"
                 f"<th style='padding:7px 10px;text-align:left'>Bucket P</th>"
@@ -5916,7 +5794,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 )
             svg5 = (
                 f'<svg width="{w_rc5}" height="{h_rc5}" '
-                f'style="background:#0e1117;border-radius:8px;display:block;margin:auto">'
+                f'style="background:var(--stat-bg);border-radius:8px;display:block;margin:auto">'
                 f'<polyline points="{diag5_line}" fill="none" stroke="#444" '
                 f'stroke-width="1.5" stroke-dasharray="6,4"/>'
                 f'<text x="{w_rc5 - pad_rc5 + 4}" y="{pad_rc5 - 4}" font-size="9" fill="#555" '
@@ -6068,7 +5946,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 _ocena = "🔴 Brak edge"
                                 _col   = "#F44336"
                             st.markdown(
-                                f"<div style='background:#1a1a2e;border-radius:8px;padding:8px 12px;"
+                                f"<div style='background:var(--bg-card2);border-radius:8px;padding:8px 12px;"
                                 f"margin-bottom:6px;border-left:3px solid {_col}'>"
                                 f"<b>{_row['EV bin']}</b> · N={int(_row['N'])} · "
                                 f"EV={_row['Avg EV']:+.1%} → Yield={_row['Yield']:+.1%} "
@@ -6201,7 +6079,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             _yc = "#4CAF50" if _vr["Yield"] >= 0.02 else ("#FF9800" if _vr["Yield"] >= -0.05 else "#F44336")
                             _star = " ⭐" if _vr["Kurs bin"] == _best_yield_bin["Kurs bin"] else ""
                             st.markdown(
-                                f"<div style='background:#1a1a2e;border-radius:8px;padding:7px 12px;"
+                                f"<div style='background:var(--bg-card2);border-radius:8px;padding:7px 12px;"
                                 f"margin-bottom:5px;border-left:3px solid {_yc}'>"
                                 f"<b>{_vr['Kurs bin']}</b>{_star} · N={int(_vr['N'])} · "
                                 f"Hit={_vr['Hit%']:.0%} · "
@@ -6243,7 +6121,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
         # ═══════════════════════════════════════════════════════════════════
         with _lab_t1:
             st.markdown(
-                "<div style='background:#0d1f0d;border:1px solid #2a5a2a;border-radius:8px;"
+                "<div style='background:var(--hero-bg);border:1px solid #2a5a2a;border-radius:8px;"
                 "padding:10px 14px;margin-bottom:14px'>"
                 "<div style='font-size:0.88em;color:#4CAF50;font-weight:700;margin-bottom:4px'>"
                 "🧱 Bet Builder – Kombinator Poissona</div>"
@@ -6771,9 +6649,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 f"<td style='padding:5px 10px;text-align:center;color:#555'>{_row['N']:.0f}</td>"
                                 f"</tr>")
                         st.markdown(
-                            "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028'>"
+                            "<div style='overflow-x:auto;border-radius:8px;border:1px solid var(--border)'>"
                             "<table style='width:100%;border-collapse:collapse'>"
-                            "<thead><tr style='background:#0d0f14;color:#444;font-size:0.70em;text-transform:uppercase'>"
+                            "<thead><tr style='background:var(--bg-app);color:#444;font-size:0.70em;text-transform:uppercase'>"
                             "<th style='padding:5px'>#</th><th style='padding:5px'>SOT_W</th>"
                             "<th style='padding:5px'>TAU</th><th style='padding:5px'>PROG</th>"
                             "<th style='padding:5px'>Brier↓</th><th style='padding:5px'>Yield</th>"
@@ -6897,7 +6775,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     f"<div style='margin-bottom:3px'>"
                     f"<span style='color:{_lr['hr_col']};font-weight:800;font-size:0.92em'>{_lr['hr']:.1%}</span>"
                     f"</div>"
-                    f"<div style='background:#1a1c24;border-radius:3px;height:4px'>"
+                    f"<div style='background:var(--bg-card2);border-radius:3px;height:4px'>"
                     f"<div style='background:{_lr['hr_col']};width:{_bar_w}%;height:4px;border-radius:3px'></div>"
                     f"</div></td>"
                     # ROI
@@ -6909,7 +6787,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     f"</tr>"
                 )
             st.markdown(
-                "<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a3a'>"
+                "<div style='overflow-x:auto;border-radius:8px;border:1px solid var(--border)'>"
                 "<table style='width:100%;border-collapse:collapse'>"
                 "<thead><tr style='background:#1e1e2e;color:#444;font-size:0.68em;"
                 "text-transform:uppercase;letter-spacing:.06em'>"
@@ -7114,9 +6992,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         f"</tr>"
                     )
                 st.markdown(
-                    "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028;margin-top:8px'>"
+                    "<div style='overflow-x:auto;border-radius:8px;border:1px solid var(--border);margin-top:8px'>"
                     "<table style='width:100%;border-collapse:collapse'>"
-                    "<thead><tr style='background:#13141c;color:#444;font-size:0.68em;"
+                    "<thead><tr style='background:var(--bg-card);color:#444;font-size:0.68em;"
                     "text-transform:uppercase;letter-spacing:.05em'>"
                     "<th style='padding:7px 12px;text-align:center'>Liga</th>"
                     "<th style='padding:7px 12px;text-align:center'>Bankroll</th>"
@@ -7144,9 +7022,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 _tc = "#4CAF50" if _tr["hr"] >= _tr["p_avg"] - 0.03 else "#FF9800"
                 _roic = "#4CAF50" if _tr["roi"] > 0 else "#F44336"
                 _typ_cols[_ti].markdown(
-                    f"<div style='text-align:center;background:#0e1117;border:1px solid #1e2433;"
+                    f"<div style='text-align:center;background:var(--stat-bg);border:1px solid #1e2433;"
                     f"border-radius:8px;padding:10px 6px'>"
-                    f"<div style='font-size:1.4em;font-weight:800;color:#fff'>{_tr['typ']}</div>"
+                    f"<div style='font-size:1.4em;font-weight:800;color:var(--text-primary)'>{_tr['typ']}</div>"
                     f"<div style='font-size:1.1em;font-weight:700;color:{_tc}'>{_tr['hr']:.0%}</div>"
                     f"<div style='font-size:0.72em;color:#555'>HR · p̄={_tr['p_avg']:.0%}</div>"
                     f"<div style='font-size:0.8em;color:{_roic};margin-top:3px'>ROI {_tr['roi']:+.1f}%</div>"
@@ -7341,7 +7219,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 _arc = _alt_cols_bt[_ai % len(_alt_cols_bt)]
                                 _kc = "#4CAF50" if _arroi_kelly > 0 else "#F44336"
                                 _arc.markdown(
-                                    f"<div style='background:#0e1117;border:1px solid {_kc}33;"
+                                    f"<div style='background:var(--stat-bg);border:1px solid {_kc}33;"
                                     f"border-radius:8px;padding:10px;text-align:center'>"
                                     f"<div style='font-size:0.82em;color:#888;margin-bottom:4px'>{_ark}</div>"
                                     f"<div style='font-size:0.88em;color:#ccc'>N={_arn} · HR {_arhit/_arn:.0%}</div>"
@@ -7390,17 +7268,17 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     st.markdown(
                         "<div style='display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;"
                         "font-size:0.75em;color:#666'>"
-                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "<span style='background:var(--bg-card);border:1px solid var(--border);"
                         "border-radius:4px;padding:2px 8px'>Pinnacle/B365</span>"
-                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "<span style='background:var(--bg-card);border:1px solid var(--border);"
                         "border-radius:4px;padding:2px 8px'>Kurs 1.35–3.50</span>"
-                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "<span style='background:var(--bg-card);border:1px solid var(--border);"
                         "border-radius:4px;padding:2px 8px'>EV 5–15% (cap)</span>"
-                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "<span style='background:var(--bg-card);border:1px solid var(--border);"
                         "border-radius:4px;padding:2px 8px'>Top 3/kolejkę</span>"
-                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "<span style='background:var(--bg-card);border:1px solid var(--border);"
                         "border-radius:4px;padding:2px 8px'>Kelly 1/8</span>"
-                        "<span style='background:#14161c;border:1px solid #1e2028;"
+                        "<span style='background:var(--bg-card);border:1px solid var(--border);"
                         "border-radius:4px;padding:2px 8px'>Start 1 000 zł</span>"
                         "</div>",
                         unsafe_allow_html=True)
@@ -7493,7 +7371,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 f"<td style='padding:6px 10px;text-align:center;color:#888'>{int(tr['n'])}</td>"
                                 f"<td style='padding:6px 10px;width:120px'>"
                                 f"<div style='display:flex;align-items:center;gap:5px'>"
-                                f"<div style='flex:1;background:#333;border-radius:3px;height:5px'>"
+                                f"<div style='flex:1;background:var(--bg-card2);border-radius:3px;height:5px'>"
                                 f"<div style='background:{c};width:{bw}%;height:5px;border-radius:3px'></div></div>"
                                 f"<span style='color:{c};font-size:0.82em'>{tr['hit']:.0%}</span>"
                                 f"</div></td>"
@@ -7504,7 +7382,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         st.markdown(
                             f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a2a'>"
                             f"<table style='width:100%;border-collapse:collapse;font-size:0.87em'>"
-                            f"<thead><tr style='background:#1a1a2e;color:#666;font-size:0.73em;text-transform:uppercase'>"
+                            f"<thead><tr style='background:var(--bg-card2);color:#666;font-size:0.73em;text-transform:uppercase'>"
                             f"<th style='padding:7px 10px'>Typ</th><th style='padding:7px 10px;text-align:center'>N</th>"
                             f"<th style='padding:7px 10px;text-align:left'>Hit Rate</th>"
                             f"<th style='padding:7px 10px;text-align:center'>Brier ↓</th>"
@@ -7532,7 +7410,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         st.markdown(
                             f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #2a2a2a'>"
                             f"<table style='width:100%;border-collapse:collapse;font-size:0.85em'>"
-                            f"<thead><tr style='background:#1a1a2e;color:#666;font-size:0.72em;text-transform:uppercase'>"
+                            f"<thead><tr style='background:var(--bg-card2);color:#666;font-size:0.72em;text-transform:uppercase'>"
                             f"<th style='padding:6px 8px'>Przedział p</th>"
                             f"<th style='padding:6px 8px;text-align:center'>N</th>"
                             f"<th style='padding:6px 8px;text-align:center'>P model</th>"
@@ -7661,7 +7539,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             ]:
                 _pct_rc = _cnt_rc / _n_miss * 100 if _n_miss else 0
                 _col_rc.markdown(
-                    f"<div style='background:#13141c;border:1px solid #1e2028;"
+                    f"<div style='background:var(--bg-card);border:1px solid var(--border);"
                     f"border-top:3px solid {_col_hex};border-radius:8px;padding:12px 14px'>"
                     f"<div style='font-size:0.82em;font-weight:700;color:{_col_hex}'>{_label_rc}</div>"
                     f"<div style='font-size:1.9em;font-weight:800;color:#eee;margin:4px 0'>{_cnt_rc}</div>"
@@ -7689,7 +7567,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         f"<td style='padding:7px 10px;color:#888;font-size:0.82em'>"
                         f"{float(_cr['expected']):.0%}</td>"
                         f"<td style='padding:7px 10px;width:42%'>"
-                        f"<div style='position:relative;background:#1a1c24;border-radius:3px;height:8px'>"
+                        f"<div style='position:relative;background:var(--bg-card2);border-radius:3px;height:8px'>"
                         f"<div style='background:#444;width:{_bw_e}%;height:8px;border-radius:3px;position:absolute'></div>"
                         f"<div style='background:#00d4ff;width:{_bw_a}%;height:8px;border-radius:3px;position:absolute;opacity:.85'></div>"
                         f"</div></td>"
@@ -7699,9 +7577,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         f"</tr>"
                     )
                 st.markdown(
-                    "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028'>"
+                    "<div style='overflow-x:auto;border-radius:8px;border:1px solid var(--border)'>"
                     "<table style='width:100%;border-collapse:collapse'>"
-                    "<thead><tr style='background:#13141c;color:#444;font-size:0.7em;text-transform:uppercase'>"
+                    "<thead><tr style='background:var(--bg-card);color:#444;font-size:0.7em;text-transform:uppercase'>"
                     "<th style='padding:7px 10px'>Model p</th>"
                     "<th style='padding:7px 10px'>Actual (niebieski) vs Expected (szary)</th>"
                     "<th style='padding:7px 10px;text-align:center'>Actual HR</th>"
@@ -7735,7 +7613,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     f"<td style='padding:8px 10px;text-align:center;color:#888'>{len(_td)}</td>"
                     f"<td style='padding:8px 10px;width:120px'>"
                     f"<div style='display:flex;align-items:center;gap:5px'>"
-                    f"<div style='flex:1;background:#1a1c24;border-radius:3px;height:6px;position:relative'>"
+                    f"<div style='flex:1;background:var(--bg-card2);border-radius:3px;height:6px;position:relative'>"
                     f"<div style='background:#444;width:{_bw_p}%;height:6px;border-radius:3px;position:absolute'></div>"
                     f"<div style='background:{_tc};width:{_bw_h}%;height:6px;border-radius:3px;position:absolute;opacity:.9'></div>"
                     f"</div><span style='font-size:0.8em;color:{_tc}'>{_thr:.0%}</span></div></td>"
@@ -7746,9 +7624,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     f"</tr>"
                 )
             st.markdown(
-                "<div style='overflow-x:auto;border-radius:8px;border:1px solid #1e2028'>"
+                "<div style='overflow-x:auto;border-radius:8px;border:1px solid var(--border)'>"
                 "<table style='width:100%;border-collapse:collapse'>"
-                "<thead><tr style='background:#13141c;color:#444;font-size:0.7em;text-transform:uppercase'>"
+                "<thead><tr style='background:var(--bg-card);color:#444;font-size:0.7em;text-transform:uppercase'>"
                 "<th style='padding:7px 12px'>Typ</th><th style='padding:7px 10px;text-align:center'>N</th>"
                 "<th style='padding:7px 10px;text-align:left'>Actual (kolor) vs Model p (szary)</th>"
                 "<th style='padding:7px 10px;text-align:center'>Avg p</th>"
@@ -7774,7 +7652,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         st.markdown("**Model zbyt pewny** (przeszacowuje):")
                         for _, _tr in _tb[_tb["bias"]>0.05].head(5).iterrows():
                             st.markdown(
-                                f"<div style='background:#1a1c24;border-left:3px solid #F44336;"
+                                f"<div style='background:var(--bg-card2);border-left:3px solid #F44336;"
                                 f"padding:6px 10px;margin:3px 0;border-radius:4px;font-size:0.85em'>"
                                 f"<b>{_tr[_team_col]}</b> "
                                 f"model {float(_tr['avg_p']):.0%} - actual {float(_tr['hr']):.0%} "
@@ -7784,7 +7662,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         st.markdown("**Model zbyt ostrozny** (niedoszacowuje):")
                         for _, _tr in _tb[_tb["bias"]<-0.05].tail(5).iterrows():
                             st.markdown(
-                                f"<div style='background:#1a1c24;border-left:3px solid #4CAF50;"
+                                f"<div style='background:var(--bg-card2);border-left:3px solid #4CAF50;"
                                 f"padding:6px 10px;margin:3px 0;border-radius:4px;font-size:0.85em'>"
                                 f"<b>{_tr[_team_col]}</b> "
                                 f"model {float(_tr['avg_p']):.0%} - actual {float(_tr['hr']):.0%} "
@@ -7810,7 +7688,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         st.markdown(
                             "<div style='overflow-x:auto;max-height:320px;overflow-y:auto'>"
                             "<table style='width:100%;border-collapse:collapse'>"
-                            "<thead><tr style='background:#13141c;color:#444;font-size:0.7em;"
+                            "<thead><tr style='background:var(--bg-card);color:#444;font-size:0.7em;"
                             "text-transform:uppercase;position:sticky;top:0'>"
                             "<th style='padding:6px 10px'>Druzyna</th>"
                             "<th style='padding:6px 10px;text-align:center'>N</th>"
