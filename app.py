@@ -5166,6 +5166,25 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                     k = _calc(m.get("B365H"), m.get("B365D"), m.get("B365A"))
                 return k
 
+            def _kurs_live_oa(row):
+                """Kurs z The Odds API (pre-match live) — dla przyszłych/bieżących meczy."""
+                if not (_OA_OK and _oa_key and _oa_cached):
+                    return None
+                try:
+                    o = _oa.znajdz_kursy(str(row["home"]), str(row["away"]), _oa_cached)
+                    if not o: return None
+                    oh, od, oa = o["odds_h"], o["odds_d"], o["odds_a"]
+                    s = 1/oh + 1/od + 1/oa
+                    ih, id_, ia = (1/oh)/s, (1/od)/s, (1/oa)/s
+                    t = str(row["typ"])
+                    if t == "1":  return oh
+                    if t == "X":  return od
+                    if t == "2":  return oa
+                    if t == "1X": return round(1/(ih+id_), 3)
+                    if t == "X2": return round(1/(id_+ia), 3)
+                except Exception: pass
+                return None
+
             # Kelly parametry – z sidebara (bankroll + poziom ryzyka)
             # KELLY_PROB_SCALE=0.85 (-15% nadwyżki) stosowany zawsze
             # _KF pochodzi z suwaka ryzyka → zmiana w sidebarze odświeża wykres
@@ -5179,17 +5198,17 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 return 0.5 + (float(p) - 0.5) * KELLY_PROB_SCALE
 
             _eq_df["kurs_buk"] = _eq_df.apply(_kurs_live, axis=1)
+            _eq_df["kurs_oa"]  = _eq_df.apply(_kurs_live_oa, axis=1)
 
-            # Fallback: gdy brak kursu bukmachera → użyj fair_odds
-            # Powód: football-data aktualizuje kursy z opóźnieniem ~24-48h po meczu
-            # bez fallbacku kolejki z brakującymi kursami wypadają z symulacji całkowicie
+            # Fallback hierarchy: closing CSV → Odds API → fair odds
+            # Powód: football-data ma closing odds dla przeszłości, OA dla przyszłości/bieżących
             def _kurs_efektywny(row):
-                k = row["kurs_buk"]
-                if k is not None and not pd.isna(k):
-                    return float(k)
-                fo = row.get("fair_odds")
-                if fo is not None and not pd.isna(fo):
-                    return float(fo)
+                k = row["kurs_buk"]  # 1. closing odds z CSV (MaxC / Pinnacle / B365)
+                if k is not None and not pd.isna(k): return float(k)
+                k = row["kurs_oa"]   # 2. live pre-match z Odds API
+                if k is not None and not pd.isna(k): return float(k)
+                fo = row.get("fair_odds")  # 3. fair odds jako ostateczny fallback
+                if fo is not None and not pd.isna(fo): return float(fo)
                 return None
             _eq_df["kurs_eff"] = _eq_df.apply(_kurs_efektywny, axis=1)
 
@@ -5213,9 +5232,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             _peak_k = _KS; _max_dd_k = 0.0
 
             for _kol, _grp in _eq_df.groupby("kolejnosc"):
-                # Flat – wszystkie typy 1 jednostka
+                # Flat – wszystkie typy 1 jednostka, kurs realny (buk > fair fallback)
                 for _, _r in _grp.iterrows():
-                    _pv = float(_r["fair_odds"]) - 1 if _r["trafione"] == 1 else -1
+                    _kf_real = _r["kurs_buk"] if (_r["kurs_buk"] is not None and not pd.isna(_r["kurs_buk"])) else float(_r["fair_odds"])
+                    _pv = float(_kf_real) - 1 if _r["trafione"] == 1 else -1
                     _bk_flat += _pv
                     _flat_vals.append(round(_bk_flat, 2))
 
@@ -5259,7 +5279,9 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             }
 
             # Wykres Kelly per kolejka
-            _n_fair_fallback = int(_eq_df["kurs_buk"].isna().sum())
+            _n_csv_ok       = int(_eq_df["kurs_buk"].notna().sum())
+            _n_oa_ok        = int((_eq_df["kurs_buk"].isna() & _eq_df["kurs_oa"].notna()).sum())
+            _n_fair_fallback= int((_eq_df["kurs_buk"].isna() & _eq_df["kurs_oa"].isna()).sum())
             _kelly_hr = f"{_kelly_traf/_kelly_typy:.0%}" if _kelly_typy else "–"
             st.markdown(
                 "<div class='section-header'>💰 Symulacja Kelly – bieżący sezon"
@@ -5267,10 +5289,12 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                 "top 3 typy/kolejkę · Pinnacle/B365 1.35–3.50 · Conservative Kelly"
                 "</span></div>",
                 unsafe_allow_html=True)
+            _src_parts = [f"📊 Źródła kursów: **{_n_csv_ok}** z football-data (closing)"]
+            if _n_oa_ok > 0:
+                _src_parts.append(f"**{_n_oa_ok}** z Odds API (live pre-match)")
             if _n_fair_fallback > 0:
-                st.caption(
-                    f"ℹ️ {_n_fair_fallback} meczów bez kursu Pinnacle/B365 w football-data "
-                    f"→ użyto fair odds modelu jako przybliżenie kursu.")
+                _src_parts.append(f"**{_n_fair_fallback}** fair odds (brak kursu rynkowego)")
+            st.caption("  ·  ".join(_src_parts))
 
             _ek1, _ek2, _ek3, _ek4 = st.columns(4)
             _ek1.metric("💰 Bankroll", f"{_bk:.0f} zł",
