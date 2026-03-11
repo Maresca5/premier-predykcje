@@ -6502,7 +6502,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
     with tab5:
         st.subheader("🎛️ Laboratorium modelu")
 
-        _lab_t1, _lab_t2, _lab_t3 = st.tabs(["🧱 Bet Builder", "🔬 Symulacje Monte Carlo", "🤖 AutoML"])
+        _lab_t1, _lab_t2, _lab_t3, _lab_t4 = st.tabs(["🧱 Bet Builder", "🔬 Symulacje Monte Carlo", "🤖 AutoML", "📋 Paper Betting"])
 
         # ═══════════════════════════════════════════════════════════════════
         with _lab_t1:
@@ -7050,6 +7050,433 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                             f"TAU={LIGI[_aml_liga_sel]['tau']:.0f} · PROG={PROG_PEWNY:.2f} | "
                             "⚠️ Aby zastosować — zaktualizuj stałe w app.py")
 
+
+
+
+        with _lab_t4:
+            st.markdown(
+                "<div style='background:var(--bg-card);border:1px solid var(--border);"
+                "border-radius:8px;padding:10px 14px;margin-bottom:14px'>"
+                "<div style='font-size:0.88em;color:var(--accent);font-weight:700;margin-bottom:4px'>"
+                "📋 Paper Betting – symulator decyzji gracza</div>"
+                "<div style='font-size:0.80em;color:var(--text-muted)'>"
+                "Dodawaj zakłady ręcznie z bieżącej kolejki lub z głowy. "
+                "Śledź historię kuponów, bankroll i psychologię decyzji — niezależnie od sygnałów modelu."
+                "</div></div>",
+                unsafe_allow_html=True)
+
+            # ── Zakładki wewnętrzne ──────────────────────────────────────────
+            _pb_t1, _pb_t2, _pb_t3 = st.tabs(["➕ Nowy zakład", "📜 Historia kuponów", "📈 Analiza bankrollu"])
+
+            # ─────────────────────────────────────────────────────────────────
+            with _pb_t1:
+                st.markdown("#### Dodaj zakład do kuponu")
+
+                # Źródło zakładu: z kolejki lub ręcznie
+                _pb_src = st.radio(
+                    "Skąd wziąć mecz?",
+                    ["Z bieżącej kolejki", "Wpisz ręcznie"],
+                    horizontal=True, key="_pb_src")
+
+                _pb_home = _pb_away = _pb_liga = ""
+                _pb_date = ""
+
+                if _pb_src == "Z bieżącej kolejki":
+                    # Zbierz mecze bieżącej kolejki wybranej ligi
+                    _pb_kol = get_current_round(schedule)
+                    _pb_mecze_kol = schedule[schedule["round"] == _pb_kol]
+                    _pb_opcje = [
+                        f"{r['home_team']} – {r['away_team']}"
+                        for _, r in _pb_mecze_kol.iterrows()
+                    ]
+                    if _pb_opcje:
+                        _pb_sel = st.selectbox("Wybierz mecz", _pb_opcje, key="_pb_mecz_sel")
+                        _pb_idx = _pb_opcje.index(_pb_sel)
+                        _pb_row = _pb_mecze_kol.iloc[_pb_idx]
+                        _pb_home = str(_pb_row.get("home_team", ""))
+                        _pb_away = str(_pb_row.get("away_team", ""))
+                        _pb_date = str(_pb_row.get("date", ""))[:10]
+                        _pb_liga = wybrana_liga
+                    else:
+                        st.info("Brak meczów w bieżącej kolejce.")
+                else:
+                    _pb_c1, _pb_c2 = st.columns(2)
+                    with _pb_c1:
+                        _pb_home  = st.text_input("Gospodarz", key="_pb_home_input")
+                        _pb_liga  = st.selectbox("Liga", list(LIGI.keys()), key="_pb_liga_input")
+                    with _pb_c2:
+                        _pb_away  = st.text_input("Gość", key="_pb_away_input")
+                        _pb_date  = st.text_input("Data (RRRR-MM-DD)", key="_pb_date_input",
+                                                   value=datetime.now().strftime("%Y-%m-%d"))
+
+                st.markdown("---")
+
+                # Typ zakładu i kurs
+                _pb_c3, _pb_c4, _pb_c5 = st.columns(3)
+                with _pb_c3:
+                    _pb_typ = st.selectbox(
+                        "Typ zakładu",
+                        ["1", "X", "2", "1X", "X2", "Over 2.5", "Under 2.5", "BTTS Tak", "BTTS Nie", "Inny"],
+                        key="_pb_typ")
+                with _pb_c4:
+                    _pb_kurs = st.number_input("Kurs bukmachera", min_value=1.01, max_value=50.0,
+                                               value=2.00, step=0.05, format="%.2f", key="_pb_kurs")
+                with _pb_c5:
+                    _pb_stawka = st.number_input(
+                        "Stawka (zł)",
+                        min_value=1.0, max_value=10000.0,
+                        value=float(st.session_state.get("bankroll", 1000.0)) * 0.05,
+                        step=5.0, format="%.0f", key="_pb_stawka")
+
+                # Powód zakładu — psychologia
+                _pb_powod = st.selectbox(
+                    "💭 Powód zakładu (psychologia)",
+                    ["📊 Sygnał modelu", "👁️ Własna obserwacja", "📰 Forma/news",
+                     "🔥 Gut feeling", "😤 Odgrywanie się", "💡 Tip od znajomego", "Inny"],
+                    key="_pb_powod")
+
+                _pb_notatka = st.text_input("Notatka (opcjonalna)", key="_pb_notatka",
+                                             placeholder="np. dobra forma, kontuzje przeciwnika...")
+
+                # Nazwa kuponu (grupowanie)
+                _pb_kupon_name = st.text_input(
+                    "Nazwa kuponu (opcjonalna — grupuje zakłady razem)",
+                    key="_pb_kupon_name",
+                    placeholder=f"np. Kolejka {get_current_round(schedule)} – weekendowy")
+
+                st.markdown("")
+                _pb_add = st.button("➕ Dodaj zakład", key="_pb_add_btn",
+                                    use_container_width=True, type="primary")
+
+                if _pb_add:
+                    if not _pb_home or not _pb_away:
+                        st.error("Podaj nazwy drużyn.")
+                    else:
+                        con = sqlite3.connect(DB_FILE)
+                        try:
+                            # Upewnij się że tabela istnieje z nowymi kolumnami
+                            con.execute("""
+                                CREATE TABLE IF NOT EXISTS paper_bets (
+                                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    kupon       TEXT,
+                                    liga        TEXT,
+                                    data_meczu  TEXT,
+                                    home        TEXT NOT NULL,
+                                    away        TEXT NOT NULL,
+                                    typ         TEXT NOT NULL,
+                                    kurs        REAL NOT NULL,
+                                    stawka      REAL NOT NULL,
+                                    powod       TEXT,
+                                    notatka     TEXT,
+                                    status      TEXT DEFAULT 'oczekuje',
+                                    wynik       TEXT,
+                                    trafiony    INTEGER,
+                                    pnl         REAL,
+                                    bankroll_po REAL,
+                                    data_dodania TEXT
+                                )
+                            """)
+                            # Pobierz obecny bankroll paper
+                            _pb_br_row = con.execute(
+                                "SELECT bankroll_po FROM paper_bets WHERE bankroll_po IS NOT NULL "
+                                "ORDER BY id DESC LIMIT 1").fetchone()
+                            _pb_br_now = float(_pb_br_row[0]) if _pb_br_row else float(
+                                st.session_state.get("bankroll", 1000.0))
+
+                            con.execute("""
+                                INSERT INTO paper_bets
+                                (kupon, liga, data_meczu, home, away, typ, kurs, stawka,
+                                 powod, notatka, data_dodania)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                            """, (
+                                _pb_kupon_name or f"Kupon {datetime.now().strftime('%d.%m')}",
+                                _pb_liga, _pb_date, _pb_home, _pb_away,
+                                _pb_typ, float(_pb_kurs), float(_pb_stawka),
+                                _pb_powod, _pb_notatka,
+                                datetime.now().strftime("%Y-%m-%d %H:%M")
+                            ))
+                            con.commit()
+                            st.success(f"✅ Dodano: {_pb_home} – {_pb_away}  ·  {_pb_typ} @ {_pb_kurs:.2f}  ·  {_pb_stawka:.0f} zł")
+                        except Exception as _pb_e:
+                            st.error(f"Błąd zapisu: {_pb_e}")
+                        finally:
+                            con.close()
+
+            # ─────────────────────────────────────────────────────────────────
+            with _pb_t2:
+                st.markdown("#### Historia zakładów")
+
+                con = sqlite3.connect(DB_FILE)
+                try:
+                    con.execute("""
+                        CREATE TABLE IF NOT EXISTS paper_bets (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            kupon TEXT, liga TEXT, data_meczu TEXT,
+                            home TEXT NOT NULL, away TEXT NOT NULL,
+                            typ TEXT NOT NULL, kurs REAL NOT NULL, stawka REAL NOT NULL,
+                            powod TEXT, notatka TEXT,
+                            status TEXT DEFAULT 'oczekuje',
+                            wynik TEXT, trafiony INTEGER, pnl REAL, bankroll_po REAL,
+                            data_dodania TEXT
+                        )
+                    """)
+                    _pb_all = pd.read_sql(
+                        "SELECT * FROM paper_bets ORDER BY id DESC", con)
+                except Exception:
+                    _pb_all = pd.DataFrame()
+                finally:
+                    con.close()
+
+                if _pb_all.empty:
+                    st.info("Brak zakładów. Dodaj pierwszy zakład w zakładce ➕ Nowy zakład.")
+                else:
+                    # Filtr statusu
+                    _pb_filt = st.radio("Pokaż", ["Wszystkie", "Oczekujące", "Rozliczone"],
+                                        horizontal=True, key="_pb_filt")
+                    if _pb_filt == "Oczekujące":
+                        _pb_show = _pb_all[_pb_all["status"] == "oczekuje"]
+                    elif _pb_filt == "Rozliczone":
+                        _pb_show = _pb_all[_pb_all["status"] != "oczekuje"]
+                    else:
+                        _pb_show = _pb_all
+
+                    # Tabela zakładów
+                    for _, _pb_r in _pb_show.iterrows():
+                        _pb_s = _pb_r["status"]
+                        if _pb_s == "oczekuje":
+                            _pb_sc = "#FF9800"; _pb_si = "⏳"
+                        elif _pb_r.get("trafiony") == 1:
+                            _pb_sc = "#4CAF50"; _pb_si = "✅"
+                        else:
+                            _pb_sc = "#F44336"; _pb_si = "❌"
+
+                        _pb_pnl_str = ""
+                        if _pb_r.get("pnl") is not None and not pd.isna(_pb_r["pnl"]):
+                            _pv = float(_pb_r["pnl"])
+                            _pb_pnl_str = f"<span style='color:{'#4CAF50' if _pv>=0 else '#F44336'};font-weight:700'>{_pv:+.0f} zł</span>"
+
+                        with st.container():
+                            _pb_col1, _pb_col2 = st.columns([5, 1])
+                            with _pb_col1:
+                                st.markdown(
+                                    f"<div style='background:var(--bg-card);border:1px solid var(--border);"
+                                    f"border-left:3px solid {_pb_sc};border-radius:6px;"
+                                    f"padding:8px 12px;margin-bottom:6px'>"
+                                    f"<div style='display:flex;justify-content:space-between;align-items:flex-start'>"
+                                    f"<div>"
+                                    f"<span style='font-size:0.78em;color:var(--text-muted)'>"
+                                    f"{_pb_si} {_pb_r.get('kupon','–')}  ·  "
+                                    f"{_LIGA_FLAGS.get(_pb_r.get('liga',''),'⚽')} {_pb_r.get('liga','')}  ·  "
+                                    f"{str(_pb_r.get('data_meczu',''))[:10]}</span>"
+                                    f"<div style='font-weight:600;color:var(--text-primary);font-size:0.9em;margin-top:2px'>"
+                                    f"{_pb_r.get('home','')} – {_pb_r.get('away','')}</div>"
+                                    f"<div style='font-size:0.82em;color:var(--text-muted);margin-top:2px'>"
+                                    f"<b style='color:var(--accent)'>{_pb_r.get('typ','')}</b>"
+                                    f" @ <b>{float(_pb_r.get('kurs',1)):.2f}</b>"
+                                    f"  ·  stawka <b>{float(_pb_r.get('stawka',0)):.0f} zł</b>"
+                                    f"  {_pb_pnl_str}"
+                                    f"</div>"
+                                    f"<div style='font-size:0.75em;color:#666;margin-top:2px'>"
+                                    f"{_pb_r.get('powod','')}"
+                                    + (f"  ·  <i>{_pb_r.get('notatka','')}</i>" if _pb_r.get('notatka') else "")
+                                    + f"</div></div>"
+                                    f"<div style='text-align:right'>"
+                                    f"<span style='font-size:0.72em;color:{_pb_sc}'>{_pb_s.upper()}</span>"
+                                    f"</div></div></div>",
+                                    unsafe_allow_html=True)
+
+                            # Rozlicz zakład (tylko oczekujące)
+                            if _pb_s == "oczekuje":
+                                with _pb_col2:
+                                    _pb_wynik_opts = ["–", "Trafiony ✅", "Pudło ❌"]
+                                    _pb_wynik_sel = st.selectbox(
+                                        "", _pb_wynik_opts,
+                                        key=f"_pb_wynik_{_pb_r['id']}",
+                                        label_visibility="collapsed")
+                                    if _pb_wynik_sel != "–":
+                                        if st.button("Zapisz", key=f"_pb_save_{_pb_r['id']}",
+                                                     use_container_width=True):
+                                            _traf = 1 if "Trafiony" in _pb_wynik_sel else 0
+                                            _stw  = float(_pb_r["stawka"])
+                                            _krs  = float(_pb_r["kurs"])
+                                            _pnl  = round(_stw * (_krs - 1), 2) if _traf else round(-_stw, 2)
+                                            con2  = sqlite3.connect(DB_FILE)
+                                            try:
+                                                _br_prev = con2.execute(
+                                                    "SELECT bankroll_po FROM paper_bets "
+                                                    "WHERE bankroll_po IS NOT NULL ORDER BY id DESC LIMIT 1"
+                                                ).fetchone()
+                                                _br_p = float(_br_prev[0]) if _br_prev else float(
+                                                    st.session_state.get("bankroll", 1000.0))
+                                                _br_nw = round(_br_p + _pnl, 2)
+                                                con2.execute(
+                                                    "UPDATE paper_bets SET status='rozliczony',"
+                                                    "trafiony=?,pnl=?,bankroll_po=?,wynik=? WHERE id=?",
+                                                    (_traf, _pnl, _br_nw,
+                                                     "trafiony" if _traf else "pudło",
+                                                     int(_pb_r["id"])))
+                                                con2.commit()
+                                                st.rerun()
+                                            except Exception as _e2:
+                                                st.error(str(_e2))
+                                            finally:
+                                                con2.close()
+
+                    # Usuń wszystkie oczekujące (reset)
+                    st.markdown("")
+                    if st.button("🗑️ Usuń wszystkie oczekujące", key="_pb_clear",
+                                 help="Usuwa zakłady ze statusem 'oczekuje'"):
+                        con3 = sqlite3.connect(DB_FILE)
+                        try:
+                            con3.execute("DELETE FROM paper_bets WHERE status='oczekuje'")
+                            con3.commit()
+                            st.rerun()
+                        finally:
+                            con3.close()
+
+            # ─────────────────────────────────────────────────────────────────
+            with _pb_t3:
+                st.markdown("#### Analiza bankrollu i psychologii")
+
+                con = sqlite3.connect(DB_FILE)
+                try:
+                    _pb_hist = pd.read_sql(
+                        "SELECT * FROM paper_bets WHERE status='rozliczony' ORDER BY id ASC", con)
+                except Exception:
+                    _pb_hist = pd.DataFrame()
+                finally:
+                    con.close()
+
+                if _pb_hist.empty or len(_pb_hist) < 2:
+                    st.info("Za mało danych — rozlicz co najmniej 2 zakłady.")
+                else:
+                    _pb_hist["pnl"]       = pd.to_numeric(_pb_hist["pnl"],       errors="coerce").fillna(0)
+                    _pb_hist["stawka"]     = pd.to_numeric(_pb_hist["stawka"],     errors="coerce").fillna(0)
+                    _pb_hist["kurs"]       = pd.to_numeric(_pb_hist["kurs"],       errors="coerce").fillna(1)
+                    _pb_hist["trafiony"]   = pd.to_numeric(_pb_hist["trafiony"],   errors="coerce").fillna(0)
+                    _pb_hist["bankroll_po"]= pd.to_numeric(_pb_hist["bankroll_po"],errors="coerce")
+
+                    n_tot   = len(_pb_hist)
+                    n_traf  = int(_pb_hist["trafiony"].sum())
+                    hit_r   = n_traf / n_tot if n_tot else 0
+                    total_pnl = _pb_hist["pnl"].sum()
+                    total_stw = _pb_hist["stawka"].sum()
+                    roi     = total_pnl / total_stw * 100 if total_stw > 0 else 0
+                    avg_krs = _pb_hist["kurs"].mean()
+
+                    # KPI
+                    _pbk1, _pbk2, _pbk3, _pbk4 = st.columns(4)
+                    _pbk1.metric("📊 Zakłady", n_tot, delta=f"{n_traf} trafionych")
+                    _pbk2.metric("🎯 Hit Rate", f"{hit_r:.0%}")
+                    _pbk3.metric("💰 P&L", f"{total_pnl:+.0f} zł",
+                                 delta_color="normal" if total_pnl >= 0 else "inverse")
+                    _pbk4.metric("📈 ROI", f"{roi:+.1f}%",
+                                 delta_color="normal" if roi >= 0 else "inverse")
+
+                    st.markdown("---")
+
+                    # Wykres bankrollu
+                    if _pb_hist["bankroll_po"].notna().sum() >= 2:
+                        _pb_br_vals = _pb_hist["bankroll_po"].dropna().tolist()
+                        _pb_br_x    = list(range(1, len(_pb_br_vals) + 1))
+                        _pb_peak    = max(_pb_br_vals)
+                        _pb_min     = min(_pb_br_vals)
+                        _pb_final   = _pb_br_vals[-1]
+                        _pb_color   = "#4CAF50" if _pb_final >= _pb_br_vals[0] else "#F44336"
+
+                        # SVG sparkline
+                        _pb_w, _pb_h = 480, 80
+                        _pb_range = max(_pb_peak - _pb_min, 1)
+                        def _pbx(i): return int(i / max(len(_pb_br_vals)-1, 1) * _pb_w)
+                        def _pby(v): return int(_pb_h - (v - _pb_min) / _pb_range * (_pb_h - 8) - 4)
+                        _pb_pts = " ".join(f"{_pbx(i)},{_pby(v)}" for i, v in enumerate(_pb_br_vals))
+                        _pb_fill_pts = f"0,{_pb_h} " + _pb_pts + f" {_pb_w},{_pb_h}"
+
+                        st.markdown(
+                            f"<div style='margin:8px 0 16px'>"
+                            f"<div style='font-size:0.8em;color:var(--text-muted);margin-bottom:4px'>💹 Krzywa bankrollu</div>"
+                            f"<svg viewBox='0 0 {_pb_w} {_pb_h}' style='width:100%;height:80px'>"
+                            f"<polygon points='{_pb_fill_pts}' fill='{_pb_color}22'/>"
+                            f"<polyline points='{_pb_pts}' fill='none' stroke='{_pb_color}' stroke-width='2'/>"
+                            f"</svg>"
+                            f"<div style='display:flex;justify-content:space-between;font-size:0.75em;color:#666'>"
+                            f"<span>Start</span><span>Peak: {_pb_peak:.0f} zł</span><span>Teraz: {_pb_final:.0f} zł</span>"
+                            f"</div></div>",
+                            unsafe_allow_html=True)
+
+                    # Analiza psychologiczna — powody
+                    st.markdown("##### 💭 Psychologia decyzji")
+                    _pb_pow = _pb_hist.groupby("powod").agg(
+                        n=("id","count"),
+                        traf=("trafiony","sum"),
+                        pnl=("pnl","sum")
+                    ).reset_index()
+                    _pb_pow["hit%"] = (_pb_pow["traf"] / _pb_pow["n"] * 100).round(0)
+                    _pb_pow["roi%"] = (_pb_pow["pnl"] / (_pb_hist.groupby("powod")["stawka"].sum().values) * 100).round(1)
+
+                    _pw_rows = []
+                    for _, _pw in _pb_pow.sort_values("pnl", ascending=False).iterrows():
+                        _pw_c = "#4CAF50" if _pw["pnl"] >= 0 else "#F44336"
+                        _pw_rows.append(
+                            f"<tr style='border-bottom:1px solid var(--border)'>"
+                            f"<td style='padding:7px 10px;font-size:0.84em;color:var(--text-primary)'>{_pw['powod']}</td>"
+                            f"<td style='padding:7px 8px;text-align:center;color:#888;font-size:0.82em'>{int(_pw['n'])}</td>"
+                            f"<td style='padding:7px 8px;text-align:center;color:#888;font-size:0.82em'>{_pw['hit%']:.0f}%</td>"
+                            f"<td style='padding:7px 8px;text-align:center;font-weight:700;"
+                            f"color:{_pw_c};font-size:0.84em'>{_pw['pnl']:+.0f} zł</td>"
+                            f"</tr>"
+                        )
+                    st.markdown(
+                        f"<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse'>"
+                        f"<thead><tr style='border-bottom:2px solid var(--border)'>"
+                        f"<th style='padding:6px 10px;text-align:left;font-size:0.76em;color:var(--text-muted)'>Powód</th>"
+                        f"<th style='padding:6px 8px;text-align:center;font-size:0.76em;color:var(--text-muted)'>N</th>"
+                        f"<th style='padding:6px 8px;text-align:center;font-size:0.76em;color:var(--text-muted)'>Hit%</th>"
+                        f"<th style='padding:6px 8px;text-align:center;font-size:0.76em;color:var(--text-muted)'>P&L</th>"
+                        f"</tr></thead><tbody>{''.join(_pw_rows)}</tbody></table></div>",
+                        unsafe_allow_html=True)
+
+                    # Passus streak — seria porażek/wygranych
+                    _pb_res = _pb_hist["trafiony"].tolist()
+                    _cur_streak = 1; _max_loss = 0; _cur_loss = 0
+                    for i in range(1, len(_pb_res)):
+                        if _pb_res[i] == 0:
+                            _cur_loss += 1
+                            _max_loss = max(_max_loss, _cur_loss)
+                        else:
+                            _cur_loss = 0
+                    # Bieżąca seria
+                    _cur_str_type = "wygranych" if _pb_res[-1] == 1 else "porażek"
+                    _cur_str_n = 1
+                    for v in reversed(_pb_res[:-1]):
+                        if v == _pb_res[-1]: _cur_str_n += 1
+                        else: break
+
+                    _streak_c = "#F44336" if _cur_str_type == "porażek" else "#4CAF50"
+                    st.markdown(
+                        f"<div style='margin-top:14px;display:flex;gap:12px;flex-wrap:wrap'>"
+                        f"<div style='background:var(--bg-card);border:1px solid var(--border);"
+                        f"border-radius:6px;padding:10px 16px;text-align:center'>"
+                        f"<div style='font-size:0.75em;color:var(--text-muted)'>Bieżąca seria</div>"
+                        f"<div style='font-size:1.4em;font-weight:700;color:{_streak_c}'>"
+                        f"{_cur_str_n}× {_cur_str_type}</div></div>"
+                        f"<div style='background:var(--bg-card);border:1px solid var(--border);"
+                        f"border-radius:6px;padding:10px 16px;text-align:center'>"
+                        f"<div style='font-size:0.75em;color:var(--text-muted)'>Najdłuższa seria porażek</div>"
+                        f"<div style='font-size:1.4em;font-weight:700;color:#F44336'>{_max_loss}×</div></div>"
+                        f"<div style='background:var(--bg-card);border:1px solid var(--border);"
+                        f"border-radius:6px;padding:10px 16px;text-align:center'>"
+                        f"<div style='font-size:0.75em;color:var(--text-muted)'>Śr. kurs</div>"
+                        f"<div style='font-size:1.4em;font-weight:700;color:var(--text-primary)'>{avg_krs:.2f}</div></div>"
+                        f"</div>",
+                        unsafe_allow_html=True)
+
+                    # Alert psychologiczny
+                    if _cur_str_type == "porażek" and _cur_str_n >= 3:
+                        st.warning(
+                            f"⚠️ **Bankroll Shield:** {_cur_str_n} porażki z rzędu. "
+                            f"Rozważ obniżenie stawek o 50% na kolejne zakłady — "
+                            f"wariancja jest teraz podwyższona.")
 
     # =========================================================================
     # =========================================================================
