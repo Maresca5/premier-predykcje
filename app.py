@@ -4350,6 +4350,17 @@ if not historical.empty:
                                     elif sedzia not in ("Nieznany", "", None):
                                         st.caption(f"🟨 **Sędzia:** {sedzia}")
 
+                                    # Macierz wyników
+                                    if pokaz_macierz:
+                                        try:
+                                            _M_arr = pred.get("macierz")
+                                            if _M_arr is not None:
+                                                st.markdown(
+                                                    render_macierz_html(_M_arr, h, a),
+                                                    unsafe_allow_html=True)
+                                        except Exception:
+                                            pass
+
                                     # Ostatnie 5 meczów drużyn
                                     try:
                                         _hist_h2h = historical.copy()
@@ -4899,12 +4910,15 @@ if not historical.empty:
                         continue
 
                     _avg_ent = float(np.mean(_brf_ents))
-                    # Stability score: entropia 0.5 (pewny) → 100%, 1.5 (losowy) → 0%
-                    _stab = max(0.0, min(1.0, 1.0 - (_avg_ent - 0.5) / 1.0))
+                    # Entropia meczu piłkarskiego: ~0.9 (bardzo pewny) do ~1.58 (totalny chaos/losowy)
+                    # Mapujemy ten zakres liniowo na 0–100%
+                    _ENT_MIN = 0.90   # entropia przy bardzo pewnym typie (~p=0.80)
+                    _ENT_MAX = 1.52   # entropia przy rozkładzie bliskim równomiernego
+                    _stab = max(0.0, min(1.0, 1.0 - (_avg_ent - _ENT_MIN) / (_ENT_MAX - _ENT_MIN)))
                     _stab_pct = int(_stab * 100)
 
-                    if   _stab_pct >= 65: _rec = "✅ Graj";     _rec_c = "#4CAF50"; _stars = "●●●"
-                    elif _stab_pct >= 45: _rec = "⚠️ Ostrożnie"; _rec_c = "#FF9800"; _stars = "●●○"
+                    if   _stab_pct >= 60: _rec = "✅ Graj";     _rec_c = "#4CAF50"; _stars = "●●●"
+                    elif _stab_pct >= 35: _rec = "⚠️ Ostrożnie"; _rec_c = "#FF9800"; _stars = "●●○"
                     else:                 _rec = "🚫 Odpuść";    _rec_c = "#F44336"; _stars = "●○○"
 
                     _brf_rows.append({
@@ -4919,7 +4933,7 @@ if not historical.empty:
                         "avg_ent": round(_avg_ent, 3),
                     })
                     # Zbierz value bety tylko z lig "Graj"
-                    if _stab_pct >= 65:
+                    if _stab_pct >= 60:
                         _brf_value.extend(_brf_vbs)
 
                 except Exception:
@@ -5041,8 +5055,9 @@ if not historical.empty:
                             st.error(f"Błąd: {_brf_e}")
 
                 st.caption(
-                    "Stability Score = 1 − (avg_entropy − 0.5).  "
-                    "Im niższa entropia macierzy wyników, tym bardziej zdecydowany model.  "
+                    "Stability Score = przewidywalność kolejki. "
+                    "Entropia 0.90 (pewny typ) → 100%, entropia 1.52 (totalny chaos) → 0%.  "
+                    "Im niższa entropia rozkładu wyników, tym bardziej zdecydowany model.  "
                     "●●● ≥65% · ●●○ 45-64% · ●○○ <45%"
                 )
             else:
