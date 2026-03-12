@@ -22,10 +22,10 @@ from data import (
     _pobierz_csv, load_historical, load_h2h_csv, _get_fd_api_key,
     load_schedule, load_standings, _standings_by_name, load_h2h_api,
     _forma_warning, get_current_round, get_available_rounds, get_round_status,
-    weighted_mean, oblicz_wszystkie_statystyki, oblicz_srednie_ligowe, oblicz_forme,
-    tabela_ligowa,
+    weighted_mean, oblicz_wszystkie_statystyki, oblicz_srednie_ligowe,
 )
 from model import (
+    oblicz_forme, tabela_ligowa,
     oblicz_lambdy, dixon_coles_adj, _get_shrink, kalibruj_prawdopodobienstwa,
     wybierz_typ, market_noise_check, kelly_stake, due_to_score_flag,
     wybierz_wynik, entropy_meczu, chaos_label, sot_momentum,
