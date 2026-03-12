@@ -272,27 +272,64 @@ def _fetch_understat_page(url: str, retries: int = MAX_RETRIES) -> Optional[str]
     return None
 
 
-def _extract_json_var(html: str, var_name: str) -> Optional[list]:
+def _extract_matches_from_html(html: str) -> Optional[list]:
     """
-    Wyciąga dane JSON osadzone w HTML understat.
-    Format: var datesData = JSON.parse('...')
+    Wyciąga dane meczowe z HTML understat.com.
+    Understat osadza dane jako JSON.parse('...') w tagach <script>.
+    Używamy BeautifulSoup aby znaleźć właściwy skrypt (zawiera 'datesData'),
+    a następnie regex + unicode_escape do dekodowania.
+    Fallback: szukamy w każdym skrypcie dopóki nie znajdziemy datesData.
     """
-    pattern = rf"var\s+{var_name}\s*=\s*JSON\.parse\('(.+?)'\)"
-    m = re.search(pattern, html)
-    if not m:
-        return None
-    raw = m.group(1)
-    # Understat enkoduje apostrofy jako \\' i backslashe
-    raw = raw.replace("\\'", "'").replace("\\\\", "\\")
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        # Spróbuj po decode unicode escapes
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        scripts = soup.find_all("script")
+    except ImportError:
+        # Fallback bez BS4 — szukamy po regex w surowym HTML
+        scripts = None
+
+    # Wzorzec pasujący do: var datesData  = JSON.parse('...')
+    pattern = re.compile(r"var\s+datesData\s*=\s*JSON\.parse\('(.+?)'\)", re.DOTALL)
+
+    candidates = []
+    if scripts:
+        # Sprawdź każdy skrypt, ze szczególnym uwzględnieniem index 2
+        for i, s in enumerate(scripts):
+            txt = s.string or ""
+            candidates.append((i, txt))
+    else:
+        # Bez BS4 — skanuj surowy HTML
+        candidates = [(0, html)]
+
+    for idx, txt in candidates:
+        m = pattern.search(txt)
+        if not m:
+            continue
+        raw = m.group(1)
+        # Understat enkoduje dane przez JSON.stringify + encodeURIComponent
+        # Wynik: unicode escapes (\uXXXX) i escape apostrofów (\')
         try:
-            raw2 = raw.encode().decode("unicode_escape")
-            return json.loads(raw2)
+            # Metoda 1: bezpośrednie json.loads po cleanup
+            cleaned = raw.replace("\\'", "'")
+            return json.loads(cleaned)
         except Exception:
-            return None
+            pass
+        try:
+            # Metoda 2: unicode_escape decode
+            decoded = raw.encode("utf-8").decode("unicode_escape")
+            decoded = decoded.replace("\\'", "'")
+            return json.loads(decoded)
+        except Exception:
+            pass
+        try:
+            # Metoda 3: codecs
+            import codecs
+            decoded2 = codecs.decode(raw, "unicode_escape")
+            return json.loads(decoded2)
+        except Exception:
+            pass
+
+    return None
 
 
 def fetch_liga_xg(liga_csv: str, sezon: Optional[str] = None,
@@ -321,9 +358,12 @@ def fetch_liga_xg(liga_csv: str, sezon: Optional[str] = None,
         return {"status": "error", "msg": "Brak odpowiedzi z understat.com", "liga": liga_csv}
 
     # Understat osadza datesData z wynikami meczów per kolejka
-    dates_data = _extract_json_var(html, "datesData")
+    dates_data = _extract_matches_from_html(html)
     if not dates_data:
-        logger.error(f"Nie znaleziono datesData dla {liga_csv}/{sezon}")
+        # Zapisz fragment HTML do logu żeby móc debugować
+        logger.error(f"Nie znaleziono datesData dla {liga_csv}/{sezon}. "
+                     f"Rozmiar HTML: {len(html)} znaków. "
+                     f"Fragment: {html[1000:1200] if len(html)>1200 else html[:200]}")
         return {"status": "error", "msg": "Brak datesData w HTML", "liga": liga_csv}
 
     con = sqlite3.connect(db_file)
