@@ -3200,18 +3200,17 @@ if _qs_ls is not None:
 _ls_pills = []
 for _li, _ln in enumerate(LIGI.keys()):
     _active = _ln == wybrana_liga
-    _bg     = "#1e3a5f" if _active else "#111827"
-    _border = "#4CAF50" if _active else "#1f2937"
-    _col    = "#ffffff" if _active else "#6b7280"
-    _fw     = "700"     if _active else "400"
+    _bg     = "#1e3a5f" if _active else "#1f2d40"
+    _border = "#4CAF50" if _active else "#2d4a6b"
+    _col    = "#ffffff" if _active else "#c9d6e3"
+    _fw     = "700"     if _active else "500"
     _short  = {"Premier League":"EPL","La Liga":"La Liga",
                 "Bundesliga":"Bund.","Serie A":"Serie A","Ligue 1":"Ligue 1"}.get(_ln, _ln)
     _logo_url = _LIGA_LOGOS.get(_ln, "")
     _flag_fb  = _LIGA_FLAGS.get(_ln, "🌍")
-    # Ikona: <img> z logo ligi, fallback do flagi emoji
     _icon_html = (
         f"<img src='{_logo_url}' style='width:28px;height:28px;"
-        f"object-fit:contain;filter:{'none' if _active else 'grayscale(40%) opacity(0.7)'}' "
+        f"object-fit:contain;filter:{'none' if _active else 'grayscale(20%) opacity(0.85%)'}' "
         f"onerror=\"this.outerHTML='<span style=font-size:1.3em>{_flag_fb}</span>'\">"
         if _logo_url else f"<span style='font-size:1.4em'>{_flag_fb}</span>"
     )
@@ -3999,21 +3998,6 @@ if not historical.empty:
     with tab1:
         st.subheader("⚽ Analiza meczu – aktualna kolejka")
         st.caption("Szczegółowa analiza każdego meczu. Rozwiń mecz → sprawdź rynki → zapisz do trackingu.")
-
-        with st.expander("ℹ️ Jak działa tracking skuteczności?", expanded=False):
-            st.markdown("""
-**Workflow w 3 krokach:**
-
-**Krok 1 →** Przed meczami: włącz przełącznik *💾 Zapisz zdarzenia* poniżej.  
-Model zapisze wszystkie predykcje do bazy (1X2 + rynki alternatywne).
-
-**Krok 2 →** Poczekaj na wyniki meczów.
-
-**Krok 3 →** Po meczach: kliknij *🔄 Aktualizuj wyniki*.  
-System automatycznie porówna predykcje z wynikami i wyliczy skuteczność.
-
-Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
-            """)
 
         tgl1, tgl2 = st.columns(2)
         with tgl1: pokaz_komentarz = st.toggle("📊 Forma & Kontekst", value=True)
@@ -5294,10 +5278,10 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
             st.divider()
             st.markdown("### ⚡ Expected Goals & Pressing (understat.com)")
             if _XGF_OK:
-                _xg_table = _xgf.get_league_xg_table(
-                    LIGI[wybrana_liga]["csv_code"], db_file=XG_DB_FILE)
+                _xg_csv = LIGI[wybrana_liga]["csv_code"]
+                _xg_table = _xgf.get_league_xg_table(_xg_csv, db_file=XG_DB_FILE)
                 _xg_info  = _xgf.get_last_fetch_info(db_file=XG_DB_FILE)
-                _xg_liga_info = _xg_info.get(LIGI[wybrana_liga]["csv_code"])
+                _xg_liga_info = _xg_info.get(_xg_csv)
 
                 if _xg_table:
                     if _xg_liga_info:
@@ -5355,35 +5339,29 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                         "Deep = podania w pole karne · "
                         "⚡ Press = PPDA ≤ 8.0 · 🐢 Passive = PPDA ≥ 14.0")
 
-                    # Przycisk ręcznego odświeżenia
-                    if st.button("🔄 Odśwież xG teraz", key="_xg_refresh_btn"):
-                        with st.spinner("Pobieranie z understat.com..."):
-                            _r = _xgf.fetch_liga_xg(
-                                LIGI[wybrana_liga]["csv_code"], force=True, db_file=XG_DB_FILE)
-                            if _r.get("status") == "ok":
-                                st.success(f"✅ Pobrano {_r['n_mecze']} meczów xG")
-                            else:
-                                st.error(f"Błąd: {_r.get('msg','nieznany')}")
-                                st.caption("💡 Sprawdź czy `beautifulsoup4` i `lxml` są zainstalowane: "
-                                           "`pip install beautifulsoup4 lxml requests`")
-                        st.rerun()
                 else:
-                    st.info(
-                        "Brak danych xG dla tej ligi. "
-                        "Kliknij 'Pobierz xG teraz' aby pobrać z understat.com.")
-                    if st.button("🔄 Pobierz xG teraz", key="_xg_fetch_first"):
-                        with st.spinner("Pobieranie z understat.com..."):
-                            _r = _xgf.fetch_liga_xg(
-                                LIGI[wybrana_liga]["csv_code"], force=True, db_file=XG_DB_FILE)
-                            if _r.get("status") == "ok":
-                                st.success(f"✅ Pobrano {_r['n_mecze']} meczów")
-                            else:
-                                st.error(f"Błąd: {_r.get('msg','nieznany')}")
-                                st.caption("💡 Wymagane: `pip install beautifulsoup4 lxml requests`")
+                    # Brak danych — pokaż instrukcję lokalnego fetcha
+                    st.markdown(
+                        "<div style='background:var(--bg-card);border:1px solid var(--border);"
+                        "border-radius:8px;padding:14px 18px'>"
+                        "<div style='font-size:0.88em;font-weight:700;color:var(--accent);"
+                        "margin-bottom:8px'>📥 Jak załadować dane xG?</div>"
+                        "<div style='font-size:0.83em;color:var(--text-muted);line-height:1.7'>"
+                        "understat.com blokuje requesty z serwerów cloud (Streamlit, Colab, VPS).<br>"
+                        "Dane trzeba pobrać <b>lokalnie</b> i wgrać do repozytorium:<br><br>"
+                        "<code style='background:var(--stat-bg);padding:2px 6px;border-radius:3px'>"
+                        "pip install requests beautifulsoup4 lxml</code><br>"
+                        "<code style='background:var(--stat-bg);padding:2px 6px;border-radius:3px'>"
+                        "python fetch_xg_local.py</code><br><br>"
+                        "Następnie:<br>"
+                        "<code style='background:var(--stat-bg);padding:2px 6px;border-radius:3px'>"
+                        "git add xg_cache.db &amp;&amp; git commit -m 'xG update' &amp;&amp; git push</code><br><br>"
+                        "Po wgraniu plik <b>xg_cache.db</b> będzie odczytany automatycznie. "
+                        "Odświeżaj lokalnie co 1–2 tygodnie."
+                        "</div></div>",
+                        unsafe_allow_html=True)
             else:
-                st.info("Moduł understat_fetcher niedostępny. "
-                        "Zainstaluj: `pip install requests` i upewnij się że "
-                        "understat_fetcher.py jest w tym samym katalogu.")
+                st.info("Moduł understat_fetcher.py niedostępny — upewnij się że jest w tym samym katalogu co app.py.")
         else:
             st.warning("Brak wystarczających danych do Power Rankings.")
 
