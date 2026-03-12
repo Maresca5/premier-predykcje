@@ -5364,11 +5364,13 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 st.success(f"✅ Pobrano {_r['n_mecze']} meczów xG")
                             else:
                                 st.error(f"Błąd: {_r.get('msg','nieznany')}")
+                                st.caption("💡 Sprawdź czy `beautifulsoup4` i `lxml` są zainstalowane: "
+                                           "`pip install beautifulsoup4 lxml requests`")
                         st.rerun()
                 else:
                     st.info(
                         "Brak danych xG dla tej ligi. "
-                        "Kliknij 'Odśwież xG teraz' aby pobrać z understat.com.")
+                        "Kliknij 'Pobierz xG teraz' aby pobrać z understat.com.")
                     if st.button("🔄 Pobierz xG teraz", key="_xg_fetch_first"):
                         with st.spinner("Pobieranie z understat.com..."):
                             _r = _xgf.fetch_liga_xg(
@@ -5377,7 +5379,7 @@ Dane trafią do zakładki **📈 Skuteczność + ROI** i **📉 Kalibracja**.
                                 st.success(f"✅ Pobrano {_r['n_mecze']} meczów")
                             else:
                                 st.error(f"Błąd: {_r.get('msg','nieznany')}")
-                        st.rerun()
+                                st.caption("💡 Wymagane: `pip install beautifulsoup4 lxml requests`")
             else:
                 st.info("Moduł understat_fetcher niedostępny. "
                         "Zainstaluj: `pip install requests` i upewnij się że "
