@@ -45,6 +45,13 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
+# Próbuj przez understatapi (pip install understatapi) — stabilniejsze niż własny scraper
+try:
+    from understatapi import UnderstatClient
+    HAS_UNDERSTATAPI = True
+except ImportError:
+    HAS_UNDERSTATAPI = False
+
 logger = logging.getLogger("understat_fetcher")
 if not logger.handlers:
     h = logging.StreamHandler()
@@ -242,29 +249,55 @@ def _should_fetch(liga: str, sezon: str, db_file: str = XG_DB_FILE) -> bool:
 
 
 def _fetch_understat_page(url: str, retries: int = MAX_RETRIES) -> Optional[str]:
-    """Pobiera HTML strony understat z retry."""
+    """
+    Pobiera HTML strony understat.
+    Używa Session + najpierw odwiedza stronę główną żeby dostać cookies.
+    Bez tego understat zwraca ~18KB stronę blokady zamiast danych.
+    """
     if not HAS_REQUESTS:
-        logger.error("Brak biblioteki 'requests'. Zainstaluj: pip install requests")
+        logger.error("Brak biblioteki 'requests'.")
         return None
+
     headers = {
-        "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0.0.0 Safari/537.36"),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://understat.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                  "image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
     }
+
     for attempt in range(retries):
         try:
-            resp = requests.get(url, headers=headers, timeout=20)
+            session = requests.Session()
+            session.headers.update(headers)
+            # Krok 1: odwiedź stronę główną żeby dostać cookies (CFID/session)
+            session.get("https://understat.com/", timeout=15)
+            time.sleep(1.2)
+            # Krok 2: docelowa strona z Referer
+            session.headers["Referer"] = "https://understat.com/"
+            resp = session.get(url, timeout=30)
+            logger.info(f"HTTP {resp.status_code}, HTML: {len(resp.text)} znaków")
             if resp.status_code == 200:
+                if len(resp.text) < 50_000:
+                    logger.warning(
+                        f"Podejrzanie mały HTML ({len(resp.text)} znaków). "
+                        f"Fragment: {resp.text[500:800]}")
                 return resp.text
             elif resp.status_code == 429:
-                wait = 30 * (attempt + 1)
-                logger.warning(f"Rate limit (429) — czekam {wait}s")
+                wait = 60 * (attempt + 1)
+                logger.warning(f"Rate limit — czekam {wait}s")
                 time.sleep(wait)
+            elif resp.status_code == 403:
+                logger.warning(f"403 Forbidden (blokowanie IP). Próba {attempt+1}/{retries}")
+                time.sleep(15 * (attempt + 1))
             else:
-                logger.warning(f"HTTP {resp.status_code} dla {url}")
+                logger.warning(f"HTTP {resp.status_code}")
                 time.sleep(5)
         except Exception as e:
             logger.warning(f"Request error (próba {attempt+1}): {e}")
@@ -373,21 +406,38 @@ def fetch_liga_xg(liga_csv: str, sezon: Optional[str] = None,
         return {"status": "skipped", "liga": liga_csv, "sezon": sezon}
 
     _ensure_db(db_file)
-    url = f"https://understat.com/league/{understat_liga}/{sezon}"
-    logger.info(f"Pobieranie {liga_csv}/{sezon}: {url}")
 
-    html = _fetch_understat_page(url)
-    if not html:
-        return {"status": "error", "msg": "Brak odpowiedzi z understat.com", "liga": liga_csv}
+    # ── Metoda 1: understatapi (pip install understatapi) ─────────────────
+    dates_data = None
+    if HAS_UNDERSTATAPI:
+        try:
+            logger.info(f"Pobieranie przez understatapi: {liga_csv}/{sezon}")
+            with UnderstatClient() as client:
+                raw = client.league(league=understat_liga).get_match_data(season=sezon)
+                if raw:
+                    # understatapi zwraca listę meczów bezpośrednio
+                    dates_data = list(raw) if not isinstance(raw, list) else raw
+                    logger.info(f"understatapi: {len(dates_data)} meczów")
+        except Exception as e:
+            logger.warning(f"understatapi failed: {e} — próbuję scraper")
+            dates_data = None
 
-    # Understat osadza datesData z wynikami meczów per kolejka
-    dates_data = _extract_matches_from_html(html)
+    # ── Metoda 2: własny scraper z Session+cookies ────────────────────────
     if not dates_data:
-        # Zapisz fragment HTML do logu żeby móc debugować
-        logger.error(f"Nie znaleziono datesData dla {liga_csv}/{sezon}. "
-                     f"Rozmiar HTML: {len(html)} znaków. "
-                     f"Fragment: {html[1000:1200] if len(html)>1200 else html[:200]}")
-        return {"status": "error", "msg": "Brak datesData w HTML", "liga": liga_csv}
+        url = f"https://understat.com/league/{understat_liga}/{sezon}"
+        logger.info(f"Scraping {liga_csv}/{sezon}: {url}")
+        html = _fetch_understat_page(url)
+        if not html:
+            return {"status": "error", "msg": "Brak odpowiedzi z understat.com", "liga": liga_csv}
+        dates_data = _extract_matches_from_html(html)
+        if not dates_data:
+            logger.error(f"Nie znaleziono datesData dla {liga_csv}/{sezon}. "
+                         f"Rozmiar HTML: {len(html)} znaków. "
+                         f"Fragment: {html[500:800] if len(html)>800 else html}")
+            return {"status": "error",
+                    "msg": f"Brak danych (HTML={len(html)}B). "
+                           f"Zainstaluj: pip install understatapi",
+                    "liga": liga_csv}
 
     con = sqlite3.connect(db_file)
     n_inserted = 0
