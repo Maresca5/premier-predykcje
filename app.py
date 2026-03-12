@@ -1287,7 +1287,9 @@ SOT_BLEND_W = 0.30   # 0.0 = tylko gole, 0.30 = 70% gole + 30% SOT
 def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
                   srednie_lig: dict, forma_dict: dict,
                   sot_w: float = SOT_BLEND_W,
-                  csv_code: str = "E0") -> tuple:
+                  csv_code: str = "E0",
+                  historical: pd.DataFrame = None,
+                  mecz_data: object = None) -> tuple:
     """
     Zwraca (lam_h, lam_a, lam_r, lam_k, sot_aktywny, lam_sot).
 
@@ -1295,6 +1297,7 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
       ALPHA_LAM_OFF = 0.10  – atak jest zmienny → shrinkujemy mocniej
       ALPHA_LAM_DEF = 0.20  – obrona jest stabilna → shrinkujemy słabiej
     Wynik: +1.5–2.6pp hit rate, +2–5pp ROI, Brier -0.002 na wszystkich 3 datasetach.
+    Fatigue factor: korekta λ gdy drużyna grała <4 dni temu (-4%) lub >10 dni (+2%).
     """
     # ── Asymetryczne parametry shrinkage lambdy ──────────────────
     ALPHA_OFF = 0.10   # shrink składowej ofensywnej w kierunku avg_ligi
@@ -1357,6 +1360,41 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
                 lam_sot_total = sh + sa
         except (TypeError, ValueError):
             pass
+
+    # ── Fatigue factor ────────────────────────────────────────────────────
+    # Gdy historical i mecz_data dostarczone: sprawdź ile dni od ostatniego meczu
+    # <4 dni → zmęczenie → lam ataku -4%, obrona -2% (łatwiej strzelić zmęczonej obronie)
+    # >10 dni → świeżość → lam ataku +2%
+    if historical is not None and mecz_data is not None:
+        try:
+            _ref = pd.Timestamp(mecz_data)
+            def _dni_od_meczu(team):
+                _tm = historical[
+                    (historical["HomeTeam"] == team) | (historical["AwayTeam"] == team)
+                ]["Date"].dropna()
+                _tm = _tm[_tm < _ref]
+                if _tm.empty: return None
+                return (_ref - _tm.max()).days
+            _days_h = _dni_od_meczu(h)
+            _days_a = _dni_od_meczu(a)
+            for _days, _is_home in [(_days_h, True), (_days_a, False)]:
+                if _days is None: continue
+                if _days < 4:
+                    _fatigue = 0.96   # zmęczenie: -4% ataku
+                    _def_boost = 1.02 # lekki boost strat (zmęczona obrona)
+                elif _days > 10:
+                    _fatigue = 1.02   # odpoczęty: +2%
+                    _def_boost = 1.0
+                else:
+                    continue
+                if _is_home:
+                    lam_h = float(np.clip(lam_h * _fatigue, 0.3, 4.5))
+                    lam_a = float(np.clip(lam_a * _def_boost, 0.3, 4.5))
+                else:
+                    lam_a = float(np.clip(lam_a * _fatigue, 0.3, 4.5))
+                    lam_h = float(np.clip(lam_h * _def_boost, 0.3, 4.5))
+        except Exception:
+            pass  # fatigue zawsze opcjonalny
 
     return (float(np.clip(lam_h, 0.3, 4.5)),
             float(np.clip(lam_a, 0.3, 4.5)),
@@ -3528,7 +3566,9 @@ if not historical.empty:
                         continue
                     
                     lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
-                                                                    csv_code=LIGI[wybrana_liga]["csv_code"])
+                                                                    csv_code=LIGI[wybrana_liga]["csv_code"],
+                                                                    historical=historical,
+                                                                    mecz_data=mecz.get("date"))
                     pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                     mecz_str = f"{h} – {a}"
 
@@ -3689,7 +3729,44 @@ if not historical.empty:
 
                 st.markdown("### 🔥 Value Bets kolejki")
                 st.caption(f"Wszystkie zdarzenia z EV > 0 · posortowane wg EV · limit {MAX_EXPOSURE_PCT:.0%}/mecz")
+
+                # ── Filtry ──────────────────────────────────────────────
+                _fc1, _fc2, _fc3 = st.columns([2, 2, 2])
+                with _fc1:
+                    _ev_min_filtr = st.slider(
+                        "Min EV", 0.0, 0.20, 0.0, 0.01,
+                        format="+%.0f%%",
+                        key="_vb_ev_min",
+                        help="Pokaż tylko zdarzenia z EV ≥ progu")
+                with _fc2:
+                    _kurs_min_filtr = st.slider(
+                        "Min kurs", 1.0, 3.0, 1.0, 0.05,
+                        format="%.2f",
+                        key="_vb_kurs_min",
+                        help="Pokaż tylko zdarzenia z kursem ≥ wartości")
+                with _fc3:
+                    _kat_filtr = st.selectbox(
+                        "Kategoria",
+                        ["Wszystkie", "1X2", "Gole", "BTTS", "SOT"],
+                        key="_vb_kat",
+                        help="Filtruj po typie rynku")
+
                 value_bets = df_rank[df_rank["EV"] > 0].sort_values("EV", ascending=False)
+
+                # Zastosuj filtry
+                if _ev_min_filtr > 0:
+                    value_bets = value_bets[value_bets["EV"] >= _ev_min_filtr]
+                if _kurs_min_filtr > 1.0:
+                    _kurs_col = value_bets.get("KursBuk") if "KursBuk" in value_bets.columns else None
+                    if _kurs_col is not None:
+                        value_bets = value_bets[
+                            value_bets["KursBuk"].apply(
+                                lambda k: float(k) >= _kurs_min_filtr if k and str(k) not in ("nan","None","") else False
+                            ) |
+                            value_bets["Fair"].apply(lambda f: float(f) >= _kurs_min_filtr if f else False)
+                        ]
+                if _kat_filtr != "Wszystkie":
+                    value_bets = value_bets[value_bets["Kategoria"] == _kat_filtr]
                 if not value_bets.empty:
                     for _, row in value_bets.iterrows():
                         _ks  = row.get("Kelly_stake")
@@ -4016,7 +4093,9 @@ if not historical.empty:
                         _mecz_a_id = mecz.get("away_id")
 
                         lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
-                                                                    csv_code=LIGI[wybrana_liga]["csv_code"])
+                                                                    csv_code=LIGI[wybrana_liga]["csv_code"],
+                                                                    historical=historical,
+                                                                    mecz_data=mecz.get("date"))
                         pred = predykcja_meczu(lam_h, lam_a, rho=rho, csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
                         data_meczu = mecz["date"].strftime("%d.%m %H:%M") if pd.notna(mecz["date"]) else ""
 
@@ -4349,6 +4428,17 @@ if not historical.empty:
                                         st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
                                     elif sedzia not in ("Nieznany", "", None):
                                         st.caption(f"🟨 **Sędzia:** {sedzia}")
+
+                                    # Macierz wyników (toggle)
+                                    if pokaz_macierz:
+                                        try:
+                                            _M_arr = pred.get("macierz")
+                                            if _M_arr is not None:
+                                                st.markdown(
+                                                    render_macierz_html(_M_arr, h, a),
+                                                    unsafe_allow_html=True)
+                                        except Exception:
+                                            pass
 
                                     # Ostatnie 5 meczów drużyn
                                     try:
@@ -4899,12 +4989,14 @@ if not historical.empty:
                         continue
 
                     _avg_ent = float(np.mean(_brf_ents))
-                    # Stability score: entropia 0.5 (pewny) → 100%, 1.5 (losowy) → 0%
-                    _stab = max(0.0, min(1.0, 1.0 - (_avg_ent - 0.5) / 1.0))
+                    # Entropia meczu piłkarskiego: ~0.90 (bardzo pewny) → ~1.52 (chaos)
+                    # Mapowanie liniowe tego rzeczywistego zakresu na 0–100%
+                    _ENT_MIN, _ENT_MAX = 0.90, 1.52
+                    _stab = max(0.0, min(1.0, 1.0 - (_avg_ent - _ENT_MIN) / (_ENT_MAX - _ENT_MIN)))
                     _stab_pct = int(_stab * 100)
 
-                    if   _stab_pct >= 65: _rec = "✅ Graj";     _rec_c = "#4CAF50"; _stars = "●●●"
-                    elif _stab_pct >= 45: _rec = "⚠️ Ostrożnie"; _rec_c = "#FF9800"; _stars = "●●○"
+                    if   _stab_pct >= 60: _rec = "✅ Graj";     _rec_c = "#4CAF50"; _stars = "●●●"
+                    elif _stab_pct >= 35: _rec = "⚠️ Ostrożnie"; _rec_c = "#FF9800"; _stars = "●●○"
                     else:                 _rec = "🚫 Odpuść";    _rec_c = "#F44336"; _stars = "●○○"
 
                     _brf_rows.append({
@@ -4919,7 +5011,7 @@ if not historical.empty:
                         "avg_ent": round(_avg_ent, 3),
                     })
                     # Zbierz value bety tylko z lig "Graj"
-                    if _stab_pct >= 65:
+                    if _stab_pct >= 60:
                         _brf_value.extend(_brf_vbs)
 
                 except Exception:
@@ -5041,8 +5133,9 @@ if not historical.empty:
                             st.error(f"Błąd: {_brf_e}")
 
                 st.caption(
-                    "Stability Score = 1 − (avg_entropy − 0.5).  "
-                    "Im niższa entropia macierzy wyników, tym bardziej zdecydowany model.  "
+                    "Stability Score = przewidywalność kolejki. "
+                    "Entropia 0.90 (pewny typ) → 100%,  1.52 (totalny chaos) → 0%.  "
+                    "Im niższa entropia rozkładu wyników, tym bardziej zdecydowany model.  "
                     "●●● ≥65% · ●●○ 45-64% · ●○○ <45%"
                 )
             else:
