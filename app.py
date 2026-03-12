@@ -1283,15 +1283,6 @@ def _oblicz_srednie_impl(df_json: str) -> dict:
 
 # Waga SOT w blendzie z golami – parametr globalny
 SOT_BLEND_W = 0.30   # 0.0 = tylko gole, 0.30 = 70% gole + 30% SOT
-XG_BLEND_W  = 0.35   # waga xG understat w lambdzie; 0 = wyłączone
-XG_DB_FILE  = "xg_cache.db"
-
-try:
-    import understat_fetcher as _xgf
-    _XGF_OK = True
-except ImportError:
-    _xgf   = None
-    _XGF_OK = False
 
 def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
                   srednie_lig: dict, forma_dict: dict,
@@ -1304,10 +1295,6 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
       ALPHA_LAM_OFF = 0.10  – atak jest zmienny → shrinkujemy mocniej
       ALPHA_LAM_DEF = 0.20  – obrona jest stabilna → shrinkujemy słabiej
     Wynik: +1.5–2.6pp hit rate, +2–5pp ROI, Brier -0.002 na wszystkich 3 datasetach.
-
-    xG blend (jeśli _XGF_OK i XG_BLEND_W > 0):
-      λ_final = (1 - XG_BLEND_W) × λ_goals_sot  +  XG_BLEND_W × λ_xg
-    xG dostarcza bardziej stabilny sygnał ataku niż gole — wygładza efekt szczęścia.
     """
     # ── Asymetryczne parametry shrinkage lambdy ──────────────────
     ALPHA_OFF = 0.10   # shrink składowej ofensywnej w kierunku avg_ligi
@@ -1370,27 +1357,6 @@ def oblicz_lambdy(h: str, a: str, srednie_df: pd.DataFrame,
                 lam_sot_total = sh + sa
         except (TypeError, ValueError):
             pass
-
-    # ── xG blend z understat (jeśli dostępne) ───────────────────────────
-    if _XGF_OK and XG_BLEND_W > 0:
-        try:
-            xg_h_stats = _xgf.get_team_xg_stats(h, csv_code, db_file=XG_DB_FILE, n_mecze=10)
-            xg_a_stats = _xgf.get_team_xg_stats(a, csv_code, db_file=XG_DB_FILE, n_mecze=10)
-            if xg_h_stats and xg_a_stats and xg_h_stats["n"] >= 5 and xg_a_stats["n"] >= 5:
-                # Używamy npxG (bez karnych) jako czystszy sygnał
-                npxg_h_avg = xg_h_stats["npxg_scored_avg"]
-                npxg_a_avg = xg_a_stats["npxg_scored_avg"]
-                # Skaluj do poziomu ligi (npxG → lambda scale)
-                avg_npxg = (npxg_h_avg + npxg_a_avg) / 2
-                if avg_npxg > 0:
-                    scale_h = avg_h / avg_npxg if avg_npxg > 0 else 1.0
-                    scale_a = avg_a / avg_npxg if avg_npxg > 0 else 1.0
-                    lam_xg_h = float(np.clip(npxg_h_avg * scale_h * obrona_a * form_weight(h), 0.3, 4.5))
-                    lam_xg_a = float(np.clip(npxg_a_avg * scale_a * obrona_h * form_weight(a), 0.3, 4.5))
-                    lam_h = (1 - XG_BLEND_W) * lam_h + XG_BLEND_W * lam_xg_h
-                    lam_a = (1 - XG_BLEND_W) * lam_a + XG_BLEND_W * lam_xg_a
-        except Exception:
-            pass  # fallback do goals+SOT blend
 
     return (float(np.clip(lam_h, 0.3, 4.5)),
             float(np.clip(lam_a, 0.3, 4.5)),
@@ -3200,9 +3166,9 @@ if _qs_ls is not None:
 _ls_pills = []
 for _li, _ln in enumerate(LIGI.keys()):
     _active = _ln == wybrana_liga
-    _bg     = "#1e3a5f" if _active else "#1f2d40"
-    _border = "#4CAF50" if _active else "#2d4a6b"
-    _col    = "#ffffff" if _active else "#c9d6e3"
+    _bg     = "#1e3a5f" if _active else "#1e293b"
+    _border = "#4CAF50" if _active else "#334d6e"
+    _col    = "#ffffff" if _active else "#e2e8f0"
     _fw     = "700"     if _active else "500"
     _short  = {"Premier League":"EPL","La Liga":"La Liga",
                 "Bundesliga":"Bund.","Serie A":"Serie A","Ligue 1":"Ligue 1"}.get(_ln, _ln)
@@ -3210,7 +3176,7 @@ for _li, _ln in enumerate(LIGI.keys()):
     _flag_fb  = _LIGA_FLAGS.get(_ln, "🌍")
     _icon_html = (
         f"<img src='{_logo_url}' style='width:28px;height:28px;"
-        f"object-fit:contain;filter:{'none' if _active else 'grayscale(20%) opacity(0.85%)'}' "
+        f"object-fit:contain;filter:none' "
         f"onerror=\"this.outerHTML='<span style=font-size:1.3em>{_flag_fb}</span>'\">"
         if _logo_url else f"<span style='font-size:1.4em'>{_flag_fb}</span>"
     )
@@ -3470,26 +3436,6 @@ if not historical.empty:
                     _sot_badge += f"<span class='stat-pill' title='Gość {_sma:.0%} więcej strzałów celnych niż sezonowo'>🔥 Atak A +{(_sma-1)*100:.0f}%</span>"
                 elif _sma and _sma >= 1.15:
                     _sot_badge += f"<span class='stat-pill' title='SOT Momentum Gość'>↑SOT A +{(_sma-1)*100:.0f}%</span>"
-                # PPDA / pressing badge z understat
-                _press_badge = ""
-                if _XGF_OK:
-                    try:
-                        _ppda_h_s = _xgf.get_team_xg_stats(
-                            _tv.get("h",""), _CSV_CODE, db_file=XG_DB_FILE, n_mecze=6)
-                        _ppda_a_s = _xgf.get_team_xg_stats(
-                            _tv.get("a",""), _CSV_CODE, db_file=XG_DB_FILE, n_mecze=6)
-                        if _ppda_h_s and _ppda_h_s.get("ppda_avg") and _ppda_h_s["ppda_avg"] <= 8.0:
-                            _ph = _ppda_h_s["ppda_avg"]
-                            _press_badge += (
-                                f"<span class='stat-pill' style='background:#FF980022;border-color:#FF9800' "
-                                f"title='PPDA Gospodarz: {_ph:.1f} — wysoki pressing'>⚡ Press H</span>")
-                        if _ppda_a_s and _ppda_a_s.get("ppda_avg") and _ppda_a_s["ppda_avg"] <= 8.0:
-                            _pa = _ppda_a_s["ppda_avg"]
-                            _press_badge += (
-                                f"<span class='stat-pill' style='background:#FF980022;border-color:#FF9800' "
-                                f"title='PPDA Gość: {_pa:.1f} — wysoki pressing'>⚡ Press A</span>")
-                    except Exception:
-                        pass
                 # EV sygnalizacja
                 if _tv['ev'] >= 0.15:
                     _sig_color = "#2e7d32"; _sig_label = "🟢 Wysoki EV"
@@ -3532,7 +3478,6 @@ if not historical.empty:
                     f"<span class='stat-pill' style='border-color:{_sig_color}33;color:{_sig_color}'>{_sig_label}</span>"
                     f"<span class='stat-pill' title='Edge = różnica między p modelu a implied prob bukmachera'>EDGE +{_edge_pp:.1f}pp</span>"
                     f"{_sot_badge}"
-                    f"{_press_badge}"
                     f"</div>"
                     f"{_kelly_str}"
                     f"</div>",
@@ -5273,95 +5218,6 @@ if not historical.empty:
                              use_container_width=True, hide_index=True)
             else:
                 st.info("Brak kolumny 'Referee' w danych – profil sędziów niedostępny dla tej ligi.")
-
-            # ── xG / PPDA z understat ────────────────────────────────────────
-            st.divider()
-            st.markdown("### ⚡ Expected Goals & Pressing (understat.com)")
-            if _XGF_OK:
-                _xg_csv = LIGI[wybrana_liga]["csv_code"]
-                _xg_table = _xgf.get_league_xg_table(_xg_csv, db_file=XG_DB_FILE)
-                _xg_info  = _xgf.get_last_fetch_info(db_file=XG_DB_FILE)
-                _xg_liga_info = _xg_info.get(_xg_csv)
-
-                if _xg_table:
-                    if _xg_liga_info:
-                        st.caption(
-                            f"Dane z understat.com · "
-                            f"ostatni fetch: {str(_xg_liga_info.get('ts',''))[:10]} · "
-                            f"{_xg_liga_info.get('n_mecze',0)} meczów")
-
-                    # Tabela HTML xG
-                    _xg_rows_html = []
-                    for i, t in enumerate(_xg_table):
-                        _xg_d = t["xg_diff"]
-                        _xg_c = "#4CAF50" if _xg_d >= 0.2 else ("#F44336" if _xg_d <= -0.2 else "#888")
-                        _ppda = t.get("ppda")
-                        _ppda_badge = ""
-                        if _ppda and _ppda <= 8.0:
-                            _ppda_badge = "<span style='background:#FF9800;color:#fff;border-radius:3px;padding:1px 5px;font-size:0.72em;margin-left:4px'>⚡ Press</span>"
-                        elif _ppda and _ppda >= 14.0:
-                            _ppda_badge = "<span style='background:#607D8B;color:#fff;border-radius:3px;padding:1px 5px;font-size:0.72em;margin-left:4px'>🐢 Passive</span>"
-                        _xg_rows_html.append(
-                            f"<tr style='border-bottom:1px solid var(--border)'>"
-                            f"<td style='padding:6px 8px;font-size:0.82em;color:#888'>{i+1}</td>"
-                            f"<td style='padding:6px 10px;font-size:0.85em;font-weight:600'>"
-                            f"{t['team']}{_ppda_badge}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;color:#4CAF50'>{t['xg_scored']:.2f}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;color:#F44336'>{t['xg_conceded']:.2f}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;font-weight:700;color:{_xg_c}'>"
-                            f"{_xg_d:+.2f}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;color:#888'>"
-                            f"{t.get('ppda','–') if t.get('ppda') else '–'}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;color:#888'>"
-                            f"{t.get('deep','–') if t.get('deep') else '–'}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;color:#888'>{t['n']}</td>"
-                            f"</tr>"
-                        )
-                    st.markdown(
-                        f"<div style='overflow-x:auto'>"
-                        f"<table style='width:100%;border-collapse:collapse;min-width:520px'>"
-                        f"<thead><tr style='border-bottom:2px solid var(--border)'>"
-                        f"<th style='padding:5px 8px;text-align:left;font-size:0.74em;color:var(--text-muted)'>#</th>"
-                        f"<th style='padding:5px 10px;text-align:left;font-size:0.74em;color:var(--text-muted)'>Drużyna</th>"
-                        f"<th style='padding:5px 8px;text-align:center;font-size:0.74em;color:#4CAF50'>xG/M</th>"
-                        f"<th style='padding:5px 8px;text-align:center;font-size:0.74em;color:#F44336'>xGA/M</th>"
-                        f"<th style='padding:5px 8px;text-align:center;font-size:0.74em;color:var(--text-muted)'>xGdiff</th>"
-                        f"<th style='padding:5px 8px;text-align:center;font-size:0.74em;color:var(--text-muted)'>PPDA</th>"
-                        f"<th style='padding:5px 8px;text-align:center;font-size:0.74em;color:var(--text-muted)'>Deep</th>"
-                        f"<th style='padding:5px 8px;text-align:center;font-size:0.74em;color:var(--text-muted)'>M</th>"
-                        f"</tr></thead><tbody>"
-                        f"{''.join(_xg_rows_html)}"
-                        f"</tbody></table></div>",
-                        unsafe_allow_html=True)
-                    st.caption(
-                        "xG/M = expected goals strzelone per mecz · xGA/M = stracone · "
-                        "PPDA = passes per defensive action (niższy = więcej pressingu) · "
-                        "Deep = podania w pole karne · "
-                        "⚡ Press = PPDA ≤ 8.0 · 🐢 Passive = PPDA ≥ 14.0")
-
-                else:
-                    # Brak danych — pokaż instrukcję lokalnego fetcha
-                    st.markdown(
-                        "<div style='background:var(--bg-card);border:1px solid var(--border);"
-                        "border-radius:8px;padding:14px 18px'>"
-                        "<div style='font-size:0.88em;font-weight:700;color:var(--accent);"
-                        "margin-bottom:8px'>📥 Jak załadować dane xG?</div>"
-                        "<div style='font-size:0.83em;color:var(--text-muted);line-height:1.7'>"
-                        "understat.com blokuje requesty z serwerów cloud (Streamlit, Colab, VPS).<br>"
-                        "Dane trzeba pobrać <b>lokalnie</b> i wgrać do repozytorium:<br><br>"
-                        "<code style='background:var(--stat-bg);padding:2px 6px;border-radius:3px'>"
-                        "pip install requests beautifulsoup4 lxml</code><br>"
-                        "<code style='background:var(--stat-bg);padding:2px 6px;border-radius:3px'>"
-                        "python fetch_xg_local.py</code><br><br>"
-                        "Następnie:<br>"
-                        "<code style='background:var(--stat-bg);padding:2px 6px;border-radius:3px'>"
-                        "git add xg_cache.db &amp;&amp; git commit -m 'xG update' &amp;&amp; git push</code><br><br>"
-                        "Po wgraniu plik <b>xg_cache.db</b> będzie odczytany automatycznie. "
-                        "Odświeżaj lokalnie co 1–2 tygodnie."
-                        "</div></div>",
-                        unsafe_allow_html=True)
-            else:
-                st.info("Moduł understat_fetcher.py niedostępny — upewnij się że jest w tym samym katalogu co app.py.")
         else:
             st.warning("Brak wystarczających danych do Power Rankings.")
 
