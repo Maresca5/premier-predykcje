@@ -275,59 +275,82 @@ def _fetch_understat_page(url: str, retries: int = MAX_RETRIES) -> Optional[str]
 def _extract_matches_from_html(html: str) -> Optional[list]:
     """
     Wyciąga dane meczowe z HTML understat.com.
-    Understat osadza dane jako JSON.parse('...') w tagach <script>.
-    Używamy BeautifulSoup aby znaleźć właściwy skrypt (zawiera 'datesData'),
-    a następnie regex + unicode_escape do dekodowania.
-    Fallback: szukamy w każdym skrypcie dopóki nie znajdziemy datesData.
+
+    Understat osadza JSON w tagach <script> w formacie:
+        var datesData = JSON.parse('{"2024-08-16":[{...}]}')
+    Klucz: wytnij między (' a ') i zdekoduj unicode_escape.
+    Sprawdzone na wielu scraper-projektach GitHub.
     """
     try:
         from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html.encode("utf-8"), "lxml")
         scripts = soup.find_all("script")
     except ImportError:
-        # Fallback bez BS4 — szukamy po regex w surowym HTML
+        logger.warning("Brak bs4/lxml — fallback na regex w surowym HTML")
         scripts = None
 
-    # Wzorzec pasujący do: var datesData  = JSON.parse('...')
-    pattern = re.compile(r"var\s+datesData\s*=\s*JSON\.parse\('(.+?)'\)", re.DOTALL)
-
-    candidates = []
-    if scripts:
-        # Sprawdź każdy skrypt, ze szczególnym uwzględnieniem index 2
-        for i, s in enumerate(scripts):
-            txt = s.string or ""
-            candidates.append((i, txt))
-    else:
-        # Bez BS4 — skanuj surowy HTML
-        candidates = [(0, html)]
-
-    for idx, txt in candidates:
-        m = pattern.search(txt)
-        if not m:
-            continue
-        raw = m.group(1)
-        # Understat enkoduje dane przez JSON.stringify + encodeURIComponent
-        # Wynik: unicode escapes (\uXXXX) i escape apostrofów (\')
+    def _decode(raw: str) -> Optional[list]:
+        """Próbuje zdekodować raw JSON string z understat."""
+        # Metoda 1: encode utf8 + decode unicode_escape (standard dla understat)
         try:
-            # Metoda 1: bezpośrednie json.loads po cleanup
-            cleaned = raw.replace("\\'", "'")
-            return json.loads(cleaned)
-        except Exception:
-            pass
-        try:
-            # Metoda 2: unicode_escape decode
             decoded = raw.encode("utf-8").decode("unicode_escape")
-            decoded = decoded.replace("\\'", "'")
             return json.loads(decoded)
         except Exception:
             pass
+        # Metoda 2: bezpośrednie json.loads (jeśli nie ma escapes)
         try:
-            # Metoda 3: codecs
-            import codecs
-            decoded2 = codecs.decode(raw, "unicode_escape")
-            return json.loads(decoded2)
+            return json.loads(raw)
         except Exception:
             pass
+        # Metoda 3: replace escaped apostrophes
+        try:
+            return json.loads(raw.replace("\\'", "'"))
+        except Exception:
+            pass
+        return None
+
+    if scripts:
+        for script in scripts:
+            txt = script.string or ""
+            if "datesData" not in txt:
+                continue
+            try:
+                # Wytnij między (' i ') — sprawdzona metoda
+                ind_start = txt.index("('") + 2
+                ind_end   = txt.index("')")
+                raw = txt[ind_start:ind_end]
+                result = _decode(raw)
+                if result is not None:
+                    # datesData to dict date→list; spłaszcz do listy meczów
+                    if isinstance(result, dict):
+                        matches = []
+                        for day_matches in result.values():
+                            if isinstance(day_matches, list):
+                                matches.extend(day_matches)
+                        return matches if matches else None
+                    elif isinstance(result, list):
+                        return result
+            except (ValueError, Exception) as e:
+                logger.warning(f"Błąd dekodowania skryptu datesData: {e}")
+                continue
+    else:
+        # Fallback bez BS4 — szukamy (' ... ') przy datesData
+        try:
+            idx = html.index("datesData")
+            chunk = html[idx:idx+5000]
+            ind_start = chunk.index("('") + 2
+            ind_end   = chunk.index("')")
+            raw = chunk[ind_start:ind_end]
+            result = _decode(raw)
+            if isinstance(result, dict):
+                matches = []
+                for day_matches in result.values():
+                    if isinstance(day_matches, list):
+                        matches.extend(day_matches)
+                return matches if matches else None
+            return result
+        except Exception as e:
+            logger.warning(f"Fallback extraction failed: {e}")
 
     return None
 
