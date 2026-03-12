@@ -62,6 +62,17 @@ except ImportError:
     _oa    = None
     _OA_OK = False
 
+# Import understat_fetcher (opcjonalny)
+try:
+    import understat_fetcher as _xgf
+    _XGF_OK = True
+except ImportError:
+    _xgf   = None
+    _XGF_OK = False
+
+XG_DB_FILE = "xg_cache.db"
+XG_REFRESH_HOUR = 4   # 04:00 — po nocnych wynikach
+
 # ── Konfiguracja (skopiowana z app.py, bez importowania Streamlit) ────────────
 LIGI = {
     "Premier League": {"csv_code": "E0",  "fd_org_id": 2021, "file": "terminarz_premier_2025.csv",  "tau": 30.0},
@@ -943,6 +954,36 @@ def _is_matchday() -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 _digest_sent_in_memory: set = set()
 _processed_uids: set = set()
+_xg_refreshed_in_memory: set = set()
+
+
+def _refresh_xg_once_today():
+    """
+    Pobiera xG z understat.com raz dziennie o godzinie XG_REFRESH_HOUR.
+    Throttlowany — cooldown 20h per liga jest w understat_fetcher.
+    """
+    if not _XGF_OK:
+        return
+    now = datetime.now()
+    today_key = now.strftime("%Y-%m-%d")
+    if today_key in _xg_refreshed_in_memory:
+        return
+    if now.hour != XG_REFRESH_HOUR:
+        return
+
+    _xg_refreshed_in_memory.add(today_key)
+    log.info("Starting xG refresh from understat.com...")
+    try:
+        results = _xgf.fetch_all_ligas(db_file=XG_DB_FILE, force=False, include_prev=False)
+        ok    = [r for r in results if r.get("status") == "ok"]
+        skip  = [r for r in results if r.get("status") == "skipped"]
+        err   = [r for r in results if r.get("status") == "error"]
+        log.info(f"xG refresh done: {len(ok)} ok, {len(skip)} skipped, {len(err)} errors")
+        if err:
+            for r in err:
+                log.warning(f"  xG error: {r.get('liga')} — {r.get('msg','')}")
+    except Exception as e:
+        log.error(f"xG refresh failed: {e}")
 
 
 def _bot_loop():
@@ -990,6 +1031,10 @@ def _bot_loop():
             # Poranny digest — podwójny guard RAM + SQLite
             now = datetime.now()
             today_key = now.strftime("%Y-%m-%d")
+
+            # xG refresh z understat (04:00)
+            _refresh_xg_once_today()
+
             if (now.hour == DIGEST_HOUR
                     and today_key not in _digest_sent_in_memory
                     and not _digest_sent_today()):
