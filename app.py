@@ -2874,6 +2874,169 @@ _CSV_CODE  = LIGI[wybrana_liga]["csv_code"]
 _OA_DB     = "predykcje.db"
 _oa_cached = {}
 
+
+def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
+                           sbn: dict) -> dict:
+    """
+    Zwraca słownik z kontekstem meczu:
+    - pozycje w tabeli, punkty, GD
+    - match_type (Top_vs_Top, Top_vs_Bot itd.)
+    - historyczne avg kartek/rożnych/fauli per drużyna
+    - efekt wyniku do przerwy na kartki
+    - motywacja (relegation battle, title race itd.)
+    """
+    ctx = {}
+
+    # ── Pozycja z standings (API) ────────────────────────────────────────
+    sh = sbn.get(h, {})
+    sa = sbn.get(a, {})
+    ctx["h_pos"]    = sh.get("position", 0)
+    ctx["a_pos"]    = sa.get("position", 0)
+    ctx["h_pts"]    = sh.get("points",   0)
+    ctx["a_pts"]    = sa.get("points",   0)
+    ctx["h_gd"]     = sh.get("gd",       0)
+    ctx["a_gd"]     = sa.get("gd",       0)
+    ctx["h_played"] = sh.get("played",   0)
+    ctx["h_won"]    = sh.get("won",      0)
+    ctx["h_draw"]   = sh.get("draw",     0)
+    ctx["h_lost"]   = sh.get("lost",     0)
+    ctx["a_won"]    = sa.get("won",      0)
+    ctx["a_draw"]   = sa.get("draw",     0)
+    ctx["a_lost"]   = sa.get("lost",     0)
+    ctx["h_gf"]     = sh.get("gf",       0)
+    ctx["h_ga"]     = sh.get("ga",       0)
+    ctx["a_gf"]     = sa.get("gf",       0)
+    ctx["a_ga"]     = sa.get("ga",       0)
+
+    pos_h = ctx["h_pos"]
+    pos_a = ctx["a_pos"]
+    played = max(ctx["h_played"], 1)
+
+    # ── Match type ───────────────────────────────────────────────────────
+    n_teams = max(pos_h, pos_a, 20)
+    top_cut    = max(1, round(n_teams * 0.30))   # top 30%
+    bottom_cut = min(n_teams, round(n_teams * 0.70))  # bottom 30%
+    h_is_top = 0 < pos_h <= top_cut
+    a_is_top = 0 < pos_a <= top_cut
+    h_is_bot = pos_h >= bottom_cut
+    a_is_bot = pos_a >= bottom_cut
+    if   h_is_top and a_is_top:  ctx["match_type"] = "Top vs Top"
+    elif h_is_top and a_is_bot:  ctx["match_type"] = "Top vs Słaby"
+    elif h_is_bot and a_is_top:  ctx["match_type"] = "Słaby vs Top"
+    elif h_is_bot and a_is_bot:  ctx["match_type"] = "Dół tabeli"
+    else:                        ctx["match_type"] = "Środek tabeli"
+
+    ctx["pos_diff"] = abs(pos_h - pos_a) if pos_h and pos_a else 0
+
+    # ── Motywacja ────────────────────────────────────────────────────────
+    motyw = []
+    if pos_h and pos_h <= 4:  motyw.append(f"🏆 {h[:10]} walczy o top-4")
+    if pos_a and pos_a <= 4:  motyw.append(f"🏆 {a[:10]} walczy o top-4")
+    if pos_h and pos_h <= 1:  motyw.append(f"👑 {h[:10]} lider")
+    if pos_a and pos_a <= 1:  motyw.append(f"👑 {a[:10]} lider")
+    if pos_h and pos_h >= n_teams - 2:  motyw.append(f"🔴 {h[:10]} w strefie spadkowej")
+    if pos_a and pos_a >= n_teams - 2:  motyw.append(f"🔴 {a[:10]} w strefie spadkowej")
+    if pos_h and pos_h >= n_teams - 5:  motyw.append(f"⚠️ {h[:10]} w pobliżu strefy spadkowej")
+    if pos_a and pos_a >= n_teams - 5:  motyw.append(f"⚠️ {a[:10]} w pobliżu strefy spadkowej")
+    ctx["motywacja"] = motyw
+
+    # ── Statystyki z historical CSV ──────────────────────────────────────
+    if not historical.empty:
+        def _team_stats(team):
+            hm = historical[historical["HomeTeam"] == team].copy()
+            am = historical[historical["AwayTeam"] == team].copy()
+            stats = {}
+            # Kartki
+            yc = []
+            rc = []
+            fo = []
+            co = []
+            if "HY" in hm.columns:
+                yc += hm["HY"].dropna().tolist()
+                yc += am["AY"].dropna().tolist()
+                rc += hm["HR"].dropna().tolist()
+                rc += am["AR"].dropna().tolist()
+            if "HF" in hm.columns:
+                fo += hm["HF"].dropna().tolist()
+                fo += am["AF"].dropna().tolist()
+            if "HC" in hm.columns:
+                co += hm["HC"].dropna().tolist()
+                co += am["AC"].dropna().tolist()
+            stats["avg_yc"]  = float(np.mean(yc))  if yc  else None
+            stats["avg_rc"]  = float(np.mean(rc))  if rc  else None
+            stats["avg_fo"]  = float(np.mean(fo))  if fo  else None
+            stats["avg_co"]  = float(np.mean(co))  if co  else None
+            stats["n"]       = len(hm) + len(am)
+            # Strzały
+            sht = []
+            st  = []
+            if "HS" in hm.columns:
+                sht += hm["HS"].dropna().tolist()
+                sht += am["AS"].dropna().tolist()
+                st  += hm["HST"].dropna().tolist() if "HST" in hm.columns else []
+                st  += am["AST"].dropna().tolist() if "AST" in am.columns else []
+            stats["avg_shots"] = float(np.mean(sht)) if sht else None
+            stats["avg_sot"]   = float(np.mean(st))  if st  else None
+            return stats
+
+        h_stats = _team_stats(h)
+        a_stats = _team_stats(a)
+        ctx["h_stats"] = h_stats
+        ctx["a_stats"] = a_stats
+
+        # ── Łączne przewidywane kartki/rożne/faule dla tego meczu ────────
+        # Poisson: λ_yc = avg_yc_h + avg_yc_a (niezależne)
+        if h_stats["avg_yc"] and a_stats["avg_yc"]:
+            ctx["lambda_yc"] = h_stats["avg_yc"] + a_stats["avg_yc"]
+        if h_stats["avg_fo"] and a_stats["avg_fo"]:
+            ctx["lambda_fo"] = h_stats["avg_fo"] + a_stats["avg_fo"]
+        if h_stats["avg_co"] and a_stats["avg_co"]:
+            ctx["lambda_co"] = h_stats["avg_co"] + a_stats["avg_co"]
+
+        # ── Korekta kontekstowa λ_yc (na podstawie korelacji z danych) ──
+        # Top vs Top: +0.67 kartki vs avg (z EPL 24/25: 4.73 vs avg 4.06)
+        # Dół tabeli: -1.06 kartki
+        # Top vs Słaby: -0.24
+        # Środek: base
+        if "lambda_yc" in ctx:
+            _adj = {"Top vs Top": +0.67, "Dół tabeli": -1.06,
+                    "Top vs Słaby": -0.24, "Słaby vs Top": -0.24,
+                    "Środek tabeli": 0.0}
+            ctx["lambda_yc_adj"] = ctx["lambda_yc"] + _adj.get(ctx["match_type"], 0)
+
+        # ── H2H alternatywne statystyki ──────────────────────────────────
+        _h2h_all = historical[
+            ((historical["HomeTeam"] == h) & (historical["AwayTeam"] == a)) |
+            ((historical["HomeTeam"] == a) & (historical["AwayTeam"] == h))
+        ].copy()
+        if not _h2h_all.empty:
+            h2h_stats = {}
+            if "HY" in _h2h_all.columns:
+                h2h_stats["avg_yc"]  = (_h2h_all["HY"] + _h2h_all["AY"]).mean()
+                h2h_stats["avg_rc"]  = (_h2h_all["HR"] + _h2h_all["AR"]).mean()
+            if "HF" in _h2h_all.columns:
+                h2h_stats["avg_fo"]  = (_h2h_all["HF"] + _h2h_all["AF"]).mean()
+            if "HC" in _h2h_all.columns:
+                h2h_stats["avg_co"]  = (_h2h_all["HC"] + _h2h_all["AC"]).mean()
+            h2h_stats["n"]       = len(_h2h_all)
+            ctx["h2h_stats"] = h2h_stats
+        else:
+            ctx["h2h_stats"] = {}
+
+        # ── Over/Under 2.5 implied probability z kursu bukmachera ────────
+        # Jeśli mamy B365>2.5 w historical dla tej pary
+        _last_ou = _h2h_all[["B365>2.5","B365<2.5"]].dropna().tail(3)                    if "B365>2.5" in _h2h_all.columns else pd.DataFrame()
+        if not _last_ou.empty:
+            ctx["ou_implied_over"]  = round((1/_last_ou["B365>2.5"].mean()), 3)
+            ctx["ou_implied_under"] = round((1/_last_ou["B365<2.5"].mean()), 3)
+    else:
+        ctx["h_stats"]  = {}
+        ctx["a_stats"]  = {}
+        ctx["h2h_stats"] = {}
+
+    return ctx
+
+
 def _oa_get_key():
     try: return st.secrets["ODDS_API_KEY"]
     except Exception: return st.session_state.get("_odds_key")
@@ -3713,7 +3876,9 @@ if not historical.empty:
                                 _conf_lbl = {"High": "Wysoka pewność", "Medium": "Umiarkowana", "Coinflip": "Wyrównany"}.get(pred["conf_level"], "")
 
                                 # ── 3 zakładki progressive disclosure ────────
-                                _dt1, _dt2, _dt3 = st.tabs(["📊 Analiza", "📈 Statystyki", "⚔️ H2H"])
+                                _ctx = oblicz_kontekst_meczu(h, a, historical, _sbn)
+
+                                _dt1, _dt2, _dt3, _dt4 = st.tabs(["📊 Analiza", "📈 Statystyki", "⚔️ H2H", "🔍 Kontekst"])
 
                                 with _dt1:
                                     # Wynik modelowy
@@ -4138,6 +4303,199 @@ if not historical.empty:
                                             unsafe_allow_html=True)
                                     else:
                                         st.caption("Brak danych H2H dla tej pary drużyn.")
+
+
+                                with _dt4:
+                                    # ── Kontekst meczu ──────────────────────────────────────────────
+                                    _pos_h = _ctx.get('h_pos', 0)
+                                    _pos_a = _ctx.get('a_pos', 0)
+                                    _pts_h = _ctx.get('h_pts', 0)
+                                    _pts_a = _ctx.get('a_pts', 0)
+                                    _gd_h  = _ctx.get('h_gd', 0)
+                                    _gd_a  = _ctx.get('a_gd', 0)
+                                    _mt    = _ctx.get('match_type', '–')
+                                    _motyw = _ctx.get('motywacja', [])
+
+                                    _mt_colors = {
+                                            'Top vs Top':      ('#7c3aed', '#3b1f6b'),
+                                            'Top vs Słaby':    ('#2563eb', '#1e3a5f'),
+                                            'Słaby vs Top':    ('#dc2626', '#4c1d1d'),
+                                            'Dół tabeli':      ('#d97706', '#4a3000'),
+                                            'Środek tabeli':   ('#374151', '#1f2937'),
+                                    }
+                                    _mt_fg, _mt_bg = _mt_colors.get(_mt, ('#9ca3af', '#1f2937'))
+
+                                    # Badge match type + motywacja
+                                    _motyw_html = ' '.join(
+                                            f"<div style='font-size:0.70em;color:#FF9800;margin-top:2px'>{m}</div>"
+                                            for m in _motyw
+                                    )
+                                    st.markdown(
+                                            f"<div style='background:{_mt_bg};border:1px solid {_mt_fg}44;border-radius:8px;"
+                                            f"padding:8px 12px;margin-bottom:10px'>"
+                                            f"<span style='color:{_mt_fg};font-size:0.80em;font-weight:700'>{_mt}</span>"
+                                            + _motyw_html +
+                                            "</div>",
+                                            unsafe_allow_html=True)
+
+                                    # Porównanie pozycji
+                                    if _pos_h and _pos_a:
+                                        _pd = abs(_pos_h - _pos_a)
+                                        _pd_col = '#4CAF50' if _pd >= 10 else ('#FF9800' if _pd >= 5 else '#9ca3af')
+                                        _h_pkt_str  = f'{_pts_h} pkt · GD {_gd_h:+d}'
+                                        _a_pkt_str  = f'{_pts_a} pkt · GD {_gd_a:+d}'
+                                        st.markdown(
+                                            f"<div style='background:var(--bg-card2);border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
+                                            f"<div style='display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center'>"
+                                            f"<div style='text-align:center'>"
+                                            f"<div style='font-size:2.2em;font-weight:900;color:var(--text-primary)'>{_pos_h}</div>"
+                                            f"<div style='font-size:0.66em;color:#6b7280'>pozycja</div>"
+                                            f"<div style='font-size:0.70em;color:#9ca3af;margin-top:2px'>{_h_pkt_str}</div>"
+                                            f"</div>"
+                                            f"<div style='text-align:center'>"
+                                            f"<div style='font-size:0.64em;color:{_pd_col};font-weight:700'>Δ pozycji</div>"
+                                            f"<div style='font-size:1.5em;font-weight:800;color:{_pd_col}'>{_pd}</div>"
+                                            f"</div>"
+                                            f"<div style='text-align:center'>"
+                                            f"<div style='font-size:2.2em;font-weight:900;color:var(--text-primary)'>{_pos_a}</div>"
+                                            f"<div style='font-size:0.66em;color:#6b7280'>pozycja</div>"
+                                            f"<div style='font-size:0.70em;color:#9ca3af;margin-top:2px'>{_a_pkt_str}</div>"
+                                            f"</div>"
+                                            f"</div></div>",
+                                            unsafe_allow_html=True)
+
+                                    # ── Styl gry: kartki / faule / rożne / strzały ──────────────────
+                                    _hs   = _ctx.get('h_stats', {})
+                                    _as   = _ctx.get('a_stats', {})
+                                    _h2hs = _ctx.get('h2h_stats', {})
+
+                                    if _hs and _as:
+                                        st.markdown(
+                                            f"<div style='display:flex;justify-content:space-between;font-size:0.68em;"
+                                            f"color:#4b5563;font-weight:600;margin-bottom:4px'>"
+                                            f"<span>{h[:12]}</span><span>Styl gry (śr./mecz)</span><span>{a[:12]}</span></div>",
+                                            unsafe_allow_html=True)
+
+                                        def _srow(label, hv, av, fmt='{:.1f}', hib='neutral'):
+                                            if hv is None or av is None: return ''
+                                            hs_v = fmt.format(hv); as_v = fmt.format(av)
+                                            if hib == 'bad':
+                                                hc = '#F44336' if hv > av*1.15 else ('#4CAF50' if hv < av*0.85 else '#9ca3af')
+                                                ac = '#F44336' if av > hv*1.15 else ('#4CAF50' if av < hv*0.85 else '#9ca3af')
+                                            elif hib == 'good':
+                                                hc = '#4CAF50' if hv > av*1.10 else ('#F44336' if hv < av*0.90 else '#9ca3af')
+                                                ac = '#4CAF50' if av > hv*1.10 else ('#F44336' if av < hv*0.90 else '#9ca3af')
+                                            else: hc = ac = '#9ca3af'
+                                            tot = hv+av; bh = int(hv/tot*100) if tot>0 else 50; ba = 100-bh
+                                            return (
+                                                f"<div style='margin:5px 0'>"
+                                                f"<div style='display:flex;justify-content:space-between;font-size:0.70em;margin-bottom:2px'>"
+                                                f"<span style='color:{hc};font-weight:700'>{hs_v}</span>"
+                                                f"<span style='color:#4b5563'>{label}</span>"
+                                                f"<span style='color:{ac};font-weight:700'>{as_v}</span></div>"
+                                                f"<div style='display:flex;height:4px;border-radius:2px;overflow:hidden'>"
+                                                f"<div style='width:{bh}%;background:{hc}88'></div>"
+                                                f"<div style='width:{ba}%;background:{ac}88'></div>"
+                                                f"</div></div>"
+                                            )
+
+                                        rows = ''
+                                        rows += _srow('🟨 Żółte kartki',   _hs.get('avg_yc'),    _as.get('avg_yc'),    hib='bad')
+                                        rows += _srow('🟥 Czerwone kartki', _hs.get('avg_rc'),    _as.get('avg_rc'),    fmt='{:.2f}', hib='bad')
+                                        rows += _srow('🦵 Faule',           _hs.get('avg_fo'),    _as.get('avg_fo'),    hib='bad')
+                                        rows += _srow('🚩 Rożne',           _hs.get('avg_co'),    _as.get('avg_co'),    hib='neutral')
+                                        rows += _srow('🎯 Strzały',         _hs.get('avg_shots'), _as.get('avg_shots'), hib='good')
+                                        rows += _srow('🎯 Celne strzały',   _hs.get('avg_sot'),   _as.get('avg_sot'),   hib='good')
+                                        st.markdown(
+                                            "<div style='background:var(--bg-card2);border-radius:8px;padding:10px 12px'>" + rows + "</div>",
+                                            unsafe_allow_html=True)
+
+                                    # ── Predykcja Poisson: kartki / faule / rożne ───────────────────
+                                    _lam_yc  = _ctx.get('lambda_yc_adj') or _ctx.get('lambda_yc')
+                                    _lam_raw = _ctx.get('lambda_yc')
+                                    _lam_fo  = _ctx.get('lambda_fo')
+                                    _lam_co  = _ctx.get('lambda_co')
+
+                                    if _lam_yc is not None:
+                                        from scipy.stats import poisson as _pois
+                                        _adj  = (_lam_yc - _lam_raw) if _lam_raw else 0
+                                        _albl = f'(korekta {_adj:+.2f})' if abs(_adj) > 0.05 else '(baza)'
+                                        _p3  = 1 - _pois.cdf(2, _lam_yc)
+                                        _p4  = 1 - _pois.cdf(3, _lam_yc)
+                                        _p5  = 1 - _pois.cdf(4, _lam_yc)
+                                        _pf25 = (1 - _pois.cdf(24, _lam_fo)) if _lam_fo else None
+                                        _pc9  = (1 - _pois.cdf(8,  _lam_co)) if _lam_co else None
+
+                                        def _pill(label, prob, thr=0.55):
+                                            c = '#4CAF50' if prob>=thr else ('#FF9800' if prob>=0.40 else '#6b7280')
+                                            return (
+                                                f"<div style='display:inline-flex;flex-direction:column;align-items:center;"
+                                                f"background:{c}18;border:1px solid {c}44;border-radius:8px;padding:6px 10px;margin:3px'>"
+                                                f"<span style='font-size:1.05em;font-weight:800;color:{c}'>{prob:.0%}</span>"
+                                                f"<span style='font-size:0.62em;color:#6b7280'>{label}</span>"
+                                                f"</div>"
+                                            )
+
+                                        pills = _pill('≥3 kartki', _p3) + _pill('≥4 kartki', _p4) + _pill('≥5 kartek', _p5)
+                                        if _pf25 is not None: pills += _pill('≥25 fauli', _pf25)
+                                        if _pc9  is not None: pills += _pill('≥9 rożnych', _pc9)
+
+                                        st.markdown(
+                                            f"<div style='background:var(--stat-bg);border-radius:8px;padding:10px 12px;margin-top:8px'>"
+                                            f"<div style='font-size:0.72em;color:#6b7280;font-weight:600;margin-bottom:6px'>"
+                                            f"⚡ Rynki alternatywne (Poisson) · λ kartki={_lam_yc:.1f} {_albl}</div>"
+                                            f"<div style='display:flex;flex-wrap:wrap;gap:2px'>" + pills + "</div></div>",
+                                            unsafe_allow_html=True)
+
+                                    # ── H2H alternatywne statystyki ─────────────────────────────────
+                                    if _h2hs and _h2hs.get('n', 0) > 0:
+                                        _n = _h2hs['n']
+                                        _h2h_rows = ''
+                                        for _k, _lbl in [('avg_yc','🟨 kartki'), ('avg_fo','🦵 faule'), ('avg_co','🚩 rożne')]:
+                                            if _h2hs.get(_k) is not None:
+                                                _h2h_rows += (
+                                                    f"<div style='display:inline-flex;flex-direction:column;align-items:center;"
+                                                    f"background:#1e293b;border-radius:8px;padding:5px 10px;margin:2px'>"
+                                                    f"<span style='font-size:1.0em;font-weight:700;color:#e2e8f0'>{_h2hs[_k]:.1f}</span>"
+                                                    f"<span style='font-size:0.62em;color:#6b7280'>{_lbl}/mecz</span></div>"
+                                                )
+                                        if _h2h_rows:
+                                            st.markdown(
+                                                f"<div style='margin-top:8px'>"
+                                                f"<div style='font-size:0.70em;color:#6b7280;font-weight:600;margin-bottom:4px'>"
+                                                f"⚔️ H2H alternatywne ({_n} spotkań)</div>"
+                                                f"<div style='display:flex;flex-wrap:wrap;gap:2px'>" + _h2h_rows + "</div></div>",
+                                                unsafe_allow_html=True)
+
+                                    # ── Efekt wyniku HT na kartki w lidze ──────────────────────────
+                                    if not historical.empty and 'HY' in historical.columns and 'HTHG' in historical.columns:
+                                        try:
+                                            _dfh = historical.copy()
+                                            _dfh['HTD'] = _dfh['HTHG'] - _dfh['HTAG']
+                                            _dfh['TYC'] = _dfh['HY']   + _dfh['AY']
+                                            _ht_grp = _dfh.groupby('HTD')['TYC'].mean()
+                                            _ht_html = ''
+                                            for _d, _avg in sorted(_ht_grp.items()):
+                                                if abs(_d) <= 2:
+                                                    _lbl2 = {-2:'HT 0:2',-1:'HT 0:1',0:'HT 0:0',1:'HT 1:0',2:'HT 2:0'}.get(int(_d), str(_d))
+                                                    _w2   = int(_avg / 6 * 100)
+                                                    _c2   = '#4CAF50' if _avg >= 4.5 else ('#FF9800' if _avg >= 3.5 else '#6b7280')
+                                                    _ht_html += (
+                                                        f"<div style='display:flex;align-items:center;gap:8px;margin:3px 0'>"
+                                                        f"<span style='font-size:0.68em;color:#6b7280;width:46px'>{_lbl2}</span>"
+                                                        f"<div style='flex:1;background:#1f2937;border-radius:2px;height:5px'>"
+                                                        f"<div style='width:{_w2}%;background:{_c2};height:5px;border-radius:2px'></div></div>"
+                                                        f"<span style='font-size:0.68em;color:{_c2};font-weight:700;width:32px'>{_avg:.1f} YC</span>"
+                                                        f"</div>"
+                                                    )
+                                            if _ht_html:
+                                                st.markdown(
+                                                    f"<div style='margin-top:8px'>"
+                                                    f"<div style='font-size:0.70em;color:#6b7280;font-weight:600;margin-bottom:4px'>"
+                                                    f"📊 Kartki vs wynik do przerwy (liga)</div>" + _ht_html + "</div>",
+                                                    unsafe_allow_html=True)
+                                        except Exception:
+                                            pass
 
                 st.divider()
                 # Auto-zapis predykcji – uruchamia sie raz per liga+kolejka
