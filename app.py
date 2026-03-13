@@ -2486,14 +2486,38 @@ def deep_data_stats(df_json: str, druzyny_ligi: set = None) -> tuple:
         ])
         if len(all_m) < 3:
             continue
-        gol_str  = all_m["_gole_str"].mean()
+        gol_str   = all_m["_gole_str"].mean()
         gol_strac = all_m["_gole_strac"].mean()
-        sot_sr   = all_m["_sot"].dropna().mean() if all_m["_sot"].notna().any() else None
-        kart_sr  = all_m["_kartki"].mean()
-        rozne_sr = all_m["_rozne"].mean()
-        konv     = (gol_str / sot_sr) if (sot_sr and sot_sr > 0) else None
+        sot_sr    = all_m["_sot"].dropna().mean() if all_m["_sot"].notna().any() else None
+        kart_sr   = all_m["_kartki"].mean()
+        rozne_sr  = all_m["_rozne"].mean()
+        konv      = (gol_str / sot_sr) if (sot_sr and sot_sr > 0) else None
         # xG-proxy: SOT × liga_średnia_konwersji (szacunkowa)
-        xg_proxy = (sot_sr * 0.11) if sot_sr else None  # ~11% konwersja PL
+        xg_proxy  = (sot_sr * 0.11) if sot_sr else None  # ~11% konwersja PL
+        # Faule popełnione / wymuszone (Factor of Opposition)
+        fo_c_sr = None
+        fo_s_sr = None
+        shots_sr = None
+        if "HF" in df.columns:
+            fo_committed = pd.concat([h_df["HF"], a_df["AF"]]).dropna()
+            fo_suffered  = pd.concat([h_df["AF"], a_df["HF"]]).dropna()
+            fo_c_sr = fo_committed.mean() if not fo_committed.empty else None
+            fo_s_sr = fo_suffered.mean()  if not fo_suffered.empty  else None
+        if "HS" in df.columns:
+            shots_vals = pd.concat([h_df["HS"], a_df["AS"]]).dropna()
+            shots_sr   = shots_vals.mean() if not shots_vals.empty else None
+        # Shots-to-Corners ratio
+        s2c = round(shots_sr / rozne_sr, 2) if (shots_sr and rozne_sr and rozne_sr > 0) else None
+        # Style Tags
+        style_tags = []
+        if fo_c_sr and fo_c_sr > 12 and kart_sr > 2.0:
+            style_tags.append("🟥 Hot Heads")
+        if s2c and s2c < 2.2:
+            style_tags.append("📐 Corner Machine")
+        if s2c and s2c > 3.2:
+            style_tags.append("🎯 Gra Środkiem")
+        if fo_c_sr and fo_c_sr < 9.5 and shots_sr and shots_sr < 10:
+            style_tags.append("🚌 Bus Parker")
         # Forma ostatnie 5
         mecze5 = df[(df["HomeTeam"]==d)|(df["AwayTeam"]==d)].tail(5)
         form5_pts = 0
@@ -2514,6 +2538,10 @@ def deep_data_stats(df_json: str, druzyny_ligi: set = None) -> tuple:
             "xG-proxy":        round(xg_proxy, 2) if xg_proxy else "–",
             "Kartki/M":        round(kart_sr, 1),
             "Rożne/M":         round(rozne_sr, 1),
+            "Faule/M":         round(fo_c_sr, 1) if fo_c_sr else "–",
+            "Faule wym./M":    round(fo_s_sr, 1) if fo_s_sr else "–",
+            "S2C ratio":       s2c if s2c else "–",
+            "Styl":            " ".join(style_tags) if style_tags else "–",
             "Forma (pkt/5M)":  form5_pts,
             "_gol_str":        gol_str,
             "_gol_strac":      gol_strac,
@@ -2645,6 +2673,7 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
             yc = []
             rc = []
             fo = []
+            fo_suffered = []  # faule wymuszone (Factor of Opposition)
             co = []
             if "HY" in hm.columns:
                 yc += hm["HY"].dropna().tolist()
@@ -2652,17 +2681,22 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
                 rc += hm["HR"].dropna().tolist()
                 rc += am["AR"].dropna().tolist()
             if "HF" in hm.columns:
+                # Faule POPELNIONE przez druzyne
                 fo += hm["HF"].dropna().tolist()
                 fo += am["AF"].dropna().tolist()
+                # Faule WYMUSZONE przez druzyne (rywal faulowal ta druzyne)
+                fo_suffered += hm["AF"].dropna().tolist()
+                fo_suffered += am["HF"].dropna().tolist()
             if "HC" in hm.columns:
                 co += hm["HC"].dropna().tolist()
                 co += am["AC"].dropna().tolist()
-            stats["avg_yc"]  = float(np.mean(yc))  if yc  else None
-            stats["avg_rc"]  = float(np.mean(rc))  if rc  else None
-            stats["avg_fo"]  = float(np.mean(fo))  if fo  else None
-            stats["avg_co"]  = float(np.mean(co))  if co  else None
-            stats["n"]       = len(hm) + len(am)
-            # Strzały
+            stats["avg_yc"]          = float(np.mean(yc))          if yc          else None
+            stats["avg_rc"]          = float(np.mean(rc))          if rc          else None
+            stats["avg_fo"]          = float(np.mean(fo))          if fo          else None
+            stats["avg_fo_suffered"] = float(np.mean(fo_suffered)) if fo_suffered else None
+            stats["avg_co"]          = float(np.mean(co))          if co          else None
+            stats["n"]               = len(hm) + len(am)
+            # Strzaly
             sht = []
             st  = []
             if "HS" in hm.columns:
@@ -2672,7 +2706,33 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
                 st  += am["AST"].dropna().tolist() if "AST" in am.columns else []
             stats["avg_shots"] = float(np.mean(sht)) if sht else None
             stats["avg_sot"]   = float(np.mean(st))  if st  else None
+            # Shots-to-Corners ratio (niski = Corner Machine, wysoki = gra srodkiem)
+            avg_co_val = stats["avg_co"] or 0
+            stats["s2c_ratio"] = round(stats["avg_shots"] / avg_co_val, 2) \
+                if (stats["avg_shots"] and avg_co_val > 0) else None
+            # Style Tags — obliczane względem progów empirycznych EPL
+            tags = []
+            yc  = stats["avg_yc"]  or 0
+            fo  = stats["avg_fo"]  or 0
+            fos = stats["avg_fo_suffered"] or 0
+            sht = stats["avg_shots"] or 0
+            co  = stats["avg_co"]  or 0
+            s2c = stats["s2c_ratio"] or 0
+            if fo > 12 and yc > 2.0:
+                tags.append("🟥 Hot Heads")
+            if fos > 12.5:
+                tags.append("🎭 Foul Magnet")   # rywal często fauluje tę drużynę
+            if s2c > 0 and s2c < 2.2:
+                tags.append("📐 Corner Machine")
+            if s2c > 3.2:
+                tags.append("🎯 Central Attackers")
+            if fo < 9.5 and sht < 10:
+                tags.append("🚌 Bus Parker")
+            if not tags:
+                tags.append("⚖️ Balanced")
+            stats["style_tags"] = tags
             return stats
+
 
         h_stats = _team_stats(h)
         a_stats = _team_stats(a)
@@ -2680,13 +2740,65 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
         ctx["a_stats"] = a_stats
 
         # ── Łączne przewidywane kartki/rożne/faule dla tego meczu ────────
-        # Poisson: λ_yc = avg_yc_h + avg_yc_a (niezależne)
         if h_stats["avg_yc"] and a_stats["avg_yc"]:
             ctx["lambda_yc"] = h_stats["avg_yc"] + a_stats["avg_yc"]
         if h_stats["avg_fo"] and a_stats["avg_fo"]:
             ctx["lambda_fo"] = h_stats["avg_fo"] + a_stats["avg_fo"]
         if h_stats["avg_co"] and a_stats["avg_co"]:
             ctx["lambda_co"] = h_stats["avg_co"] + a_stats["avg_co"]
+
+        # ── Factor of Opposition – CLASH score ───────────────────────────
+        # CLASH = faule popełniane przez H + faule wymuszone przez A (i odwrotnie)
+        # Im wyższy CLASH, tym więcej kartek w meczu
+        if h_stats.get("avg_fo") and a_stats.get("avg_fo_suffered"):
+            clash_h = (h_stats["avg_fo"] + a_stats["avg_fo_suffered"]) / 2
+        else:
+            clash_h = None
+        if a_stats.get("avg_fo") and h_stats.get("avg_fo_suffered"):
+            clash_a = (a_stats["avg_fo"] + h_stats["avg_fo_suffered"]) / 2
+        else:
+            clash_a = None
+        if clash_h and clash_a:
+            clash_total = clash_h + clash_a
+            # Średnia ligowa fauli: ~21-22/mecz w EPL
+            _lig_fo_avg = historical["HF"].mean() + historical["AF"].mean() \
+                if "HF" in historical.columns else 21.0
+            ctx["clash_total"]   = round(clash_total, 1)
+            ctx["clash_vs_avg"]  = round((clash_total - _lig_fo_avg) / _lig_fo_avg * 100, 1)
+            ctx["clash_alert"]   = ctx["clash_vs_avg"] >= 15  # ≥15% powyżej avg = alert
+
+        # ── Corners per Shot (Shots→Corners efficiency) ───────────────────
+        if h_stats.get("avg_shots") and h_stats.get("avg_co") and h_stats["avg_shots"] > 0:
+            ctx["h_cps"] = round(h_stats["avg_co"] / h_stats["avg_shots"] * 100, 1)
+        if a_stats.get("avg_shots") and a_stats.get("avg_co") and a_stats["avg_shots"] > 0:
+            ctx["a_cps"] = round(a_stats["avg_co"] / a_stats["avg_shots"] * 100, 1)
+
+        # ── Game State Sensitivity ────────────────────────────────────────
+        # Dla każdego stanu HTR (H/D/A) liczymy avg rożne i żółte per drużyna
+        def _game_state_stats(team):
+            gs = {}
+            for state, label in [("H", "Prowadzi"), ("D", "Remis"), ("A", "Przegrywa")]:
+                hm_s = historical[(historical["HomeTeam"] == team) & (historical["HTR"] == state)]
+                am_s = historical[(historical["AwayTeam"] == team) & (historical["HTR"] == {
+                    "H": "A", "D": "D", "A": "H"}[state])]
+                co_vals = pd.concat([
+                    hm_s["HC"] if "HC" in hm_s.columns else pd.Series(dtype=float),
+                    am_s["AC"] if "AC" in am_s.columns else pd.Series(dtype=float)
+                ]).dropna()
+                yc_vals = pd.concat([
+                    hm_s["HY"] if "HY" in hm_s.columns else pd.Series(dtype=float),
+                    am_s["AY"] if "AY" in am_s.columns else pd.Series(dtype=float)
+                ]).dropna()
+                n = len(co_vals)
+                gs[label] = {
+                    "n":    n,
+                    "co":   round(co_vals.mean(), 1) if n >= 2 else None,
+                    "yc":   round(yc_vals.mean(), 1) if n >= 2 else None,
+                }
+            return gs
+        if "HTR" in historical.columns:
+            ctx["h_game_state"] = _game_state_stats(h)
+            ctx["a_game_state"] = _game_state_stats(a)
 
         # ── Korekta kontekstowa λ_yc (na podstawie korelacji z danych) ──
         # Top vs Top: +0.67 kartki vs avg (z EPL 24/25: 4.73 vs avg 4.06)
@@ -4098,12 +4210,115 @@ if not historical.empty:
                                         rows += _srow('🟨 Żółte kartki',   _hs.get('avg_yc'),    _as.get('avg_yc'),    hib='bad')
                                         rows += _srow('🟥 Czerwone kartki', _hs.get('avg_rc'),    _as.get('avg_rc'),    fmt='{:.2f}', hib='bad')
                                         rows += _srow('🦵 Faule',           _hs.get('avg_fo'),    _as.get('avg_fo'),    hib='bad')
+                                        rows += _srow('🛡️ Faule wymuszone', _hs.get('avg_fo_suffered'), _as.get('avg_fo_suffered'), hib='neutral')
                                         rows += _srow('🚩 Rożne',           _hs.get('avg_co'),    _as.get('avg_co'),    hib='neutral')
                                         rows += _srow('🎯 Strzały',         _hs.get('avg_shots'), _as.get('avg_shots'), hib='good')
                                         rows += _srow('🎯 Celne strzały',   _hs.get('avg_sot'),   _as.get('avg_sot'),   hib='good')
+
+                                        # ── Style Tags ──────────────────────────────────────────────
+                                        _tag_colors = {
+                                            "🟥 Hot Heads":        "#ef444420",
+                                            "🎭 Foul Magnet":      "#f9731620",
+                                            "📐 Corner Machine":   "#3b82f620",
+                                            "🎯 Central Attackers":"#8b5cf620",
+                                            "🚌 Bus Parker":       "#6b728020",
+                                            "⚖️ Balanced":         "#22c55e20",
+                                        }
+                                        _tag_border = {
+                                            "🟥 Hot Heads":        "#ef4444",
+                                            "🎭 Foul Magnet":      "#f97316",
+                                            "📐 Corner Machine":   "#3b82f6",
+                                            "🎯 Central Attackers":"#8b5cf6",
+                                            "🚌 Bus Parker":       "#6b7280",
+                                            "⚖️ Balanced":         "#22c55e",
+                                        }
+                                        def _tag_html(tags):
+                                            if not tags:
+                                                return "<span style='color:#555;font-size:0.75em'>brak danych</span>"
+                                            out = ""
+                                            for t in tags:
+                                                bg = _tag_colors.get(t, "#33333320")
+                                                bd = _tag_border.get(t, "#555")
+                                                out += (f"<span style='background:{bg};border:1px solid {bd}55;"
+                                                        f"border-radius:6px;padding:2px 8px;margin:2px;font-size:0.75em;"
+                                                        f"display:inline-block;color:{bd};font-weight:600'>{t}</span>")
+                                            return out
+
+                                        _h_tags = _hs.get('style_tags', [])
+                                        _a_tags = _as.get('style_tags', [])
+                                        _cps_h = _ctx.get('h_cps')
+                                        _cps_a = _ctx.get('a_cps')
+
                                         st.markdown(
-                                            "<div style='background:var(--bg-card2);border-radius:8px;padding:10px 12px'>" + rows + "</div>",
+                                            "<div style='background:var(--bg-card2);border-radius:8px;padding:10px 12px'>" + rows +
+                                            "<div style='margin-top:10px;padding-top:8px;border-top:1px solid var(--border)'>"
+                                            f"<div style='font-size:0.70em;color:#6b7280;font-weight:600;margin-bottom:4px'>🏷️ Styl gry</div>"
+                                            f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px'>"
+                                            f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{home}</div>{_tag_html(_h_tags)}"
+                                            + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_h:.1f}%</div>" if _cps_h else "")
+                                            + f"</div>"
+                                            f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{away}</div>{_tag_html(_a_tags)}"
+                                            + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_a:.1f}%</div>" if _cps_a else "")
+                                            + "</div></div></div></div>",
                                             unsafe_allow_html=True)
+
+                                        # ── CLASH – Factor of Opposition ────────────────────────────
+                                        _clash = _ctx.get('clash_total')
+                                        _clash_pct = _ctx.get('clash_vs_avg')
+                                        _clash_alert = _ctx.get('clash_alert', False)
+                                        if _clash is not None:
+                                            _clash_c = "#ef4444" if _clash_alert else ("#f97316" if _clash_pct and _clash_pct > 5 else "#6b7280")
+                                            st.markdown(
+                                                f"<div style='background:{_clash_c}12;border:1px solid {_clash_c}44;"
+                                                f"border-radius:8px;padding:10px 14px;margin-top:8px'>"
+                                                f"<div style='font-size:0.70em;color:#6b7280;font-weight:600;margin-bottom:4px'>"
+                                                f"⚔️ Factor of Opposition – CLASH</div>"
+                                                f"<div style='display:flex;align-items:center;gap:12px'>"
+                                                f"<div style='font-size:1.4em;font-weight:800;color:{_clash_c}'>{_clash:.1f}</div>"
+                                                f"<div>"
+                                                f"<div style='font-size:0.75em;color:#aaa'>faule (popełn. + wymuszone) / mecz</div>"
+                                                f"<div style='font-size:0.72em;color:{_clash_c};font-weight:600'>"
+                                                + (f"🔥 {_clash_pct:+.1f}% vs avg ligowej — Wysoki potencjał kartek!" if _clash_alert
+                                                   else f"{_clash_pct:+.1f}% vs avg ligowej")
+                                                + "</div></div></div></div>",
+                                                unsafe_allow_html=True)
+
+                                    # ── Game State Sensitivity ─────────────────────────────────────
+                                    _hgs = _ctx.get('h_game_state')
+                                    _ags = _ctx.get('a_game_state')
+                                    if _hgs and _ags:
+                                        def _gs_row(state_label, hg, ag):
+                                            hco = hg.get('co'); hyc = hg.get('yc'); hn = hg.get('n', 0)
+                                            aco = ag.get('co'); ayc = ag.get('yc'); an = ag.get('n', 0)
+                                            if hn < 2 and an < 2:
+                                                return ""
+                                            hco_s = f"{hco:.1f}🚩 {hyc:.1f}🟨" if hco and hyc else "–"
+                                            aco_s = f"{aco:.1f}🚩 {ayc:.1f}🟨" if aco and ayc else "–"
+                                            return (
+                                                f"<div style='display:grid;grid-template-columns:1fr 80px 1fr;"
+                                                f"gap:4px;align-items:center;padding:3px 0;border-bottom:1px solid #ffffff08'>"
+                                                f"<div style='font-size:0.75em;color:#e2e8f0;text-align:right'>{hco_s} <span style='color:#555;font-size:0.8em'>({hn}M)</span></div>"
+                                                f"<div style='font-size:0.68em;color:#6b7280;text-align:center;font-weight:600'>{state_label}</div>"
+                                                f"<div style='font-size:0.75em;color:#e2e8f0'><span style='color:#555;font-size:0.8em'>({an}M)</span> {aco_s}</div>"
+                                                f"</div>"
+                                            )
+                                        _gs_html = ""
+                                        _gs_html += _gs_row("Prowadzi →", _hgs.get("Prowadzi",{}), _ags.get("Prowadzi",{}))
+                                        _gs_html += _gs_row("← Remis →",  _hgs.get("Remis",{}),    _ags.get("Remis",{}))
+                                        _gs_html += _gs_row("← Przegrywa", _hgs.get("Przegrywa",{}), _ags.get("Przegrywa",{}))
+                                        if _gs_html:
+                                            st.markdown(
+                                                f"<div style='background:var(--bg-card2);border-radius:8px;"
+                                                f"padding:10px 12px;margin-top:8px'>"
+                                                f"<div style='font-size:0.70em;color:#6b7280;font-weight:600;margin-bottom:6px'>"
+                                                f"📊 Wrażliwość na wynik do przerwy (🚩 rożne · 🟨 kartki)</div>"
+                                                f"<div style='display:grid;grid-template-columns:1fr 80px 1fr;"
+                                                f"gap:2px;margin-bottom:4px'>"
+                                                f"<div style='font-size:0.65em;color:#555;text-align:right'>{home}</div>"
+                                                f"<div></div>"
+                                                f"<div style='font-size:0.65em;color:#555'>{away}</div></div>"
+                                                + _gs_html + "</div>",
+                                                unsafe_allow_html=True)
 
                                     # ── Predykcja Poisson: kartki / faule / rożne ───────────────────
                                     _lam_yc  = _ctx.get('lambda_yc_adj') or _ctx.get('lambda_yc')
