@@ -2911,6 +2911,145 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
                     "Środek tabeli": 0.0}
             ctx["lambda_yc_adj"] = ctx["lambda_yc"] + _adj.get(ctx["match_type"], 0)
 
+        # ── Home/Away split ───────────────────────────────────────────────
+        if not historical.empty:
+            def _home_away_split(team):
+                hm = historical[historical["HomeTeam"] == team]
+                am = historical[historical["AwayTeam"] == team]
+                h_pts = ((hm["FTR"]=="H")*3 + (hm["FTR"]=="D")*1).sum()
+                a_pts = ((am["FTR"]=="A")*3 + (am["FTR"]=="D")*1).sum()
+                h_n = len(hm); a_n = len(am)
+                return {
+                    "h_ppg":    round(h_pts/h_n, 2) if h_n else None,
+                    "a_ppg":    round(a_pts/a_n, 2) if a_n else None,
+                    "home_adv": round(h_pts/h_n - a_pts/a_n, 2) if h_n and a_n else None,
+                    "h_shots":  round(hm["HS"].mean(), 1) if h_n and "HS" in hm.columns else None,
+                    "a_shots":  round(am["AS"].mean(), 1) if a_n and "AS" in am.columns else None,
+                }
+            ctx["h_ha"] = _home_away_split(h)
+            ctx["a_ha"] = _home_away_split(a)
+
+        # ── Sezonowość ────────────────────────────────────────────────────
+        if "Date" in historical.columns:
+            try:
+                _hist_dates  = pd.to_datetime(historical["Date"], dayfirst=True, errors="coerce")
+                _curr_month  = pd.Timestamp.now().month
+                _month_grp   = historical.copy()
+                _month_grp["_m"] = _hist_dates.dt.month
+                _month_stats = _month_grp.groupby("_m")[["total_kartki","total_rozne"]].mean()
+                if _curr_month in _month_stats.index:
+                    _ms = _month_stats.loc[_curr_month]
+                    _ov_yc = historical["total_kartki"].mean() if "total_kartki" in historical.columns else 3.8
+                    _ov_co = historical["total_rozne"].mean()  if "total_rozne"  in historical.columns else 9.8
+                    ctx["season_yc_avg"]  = round(float(_ms["total_kartki"]), 2)
+                    ctx["season_co_avg"]  = round(float(_ms["total_rozne"]),  2)
+                    ctx["season_yc_diff"] = round(float(_ms["total_kartki"]) - _ov_yc, 2)
+                    ctx["season_co_diff"] = round(float(_ms["total_rozne"])  - _ov_co, 2)
+            except Exception:
+                pass
+
+        # ── Finishing Quality (gole/SOT) ──────────────────────────────────
+        if not historical.empty and "HST" in historical.columns:
+            def _finishing(team):
+                hm  = historical[historical["HomeTeam"] == team]
+                am  = historical[historical["AwayTeam"] == team]
+                gole = pd.concat([hm["FTHG"], am["FTAG"]]).sum()
+                sot  = pd.concat([hm["HST"], am["AST"]]).sum()
+                return round(gole / sot, 3) if sot > 0 else None
+            ctx["h_finishing"] = _finishing(h)
+            ctx["a_finishing"] = _finishing(a)
+
+        # ── Efekt poprzedniego wyniku ─────────────────────────────────────
+        if not historical.empty:
+            def _last_result(team):
+                tm = historical[(historical["HomeTeam"]==team)|(historical["AwayTeam"]==team)]
+                if tm.empty: return None
+                last = tm.iloc[-1]
+                if last["HomeTeam"] == team:
+                    return "W" if last["FTR"]=="H" else ("D" if last["FTR"]=="D" else "L")
+                else:
+                    return "W" if last["FTR"]=="A" else ("D" if last["FTR"]=="D" else "L")
+            ctx["h_last_result"] = _last_result(h)
+            ctx["a_last_result"] = _last_result(a)
+
+        # ── Narracja meczu ────────────────────────────────────────────────
+        def _build_narrative(ctx, h, a):
+            parts = []
+            hs  = ctx.get("h_stats", {}); as_ = ctx.get("a_stats", {})
+            h_sht  = hs.get("avg_shots", 0) or 0
+            a_sht  = as_.get("avg_shots", 0) or 0
+            lam_co = ctx.get("lambda_co", 0) or 0
+            lam_yc = ctx.get("lambda_yc_adj") or ctx.get("lambda_yc", 0) or 0
+            exp_co = ctx.get("exp_co_pt_total") or lam_co
+
+            # 1. Charakter gry
+            if h_sht + a_sht > 26:
+                parts.append(f"Otwarta gra — obie drużyny generują dużo strzałów ({h_sht:.0f}+{a_sht:.0f}/M), spodziewaj się tempa")
+            elif h_sht + a_sht < 18:
+                parts.append(f"Mecz zapowiada się defensywnie — mało strzałów po obu stronach ({h_sht:.0f}+{a_sht:.0f}/M)")
+            else:
+                parts.append(f"Wyrównany charakter gry, bez wyraźnej dominacji ofensywnej")
+
+            # 2. Rożne
+            if exp_co > 11.5:
+                parts.append(f"Dużo rożnych w perspektywie — styl obrony obu drużyn sprzyja dośrodkowaniom (exp ~{exp_co:.1f})")
+            elif exp_co < 8.5:
+                parts.append(f"Poniżej średniej rożnych — drużyny bronią pasywnie lub grają środkiem pola")
+
+            # 3. Kartki
+            if lam_yc:
+                agg_alert = ctx.get("agg_clash_alert", False)
+                h2h_hot   = (ctx.get("h2h_stats") or {}).get("hot_rivalry", False)
+                if agg_alert and h2h_hot:
+                    parts.append(f"Wysokie ryzyko kartek — agresywny profil + historycznie gorące starcia (λ={lam_yc:.1f})")
+                elif agg_alert:
+                    parts.append(f"Profil faulowania wskazuje na podwyższoną liczbę kartek (λ={lam_yc:.1f})")
+                elif h2h_hot:
+                    parts.append(f"H2H jest nerwowe — te drużyny zazwyczaj obfitują w kartki")
+                elif lam_yc < 3.2:
+                    parts.append(f"Spokojniejszy mecz pod względem dyscypliny (λ={lam_yc:.1f})")
+
+            # 4. Home advantage
+            h_ha = ctx.get("h_ha") or {}; a_ha = ctx.get("a_ha") or {}
+            h_adv = h_ha.get("home_adv"); a_adv = a_ha.get("home_adv")
+            if h_adv and h_adv > 0.7:
+                parts.append(f"{h} to twierdza u siebie (+{h_adv:.2f} pkt/M) — efekt własnego boiska jest realny")
+            elif h_adv and h_adv < 0:
+                parts.append(f"{h} paradoksalnie gra lepiej na wyjeździe niż u siebie")
+            if a_adv and a_adv < -0.3:
+                parts.append(f"{a} wyraźnie słabszy w roli gościa ({a_ha.get('a_ppg',0):.2f} pkt/M wyjazdowo)")
+
+            # 5. Finishing
+            h_fin = ctx.get("h_finishing"); a_fin = ctx.get("a_finishing")
+            if h_fin and a_fin:
+                if h_fin > 0.38 and a_fin < 0.28:
+                    parts.append(f"{h} wykańcza znacznie skuteczniej ({h_fin:.0%} goli/SOT vs {a_fin:.0%} {a})")
+                elif a_fin > 0.38 and h_fin < 0.28:
+                    parts.append(f"{a} ma wyraźną przewagę w wykańczaniu akcji ({a_fin:.0%} vs {h_fin:.0%})")
+
+            # 6. Sezonowość
+            s_diff = ctx.get("season_yc_diff")
+            if s_diff and abs(s_diff) >= 0.4:
+                direction = "wyższy" if s_diff > 0 else "niższy"
+                parts.append(f"Aktualny okres sezonu historycznie daje {direction} poziom kartek ({s_diff:+.1f} vs roczna średnia)")
+
+            # 7. Motywacja
+            motyw = ctx.get("motywacja", [])
+            if motyw:
+                parts.append(" · ".join(motyw[:2]))
+
+            # 8. Volatility
+            if ctx.get("vol_warning_yc") or ctx.get("vol_warning_co"):
+                items = []
+                if ctx.get("vol_warning_yc"): items.append("kartki")
+                if ctx.get("vol_warning_co"): items.append("rożne")
+                parts.append(f"⚠️ Wysoka zmienność ({', '.join(items)}) — wyniki tych drużyn mocno się wahają")
+
+            return parts
+
+        ctx["narrative"] = _build_narrative(ctx, h, a)
+
+
         # ── H2H alternatywne statystyki ──────────────────────────────────
         _h2h_all = historical[
             ((historical["HomeTeam"] == h) & (historical["AwayTeam"] == a)) |
@@ -4627,7 +4766,28 @@ if not historical.empty:
                                         except Exception:
                                             pass
 
-                st.divider()
+                                    # ── Narracja meczu ──────────────────────────────────────────
+                                    _narrative = _ctx.get("narrative", [])
+                                    if _narrative:
+                                        _narr_html = "".join([
+                                            f"<div style='display:flex;gap:8px;align-items:flex-start;"
+                                            f"padding:5px 0;border-bottom:1px solid #ffffff06'>"
+                                            f"<span style='color:#3b82f6;font-size:0.8em;margin-top:1px;flex-shrink:0'>▸</span>"
+                                            f"<span style='font-size:0.78em;color:#cbd5e1;line-height:1.4'>{p}</span>"
+                                            f"</div>"
+                                            for p in _narrative
+                                        ])
+                                        st.markdown(
+                                            f"<div style='background:linear-gradient(135deg,#0f172a,#1e293b);"
+                                            f"border:1px solid #3b82f633;border-radius:10px;"
+                                            f"padding:12px 14px;margin-top:10px'>"
+                                            f"<div style='font-size:0.70em;color:#3b82f6;font-weight:700;"
+                                            f"letter-spacing:0.05em;margin-bottom:8px'>"
+                                            f"🔭 PROFIL MECZU — czego można się spodziewać</div>"
+                                            + _narr_html +
+                                            f"</div>",
+                                            unsafe_allow_html=True
+                                        )
                 # Auto-zapis predykcji – uruchamia sie raz per liga+kolejka
                 # Klucz session_state zapobiega powtornemu zapisowi przy kazdym rerunie
                 _save_key = f"saved_{wybrana_liga}_{aktualna_kolejka}"
@@ -7121,7 +7281,7 @@ if not historical.empty:
     with tab5:
         st.subheader("🎛️ Laboratorium modelu")
 
-        _lab_t1, _lab_t2 = st.tabs(["🧱 Bet Builder", "🔬 Symulacje Monte Carlo"])
+        _lab_t1, = st.tabs(["🧱 Bet Builder"])
 
         # ═══════════════════════════════════════════════════════════════════
         with _lab_t1:
@@ -7435,61 +7595,6 @@ if not historical.empty:
                                 unsafe_allow_html=True)
             else:
                 st.warning("Brak danych modelu.")
-
-        # ═══════════════════════════════════════════════════════════════════
-        with _lab_t2:
-            st.markdown("### 🔬 Monte Carlo – symulacje meczowe")
-            st.caption("Eksperymentuj z kombinacjami zdarzeń. Nie są to rekomendacje, tylko symulacje.")
-
-            if not schedule.empty and not srednie_df.empty:
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    linia_gole   = st.selectbox("Linia goli",    [1.5, 2.5, 3.5], index=1)
-                    typ_gole     = st.selectbox("Typ goli",      ["Over", "Under"])
-                with c2:
-                    linia_rogi   = st.selectbox("Linia rożnych", [7.5, 8.5, 9.5, 10.5], index=1)
-                    typ_rogi     = st.selectbox("Typ rożnych",   ["Over", "Under"])
-                with c3:
-                    linia_kartki = st.selectbox("Linia kartek",  [2.5, 3.5, 4.5, 5.5], index=1)
-                    typ_kartki   = st.selectbox("Typ kartek",    ["Over", "Under"])
-                min_prob = st.slider("Min. prawdopodobieństwo", 0.0, 1.0, 0.40, 0.01)
-
-                aktualna_kolejka = get_current_round(schedule)
-                mecze = schedule[schedule["round"] == aktualna_kolejka]
-
-                if not mecze.empty:
-                    st.caption(f"Kolejka {aktualna_kolejka} – {len(mecze)} meczów")
-                    lab_rows = []
-                    for _, mecz in mecze.iterrows():
-                        h = map_nazwa(mecz["home_team"])
-                        a = map_nazwa(mecz["away_team"])
-                        if h not in srednie_df.index or a not in srednie_df.index:
-                            continue
-                        lam_h, lam_a, lam_r, lam_k, sot_ok, lam_sot = oblicz_lambdy(h, a, srednie_df, srednie_lig, forma_dict,
-                                                                        csv_code=LIGI[wybrana_liga]["csv_code"])
-                        p_g = macierz_goli_p(lam_h, lam_a, rho, int(linia_gole), typ_gole)
-                        p_r = oblicz_p(typ_rogi, linia_rogi, lam_r)
-                        p_k = oblicz_p(typ_kartki, linia_kartki, lam_k)
-                        p_combo = p_g * p_r * p_k
-                        lab_rows.append((p_combo, h, a, lam_h, lam_a, lam_r, lam_k, p_g, p_r, p_k))
-
-                    lab_rows.sort(key=lambda x: -x[0])
-                    for p_combo, h, a, lam_h, lam_a, lam_r, lam_k, p_g, p_r, p_k in lab_rows:
-                        label_bb = (f"{'✅' if p_combo >= min_prob else '❌'} {h} vs {a}"
-                                    f"  ·  combo {p_combo:.0%}  ·  fair AKO {fair_odds(p_combo):.2f}")
-                        with st.expander(label_bb, expanded=False):
-                            bc1, bc2, bc3, bc4 = st.columns(4)
-                            bc1.metric(f"{typ_gole} {linia_gole}", f"{p_g:.1%}", f"fair {fair_odds(p_g):.2f}", delta_color="normal" if p_g >= 0.55 else "off")
-                            bc2.metric(f"{typ_rogi} {linia_rogi} rożnych", f"{p_r:.1%}", f"fair {fair_odds(p_r):.2f}", delta_color="normal" if p_r >= 0.55 else "off")
-                            bc3.metric(f"{typ_kartki} {linia_kartki} kartek", f"{p_k:.1%}", f"fair {fair_odds(p_k):.2f}", delta_color="normal" if p_k >= 0.55 else "off")
-                            if p_combo >= min_prob:
-                                bc4.metric("COMBO", f"{p_combo:.1%}", f"fair AKO {fair_odds(p_combo):.2f}", delta_color="normal")
-                            else:
-                                bc4.metric("COMBO", f"{p_combo:.1%}", "↓ poniżej progu", delta_color="off")
-                else:
-                    st.info("Brak meczów w tej kolejce")
-            else:
-                st.warning("Brak danych")
 
     # =========================================================================
     # =========================================================================
