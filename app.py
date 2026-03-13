@@ -4371,10 +4371,10 @@ if not historical.empty:
                                             f"<div style='font-size:0.70em;color:#6b7280;font-weight:600;margin-bottom:4px'>🏷️ Styl gry</div>"
                                             f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px'>"
                                             f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{h}</div>{_tag_html(_h_tags)}"
-                                            + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_h:.1f}%</div>" if _cps_h else "")
+                                            + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_h:.1f}% <span style='color:#444'>(rożne/strzał)</span></div>" if _cps_h else "")
                                             + f"</div>"
                                             f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{a}</div>{_tag_html(_a_tags)}"
-                                            + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_a:.1f}%</div>" if _cps_a else "")
+                                            + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_a:.1f}% <span style='color:#444'>(rożne/strzał)</span></div>" if _cps_a else "")
                                             + "</div></div></div></div>",
                                             unsafe_allow_html=True)
 
@@ -4503,13 +4503,13 @@ if not historical.empty:
                                             _ptc = "#6b7280"
                                             if _co_pt_diff is not None:
                                                 _ptc = "#3b82f6" if _co_pt_diff > 0.5 else ("#ef4444" if _co_pt_diff < -0.5 else "#6b7280")
-                                                _pt_diff_s = f"{'↑' if _co_pt_diff>0 else '↓'}{abs(_co_pt_diff):.1f} vs λ avg"
+                                                _pt_diff_s = f"{'↑' if _co_pt_diff>0 else '↓'}{abs(_co_pt_diff):.1f} vs avg"
                                             _ctx_signals += (
                                                 f"<div style='background:{_ptc}12;border:1px solid {_ptc}33;"
                                                 f"border-radius:8px;padding:6px 10px;margin:3px;display:inline-flex;"
                                                 f"flex-direction:column;align-items:center'>"
-                                                f"<span style='font-size:0.65em;color:#6b7280;font-weight:600'>🛡️ PT rożne</span>"
-                                                f"<span style='font-size:1.0em;font-weight:800;color:{_ptc}'>{_exp_co_pt:.1f}</span>"
+                                                f"<span style='font-size:0.65em;color:#6b7280;font-weight:600'>🛡️ Rożne (PT)</span>"
+                                                f"<span style='font-size:1.0em;font-weight:800;color:{_ptc}'>{_exp_co_pt:.1f} exp</span>"
                                                 f"<span style='font-size:0.62em;color:{_ptc}'>{_pt_diff_s}</span>"
                                                 f"</div>"
                                             )
@@ -4517,7 +4517,12 @@ if not historical.empty:
                                         # Tempo Index (r=0.42 z rożnymi)
                                         if _tempo is not None:
                                             _tc = "#3b82f6" if (_tempo_pct and _tempo_pct > 10) else "#6b7280"
-                                            _tl = f"+{_tempo_pct:.0f}% vs liga" if (_tempo_pct and _tempo_pct > 0) else (f"{_tempo_pct:.0f}% vs liga" if _tempo_pct else "")
+                                            if _tempo_pct is None or abs(_tempo_pct) < 2:
+                                                _tl = "≈ avg liga"
+                                            elif _tempo_pct > 0:
+                                                _tl = f"+{_tempo_pct:.0f}% vs liga"
+                                            else:
+                                                _tl = f"{_tempo_pct:.0f}% vs liga"
                                             _ctx_signals += (
                                                 f"<div style='background:{_tc}12;border:1px solid {_tc}33;"
                                                 f"border-radius:8px;padding:6px 10px;margin:3px;display:inline-flex;"
