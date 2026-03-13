@@ -4254,10 +4254,10 @@ if not historical.empty:
                                             "<div style='margin-top:10px;padding-top:8px;border-top:1px solid var(--border)'>"
                                             f"<div style='font-size:0.70em;color:#6b7280;font-weight:600;margin-bottom:4px'>🏷️ Styl gry</div>"
                                             f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px'>"
-                                            f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{home}</div>{_tag_html(_h_tags)}"
+                                            f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{h}</div>{_tag_html(_h_tags)}"
                                             + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_h:.1f}%</div>" if _cps_h else "")
                                             + f"</div>"
-                                            f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{away}</div>{_tag_html(_a_tags)}"
+                                            f"<div><div style='font-size:0.68em;color:#aaa;margin-bottom:3px'>{a}</div>{_tag_html(_a_tags)}"
                                             + (f"<div style='font-size:0.68em;color:#6b7280;margin-top:3px'>C/shot: {_cps_a:.1f}%</div>" if _cps_a else "")
                                             + "</div></div></div></div>",
                                             unsafe_allow_html=True)
@@ -4314,9 +4314,9 @@ if not historical.empty:
                                                 f"📊 Wrażliwość na wynik do przerwy (🚩 rożne · 🟨 kartki)</div>"
                                                 f"<div style='display:grid;grid-template-columns:1fr 80px 1fr;"
                                                 f"gap:2px;margin-bottom:4px'>"
-                                                f"<div style='font-size:0.65em;color:#555;text-align:right'>{home}</div>"
+                                                f"<div style='font-size:0.65em;color:#555;text-align:right'>{h}</div>"
                                                 f"<div></div>"
-                                                f"<div style='font-size:0.65em;color:#555'>{away}</div></div>"
+                                                f"<div style='font-size:0.65em;color:#555'>{a}</div></div>"
                                                 + _gs_html + "</div>",
                                                 unsafe_allow_html=True)
 
