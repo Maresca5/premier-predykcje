@@ -2747,9 +2747,38 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
         if h_stats["avg_co"] and a_stats["avg_co"]:
             ctx["lambda_co"] = h_stats["avg_co"] + a_stats["avg_co"]
 
+        # ── Aggression Clash – CPF weighted (r=0.835 z danymi EPL) ───────
+        # fo * cpf = oczekiwane kartki z fauli — najsilniejszy predictor
+        h_cpf = (h_stats["avg_yc"] / h_stats["avg_fo"]) if (h_stats.get("avg_fo") and h_stats["avg_fo"] > 0) else None
+        a_cpf = (a_stats["avg_yc"] / a_stats["avg_fo"]) if (a_stats.get("avg_fo") and a_stats["avg_fo"] > 0) else None
+        ctx["h_cpf"] = round(h_cpf, 3) if h_cpf else None
+        ctx["a_cpf"] = round(a_cpf, 3) if a_cpf else None
+        if h_cpf and a_cpf and h_stats.get("avg_fo") and a_stats.get("avg_fo"):
+            ctx["agg_clash"] = round(
+                h_stats["avg_fo"] * h_cpf + a_stats["avg_fo"] * a_cpf, 2
+            )
+            # Liga avg CPF ~0.17 EPL → expected cards z fauli avg ~3.6
+            _lig_cpf_avg = 3.6
+            ctx["agg_clash_vs_avg"] = round((ctx["agg_clash"] - _lig_cpf_avg) / _lig_cpf_avg * 100, 1)
+            ctx["agg_clash_alert"]  = ctx["agg_clash_vs_avg"] >= 15
+
+        # ── Tempo Index (r=0.42-0.46 z rożnymi) ─────────────────────────
+        # shots + corners + fouls obu drużyn
+        if all(h_stats.get(k) for k in ["avg_shots","avg_co","avg_fo"]) and \
+           all(a_stats.get(k) for k in ["avg_shots","avg_co","avg_fo"]):
+            ctx["tempo_index"] = round(
+                h_stats["avg_shots"] + h_stats["avg_co"] + h_stats["avg_fo"] +
+                a_stats["avg_shots"] + a_stats["avg_co"] + a_stats["avg_fo"], 1
+            )
+            # EPL avg tempo ~60 (13.6+5.3+10.6 + 11.0+4.6+11.0)
+            _lig_tempo_avg = 56.0
+            ctx["tempo_vs_avg"] = round((ctx["tempo_index"] - _lig_tempo_avg) / _lig_tempo_avg * 100, 1)
+
+        # ── Home advantage w rożnych (+0.73 corner/mecz) ─────────────────
+        if "HC" in historical.columns:
+            ctx["home_co_adv"] = round(historical["HC"].mean() - historical["AC"].mean(), 2)
+
         # ── Factor of Opposition – CLASH score ───────────────────────────
-        # CLASH = faule popełniane przez H + faule wymuszone przez A (i odwrotnie)
-        # Im wyższy CLASH, tym więcej kartek w meczu
         if h_stats.get("avg_fo") and a_stats.get("avg_fo_suffered"):
             clash_h = (h_stats["avg_fo"] + a_stats["avg_fo_suffered"]) / 2
         else:
@@ -2760,12 +2789,11 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
             clash_a = None
         if clash_h and clash_a:
             clash_total = clash_h + clash_a
-            # Średnia ligowa fauli: ~21-22/mecz w EPL
             _lig_fo_avg = historical["HF"].mean() + historical["AF"].mean() \
                 if "HF" in historical.columns else 21.0
             ctx["clash_total"]   = round(clash_total, 1)
             ctx["clash_vs_avg"]  = round((clash_total - _lig_fo_avg) / _lig_fo_avg * 100, 1)
-            ctx["clash_alert"]   = ctx["clash_vs_avg"] >= 15  # ≥15% powyżej avg = alert
+            ctx["clash_alert"]   = ctx["clash_vs_avg"] >= 15
 
         # ── Corners per Shot (Shots→Corners efficiency) ───────────────────
         if h_stats.get("avg_shots") and h_stats.get("avg_co") and h_stats["avg_shots"] > 0:
@@ -2819,13 +2847,17 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
         if not _h2h_all.empty:
             h2h_stats = {}
             if "HY" in _h2h_all.columns:
-                h2h_stats["avg_yc"]  = (_h2h_all["HY"] + _h2h_all["AY"]).mean()
-                h2h_stats["avg_rc"]  = (_h2h_all["HR"] + _h2h_all["AR"]).mean()
+                h2h_stats["avg_yc"]    = (_h2h_all["HY"] + _h2h_all["AY"]).mean()
+                h2h_stats["avg_rc"]    = (_h2h_all["HR"] + _h2h_all["AR"]).mean()
+                # H2H avg cards — r=0.713 z przyszłymi kartkami (najsilniejszy historyczny predictor)
+                h2h_stats["avg_cards"] = round((_h2h_all["HY"] + _h2h_all["AY"]).mean(), 2)
+                h2h_stats["max_cards"] = int((_h2h_all["HY"] + _h2h_all["AY"]).max())
+                h2h_stats["hot_rivalry"] = h2h_stats["avg_cards"] >= 4.5
             if "HF" in _h2h_all.columns:
                 h2h_stats["avg_fo"]  = (_h2h_all["HF"] + _h2h_all["AF"]).mean()
             if "HC" in _h2h_all.columns:
                 h2h_stats["avg_co"]  = (_h2h_all["HC"] + _h2h_all["AC"]).mean()
-            h2h_stats["n"]       = len(_h2h_all)
+            h2h_stats["n"] = len(_h2h_all)
             ctx["h2h_stats"] = h2h_stats
         else:
             ctx["h2h_stats"] = {}
@@ -4325,6 +4357,14 @@ if not historical.empty:
                                     _lam_raw = _ctx.get('lambda_yc')
                                     _lam_fo  = _ctx.get('lambda_fo')
                                     _lam_co  = _ctx.get('lambda_co')
+                                    _agg_clash     = _ctx.get('agg_clash')
+                                    _agg_clash_pct = _ctx.get('agg_clash_vs_avg')
+                                    _agg_alert     = _ctx.get('agg_clash_alert', False)
+                                    _tempo         = _ctx.get('tempo_index')
+                                    _tempo_pct     = _ctx.get('tempo_vs_avg')
+                                    _h2hs_cards    = (_h2hs or {}).get('avg_cards')
+                                    _h2hs_hot      = (_h2hs or {}).get('hot_rivalry', False)
+                                    _h2hs_max      = (_h2hs or {}).get('max_cards')
 
                                     if _lam_yc is not None:
                                         from scipy.stats import poisson as _pois
@@ -4350,11 +4390,62 @@ if not historical.empty:
                                         if _pf25 is not None: pills += _pill('≥25 fauli', _pf25)
                                         if _pc9  is not None: pills += _pill('≥9 rożnych', _pc9)
 
+                                        # ── Wskaźniki kontekstowe (nowe) ────────────────────────────
+                                        _ctx_signals = ""
+
+                                        # Aggression Clash (CPF weighted, r=0.835)
+                                        if _agg_clash is not None:
+                                            _ac_c = "#ef4444" if _agg_alert else ("#f97316" if _agg_clash_pct and _agg_clash_pct > 8 else "#6b7280")
+                                            _ac_lbl = f"🔥 +{_agg_clash_pct:.0f}% vs liga" if _agg_alert else (f"{_agg_clash_pct:+.0f}% vs liga" if _agg_clash_pct else "")
+                                            _ctx_signals += (
+                                                f"<div style='background:{_ac_c}12;border:1px solid {_ac_c}33;"
+                                                f"border-radius:8px;padding:6px 10px;margin:3px;display:inline-flex;"
+                                                f"flex-direction:column;align-items:center'>"
+                                                f"<span style='font-size:0.65em;color:#6b7280;font-weight:600'>⚔️ Agresja CPF</span>"
+                                                f"<span style='font-size:1.0em;font-weight:800;color:{_ac_c}'>{_agg_clash:.2f}</span>"
+                                                f"<span style='font-size:0.62em;color:{_ac_c}'>{_ac_lbl}</span>"
+                                                f"</div>"
+                                            )
+
+                                        # Tempo Index (r=0.42 z rożnymi)
+                                        if _tempo is not None:
+                                            _tc = "#3b82f6" if (_tempo_pct and _tempo_pct > 10) else "#6b7280"
+                                            _tl = f"+{_tempo_pct:.0f}% vs liga" if (_tempo_pct and _tempo_pct > 0) else (f"{_tempo_pct:.0f}% vs liga" if _tempo_pct else "")
+                                            _ctx_signals += (
+                                                f"<div style='background:{_tc}12;border:1px solid {_tc}33;"
+                                                f"border-radius:8px;padding:6px 10px;margin:3px;display:inline-flex;"
+                                                f"flex-direction:column;align-items:center'>"
+                                                f"<span style='font-size:0.65em;color:#6b7280;font-weight:600'>🎬 Tempo</span>"
+                                                f"<span style='font-size:1.0em;font-weight:800;color:{_tc}'>{_tempo:.0f}</span>"
+                                                f"<span style='font-size:0.62em;color:{_tc}'>{_tl}</span>"
+                                                f"</div>"
+                                            )
+
+                                        # H2H hot rivalry
+                                        if _h2hs_cards is not None:
+                                            _hrc = "#ef4444" if _h2hs_hot else "#6b7280"
+                                            _hrl = "🔥 Gorące H2H" if _h2hs_hot else "H2H historia"
+                                            _ctx_signals += (
+                                                f"<div style='background:{_hrc}12;border:1px solid {_hrc}33;"
+                                                f"border-radius:8px;padding:6px 10px;margin:3px;display:inline-flex;"
+                                                f"flex-direction:column;align-items:center'>"
+                                                f"<span style='font-size:0.65em;color:#6b7280;font-weight:600'>{_hrl}</span>"
+                                                f"<span style='font-size:1.0em;font-weight:800;color:{_hrc}'>{_h2hs_cards:.1f} 🟨/M</span>"
+                                                + (f"<span style='font-size:0.62em;color:{_hrc}'>max {_h2hs_max} kart</span>" if _h2hs_max else "")
+                                                + f"</div>"
+                                            )
+
                                         st.markdown(
                                             f"<div style='background:var(--stat-bg);border-radius:8px;padding:10px 12px;margin-top:8px'>"
                                             f"<div style='font-size:0.72em;color:#6b7280;font-weight:600;margin-bottom:6px'>"
                                             f"⚡ Rynki alternatywne (Poisson) · λ kartki={_lam_yc:.1f} {_albl}</div>"
-                                            f"<div style='display:flex;flex-wrap:wrap;gap:2px'>" + pills + "</div></div>",
+                                            f"<div style='display:flex;flex-wrap:wrap;gap:2px'>" + pills + "</div>"
+                                            + (f"<div style='margin-top:8px;padding-top:6px;border-top:1px solid #ffffff08'>"
+                                               f"<div style='font-size:0.65em;color:#6b7280;font-weight:600;margin-bottom:4px'>"
+                                               f"📐 Wskaźniki kontekstowe matchup</div>"
+                                               f"<div style='display:flex;flex-wrap:wrap;gap:2px'>{_ctx_signals}</div></div>"
+                                               if _ctx_signals else "")
+                                            + "</div>",
                                             unsafe_allow_html=True)
 
                                     # ── H2H alternatywne statystyki ─────────────────────────────────
