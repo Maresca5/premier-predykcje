@@ -5360,13 +5360,16 @@ if not historical.empty:
         init_db()
         _con_kpi = sqlite3.connect(DB_FILE)
         _kpi_row = _con_kpi.execute(
-            "SELECT COUNT(*), SUM(trafione), "
-            "SUM(CASE WHEN wynik_rzeczywisty IS NOT NULL THEN 1 ELSE 0 END) "
+            "SELECT COUNT(*), "
+            "SUM(CASE WHEN trafione=1 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN trafione IS NOT NULL THEN 1 ELSE 0 END) "
             "FROM zdarzenia WHERE liga=? AND sezon=? AND rynek='1X2'",
             (wybrana_liga, BIEZACY_SEZON)).fetchone()
         _kpi_ev_row = _con_kpi.execute(
-            "SELECT AVG(ev), SUM(CASE WHEN trafione=1 THEN (fo_typ-1) ELSE -1 END), COUNT(*) "
-            "FROM zdarzenia WHERE liga=? AND sezon=? AND ev IS NOT NULL AND wynik_rzeczywisty IS NOT NULL",
+            "SELECT "
+            "SUM(CASE WHEN trafione=1 THEN (fair_odds-1) ELSE -1.0 END), "
+            "SUM(CASE WHEN trafione IS NOT NULL THEN 1 ELSE 0 END) "
+            "FROM zdarzenia WHERE liga=? AND sezon=? AND trafione IS NOT NULL",
             (wybrana_liga, BIEZACY_SEZON)).fetchone()
         _con_kpi.close()
 
@@ -5374,7 +5377,7 @@ if not historical.empty:
         _kpi_traf = int(_kpi_row[1]) if _kpi_row and _kpi_row[1] else 0
         _kpi_rozl = int(_kpi_row[2]) if _kpi_row and _kpi_row[2] else 0
         _kpi_hit  = _kpi_traf / _kpi_rozl if _kpi_rozl else 0
-        _kpi_roi  = float(_kpi_ev_row[1]) / float(_kpi_ev_row[2]) if _kpi_ev_row and _kpi_ev_row[2] else None
+        _kpi_roi  = float(_kpi_ev_row[0]) / float(_kpi_ev_row[1]) if _kpi_ev_row and _kpi_ev_row[1] else None
         _kpi_brier = _mg_top["brier"] if _mg_top else None
         _kpi_bss   = _mg_top["bss"]   if _mg_top else None
 
