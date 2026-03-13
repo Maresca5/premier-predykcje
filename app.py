@@ -2670,23 +2670,17 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
             am = historical[historical["AwayTeam"] == team].copy()
             stats = {}
             # Kartki
-            yc = []
-            rc = []
-            fo = []
-            fo_suffered = []  # faule wymuszone (Factor of Opposition)
-            co = []
+            yc = []; rc = []; fo = []; fo_suffered = []; co = []
             if "HY" in hm.columns:
                 yc += hm["HY"].dropna().tolist()
                 yc += am["AY"].dropna().tolist()
                 rc += hm["HR"].dropna().tolist()
                 rc += am["AR"].dropna().tolist()
             if "HF" in hm.columns:
-                # Faule POPELNIONE przez druzyne
-                fo += hm["HF"].dropna().tolist()
-                fo += am["AF"].dropna().tolist()
-                # Faule WYMUSZONE przez druzyne (rywal faulowal ta druzyne)
-                fo_suffered += hm["AF"].dropna().tolist()
-                fo_suffered += am["HF"].dropna().tolist()
+                fo           += hm["HF"].dropna().tolist()
+                fo           += am["AF"].dropna().tolist()
+                fo_suffered  += hm["AF"].dropna().tolist()
+                fo_suffered  += am["HF"].dropna().tolist()
             if "HC" in hm.columns:
                 co += hm["HC"].dropna().tolist()
                 co += am["AC"].dropna().tolist()
@@ -2696,9 +2690,8 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
             stats["avg_fo_suffered"] = float(np.mean(fo_suffered)) if fo_suffered else None
             stats["avg_co"]          = float(np.mean(co))          if co          else None
             stats["n"]               = len(hm) + len(am)
-            # Strzaly
-            sht = []
-            st  = []
+            # Strzały
+            sht = []; st = []
             if "HS" in hm.columns:
                 sht += hm["HS"].dropna().tolist()
                 sht += am["AS"].dropna().tolist()
@@ -2706,28 +2699,62 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
                 st  += am["AST"].dropna().tolist() if "AST" in am.columns else []
             stats["avg_shots"] = float(np.mean(sht)) if sht else None
             stats["avg_sot"]   = float(np.mean(st))  if st  else None
-            # Shots-to-Corners ratio (niski = Corner Machine, wysoki = gra srodkiem)
+            # Strzały przyjęte (shots faced) — do Pressure Tolerance
+            sht_faced = []
+            if "AS" in hm.columns:
+                sht_faced += hm["AS"].dropna().tolist()  # goście strzelali na gospodarza
+                sht_faced += am["HS"].dropna().tolist()  # gospodarz strzelał na gościa
+            stats["avg_shots_faced"] = float(np.mean(sht_faced)) if sht_faced else None
+            # Rożne przyjęte (corners conceded)
+            co_conc = []
+            if "AC" in hm.columns:
+                co_conc += hm["AC"].dropna().tolist()  # AC = rożne gości gdy H gra u siebie
+                co_conc += am["HC"].dropna().tolist()  # HC = rożne gospod. gdy H gra w gościach
+            stats["avg_co_conceded"] = float(np.mean(co_conc)) if co_conc else None
+            # Pressure Tolerance: corners_conceded / shots_faced
+            if stats["avg_co_conceded"] and stats["avg_shots_faced"] and stats["avg_shots_faced"] > 0:
+                stats["pressure_tolerance"] = round(stats["avg_co_conceded"] / stats["avg_shots_faced"], 3)
+            else:
+                stats["pressure_tolerance"] = None
+            # Shots-to-Corners ratio
             avg_co_val = stats["avg_co"] or 0
             stats["s2c_ratio"] = round(stats["avg_shots"] / avg_co_val, 2) \
                 if (stats["avg_shots"] and avg_co_val > 0) else None
-            # Style Tags — obliczane względem progów empirycznych EPL
+            # ── Volatility Index (CV = std/mean) ─────────────────────────
+            # Wyższe CV = bardziej nieprzewidywalna drużyna → Kelly powinien obniżać stawkę
+            if len(co) >= 4:
+                co_arr = np.array(co)
+                stats["vol_co_cv"]   = round(co_arr.std() / co_arr.mean(), 3) if co_arr.mean() > 0 else None
+                stats["vol_co_std"]  = round(co_arr.std(), 2)
+            else:
+                stats["vol_co_cv"] = stats["vol_co_std"] = None
+            if len(yc) >= 4:
+                yc_arr = np.array(yc)
+                stats["vol_yc_cv"]   = round(yc_arr.std() / yc_arr.mean(), 3) if yc_arr.mean() > 0 else None
+                stats["vol_yc_std"]  = round(yc_arr.std(), 2)
+            else:
+                stats["vol_yc_cv"] = stats["vol_yc_std"] = None
+            # ── Style Tags ───────────────────────────────────────────────
             tags = []
-            yc  = stats["avg_yc"]  or 0
-            fo  = stats["avg_fo"]  or 0
-            fos = stats["avg_fo_suffered"] or 0
-            sht = stats["avg_shots"] or 0
-            co  = stats["avg_co"]  or 0
-            s2c = stats["s2c_ratio"] or 0
-            if fo > 12 and yc > 2.0:
+            _yc  = stats["avg_yc"]  or 0
+            _fo  = stats["avg_fo"]  or 0
+            _fos = stats["avg_fo_suffered"] or 0
+            _sht = stats["avg_shots"] or 0
+            _co  = stats["avg_co"]  or 0
+            _s2c = stats["s2c_ratio"] or 0
+            _pt  = stats["pressure_tolerance"] or 0
+            if _fo > 12 and _yc > 2.0:
                 tags.append("🟥 Hot Heads")
-            if fos > 12.5:
-                tags.append("🎭 Foul Magnet")   # rywal często fauluje tę drużynę
-            if s2c > 0 and s2c < 2.2:
+            if _fos > 12.5:
+                tags.append("🎭 Foul Magnet")
+            if _s2c > 0 and _s2c < 2.2:
                 tags.append("📐 Corner Machine")
-            if s2c > 3.2:
+            if _s2c > 3.2:
                 tags.append("🎯 Central Attackers")
-            if fo < 9.5 and sht < 10:
+            if _fo < 9.5 and _sht < 10:
                 tags.append("🚌 Bus Parker")
+            if _pt >= 0.43:
+                tags.append("🛡️ Aktywna obrona")  # wybijają na rożne
             if not tags:
                 tags.append("⚖️ Balanced")
             stats["style_tags"] = tags
@@ -2800,6 +2827,51 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
             ctx["h_cps"] = round(h_stats["avg_co"] / h_stats["avg_shots"] * 100, 1)
         if a_stats.get("avg_shots") and a_stats.get("avg_co") and a_stats["avg_shots"] > 0:
             ctx["a_cps"] = round(a_stats["avg_co"] / a_stats["avg_shots"] * 100, 1)
+
+        # ── Pressure Tolerance Matchup ────────────────────────────────────
+        # shots_H × PT_A = ile rożnych wyciągnie H z obrony A (r=0.271)
+        h_pt = h_stats.get("pressure_tolerance")
+        a_pt = a_stats.get("pressure_tolerance")
+        ctx["h_pt"] = h_pt
+        ctx["a_pt"] = a_pt
+        if h_stats.get("avg_shots") and a_pt:
+            ctx["h_exp_co_pt"] = round(h_stats["avg_shots"] * a_pt, 2)
+        if a_stats.get("avg_shots") and h_pt:
+            ctx["a_exp_co_pt"] = round(a_stats["avg_shots"] * h_pt, 2)
+        if ctx.get("h_exp_co_pt") and ctx.get("a_exp_co_pt"):
+            ctx["exp_co_pt_total"] = round(ctx["h_exp_co_pt"] + ctx["a_exp_co_pt"], 1)
+            # Porównaj z prostą średnią lambda_co — różnica = przewaga informacyjna
+            if "lambda_co" in ctx:
+                ctx["co_pt_vs_lambda"] = round(ctx["exp_co_pt_total"] - ctx["lambda_co"], 2)
+
+        # ── Referee Strictness (YC/Foul) ─────────────────────────────────
+        if "Referee" in historical.columns and "HF" in historical.columns:
+            _ref_stats = {}
+            for _ref, _grp in historical.groupby("Referee"):
+                _tf = (_grp["HF"] + _grp["AF"]).sum()
+                _ty = (_grp["HY"] + _grp["AY"]).sum()
+                if _tf >= 10:
+                    _ref_stats[_ref] = {
+                        "yc_per_foul": round(_ty / _tf, 3),
+                        "avg_yc":      round((_grp["HY"] + _grp["AY"]).mean(), 2),
+                        "avg_fo":      round((_grp["HF"] + _grp["AF"]).mean(), 1),
+                        "n":           len(_grp),
+                    }
+            ctx["referee_stats_map"] = _ref_stats
+
+        # ── Volatility Index ──────────────────────────────────────────────
+        # CV (coefficient of variation) = std/mean — nieprzewidywalność drużyny
+        ctx["h_vol_co"] = h_stats.get("vol_co_cv")
+        ctx["h_vol_yc"] = h_stats.get("vol_yc_cv")
+        ctx["a_vol_co"] = a_stats.get("vol_co_cv")
+        ctx["a_vol_yc"] = a_stats.get("vol_yc_cv")
+        # Matchup volatility — jeśli obie drużyny nieprzewidywalne → Kelly ↓
+        if h_stats.get("vol_yc_cv") and a_stats.get("vol_yc_cv"):
+            ctx["vol_yc_matchup"] = round((h_stats["vol_yc_cv"] + a_stats["vol_yc_cv"]) / 2, 3)
+            ctx["vol_co_matchup"] = round(((h_stats.get("vol_co_cv") or 0) + (a_stats.get("vol_co_cv") or 0)) / 2, 3)
+            # High volatility warning: avg CV > 0.65
+            ctx["vol_warning_yc"] = ctx["vol_yc_matchup"] > 0.65
+            ctx["vol_warning_co"] = ctx["vol_co_matchup"] > 0.55
 
         # ── Game State Sensitivity ────────────────────────────────────────
         # Dla każdego stanu HTR (H/D/A) liczymy avg rożne i żółte per drużyna
@@ -3987,7 +4059,19 @@ if not historical.empty:
                                     if sedzia_ostr:
                                         st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
                                     elif sedzia not in ("Nieznany", "", None):
-                                        st.caption(f"🟨 **Sędzia:** {sedzia}")
+                                        # Pokaż YC/foul strictness jeśli mamy dane
+                                        _ref_map = _ctx.get("referee_stats_map", {})
+                                        _ref_data = _ref_map.get(sedzia)
+                                        if _ref_data:
+                                            _ycf = _ref_data["yc_per_foul"]
+                                            _ref_label = "🔴 Aptekarz" if _ycf >= 0.19 else ("🟡 Surowy" if _ycf >= 0.17 else "🟢 Wyrozumiały")
+                                            st.caption(
+                                                f"🟨 **Sędzia:** {sedzia} · "
+                                                f"YC/foul: **{_ycf:.3f}** {_ref_label} · "
+                                                f"avg {_ref_data['avg_yc']:.1f} 🟨/M ({_ref_data['n']}M)"
+                                            )
+                                        else:
+                                            st.caption(f"🟨 **Sędzia:** {sedzia}")
 
                                     # Macierz wyników (toggle)
                                     if pokaz_macierz:
@@ -4390,8 +4474,14 @@ if not historical.empty:
                                         if _pf25 is not None: pills += _pill('≥25 fauli', _pf25)
                                         if _pc9  is not None: pills += _pill('≥9 rożnych', _pc9)
 
-                                        # ── Wskaźniki kontekstowe (nowe) ────────────────────────────
+                                        # ── Wskaźniki kontekstowe ────────────────────────────────────
                                         _ctx_signals = ""
+                                        _exp_co_pt   = _ctx.get('exp_co_pt_total')
+                                        _co_pt_diff  = _ctx.get('co_pt_vs_lambda')
+                                        _vol_warn_yc = _ctx.get('vol_warning_yc', False)
+                                        _vol_warn_co = _ctx.get('vol_warning_co', False)
+                                        _vol_yc_m    = _ctx.get('vol_yc_matchup')
+                                        _vol_co_m    = _ctx.get('vol_co_matchup')
 
                                         # Aggression Clash (CPF weighted, r=0.835)
                                         if _agg_clash is not None:
@@ -4404,6 +4494,23 @@ if not historical.empty:
                                                 f"<span style='font-size:0.65em;color:#6b7280;font-weight:600'>⚔️ Agresja CPF</span>"
                                                 f"<span style='font-size:1.0em;font-weight:800;color:{_ac_c}'>{_agg_clash:.2f}</span>"
                                                 f"<span style='font-size:0.62em;color:{_ac_c}'>{_ac_lbl}</span>"
+                                                f"</div>"
+                                            )
+
+                                        # Pressure Tolerance → korekta rożnych
+                                        if _exp_co_pt is not None:
+                                            _pt_diff_s = ""
+                                            _ptc = "#6b7280"
+                                            if _co_pt_diff is not None:
+                                                _ptc = "#3b82f6" if _co_pt_diff > 0.5 else ("#ef4444" if _co_pt_diff < -0.5 else "#6b7280")
+                                                _pt_diff_s = f"{'↑' if _co_pt_diff>0 else '↓'}{abs(_co_pt_diff):.1f} vs λ avg"
+                                            _ctx_signals += (
+                                                f"<div style='background:{_ptc}12;border:1px solid {_ptc}33;"
+                                                f"border-radius:8px;padding:6px 10px;margin:3px;display:inline-flex;"
+                                                f"flex-direction:column;align-items:center'>"
+                                                f"<span style='font-size:0.65em;color:#6b7280;font-weight:600'>🛡️ PT rożne</span>"
+                                                f"<span style='font-size:1.0em;font-weight:800;color:{_ptc}'>{_exp_co_pt:.1f}</span>"
+                                                f"<span style='font-size:0.62em;color:{_ptc}'>{_pt_diff_s}</span>"
                                                 f"</div>"
                                             )
 
@@ -4435,6 +4542,21 @@ if not historical.empty:
                                                 + f"</div>"
                                             )
 
+                                        # Volatility warning (ostrożność Kelly)
+                                        _vol_html = ""
+                                        if _vol_warn_yc and _vol_yc_m:
+                                            _vol_html += (
+                                                f"<div style='background:#f9731618;border:1px solid #f9731644;"
+                                                f"border-radius:6px;padding:4px 10px;margin:2px;font-size:0.72em;color:#f97316'>"
+                                                f"⚠️ Wysoka zmienność 🟨 (CV={_vol_yc_m:.2f}) — obniż stawkę Kelly!</div>"
+                                            )
+                                        if _vol_warn_co and _vol_co_m:
+                                            _vol_html += (
+                                                f"<div style='background:#f9731618;border:1px solid #f9731644;"
+                                                f"border-radius:6px;padding:4px 10px;margin:2px;font-size:0.72em;color:#f97316'>"
+                                                f"⚠️ Wysoka zmienność 🚩 (CV={_vol_co_m:.2f}) — obniż stawkę Kelly!</div>"
+                                            )
+
                                         st.markdown(
                                             f"<div style='background:var(--stat-bg);border-radius:8px;padding:10px 12px;margin-top:8px'>"
                                             f"<div style='font-size:0.72em;color:#6b7280;font-weight:600;margin-bottom:6px'>"
@@ -4443,7 +4565,9 @@ if not historical.empty:
                                             + (f"<div style='margin-top:8px;padding-top:6px;border-top:1px solid #ffffff08'>"
                                                f"<div style='font-size:0.65em;color:#6b7280;font-weight:600;margin-bottom:4px'>"
                                                f"📐 Wskaźniki kontekstowe matchup</div>"
-                                               f"<div style='display:flex;flex-wrap:wrap;gap:2px'>{_ctx_signals}</div></div>"
+                                               f"<div style='display:flex;flex-wrap:wrap;gap:2px'>{_ctx_signals}</div>"
+                                               + (_vol_html or "")
+                                               + "</div>"
                                                if _ctx_signals else "")
                                             + "</div>",
                                             unsafe_allow_html=True)
