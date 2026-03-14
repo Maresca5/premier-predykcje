@@ -80,11 +80,6 @@ def oblicz_ev(p_model, typ, oh, od, oa):
 
 # ── Pobieranie ─────────────────────────────────────────────────────────────────
 def _wybierz_bukmachera(bookmakers, home_team=""):
-    """
-    Wybiera bukmachera i przypisuje kursy do home/away na podstawie nazwy
-    druzyny domowej z events API (event["home_team"]).
-    nd[0]/nd[1] nie sa posortowane - trzeba dopasowac po nazwie.
-    """
     book_map = {b["key"]: b for b in bookmakers}
     order    = PREFERRED_BOOKS + [k for k in book_map if k not in PREFERRED_BOOKS]
     for key in order:
@@ -97,17 +92,14 @@ def _wybierz_bukmachera(bookmakers, home_team=""):
             draw     = outcomes.get("Draw")
             nd       = [k for k in outcomes if k != "Draw"]
             if len(nd) == 2 and draw:
-                # Dopasuj home po nazwie (case-insensitive, partial match)
                 ht = home_team.lower().strip()
                 n0 = nd[0].lower().strip()
                 n1 = nd[1].lower().strip()
-                # home_team z events API powinien byc jednym z nd[]
                 if ht and (ht == n0 or ht in n0 or n0 in ht):
                     oh, oa = outcomes[nd[0]], outcomes[nd[1]]
                 elif ht and (ht == n1 or ht in n1 or n1 in ht):
                     oh, oa = outcomes[nd[1]], outcomes[nd[0]]
                 else:
-                    # fallback: kolejnosc z API (zwykle home jest pierwszy)
                     oh, oa = outcomes[nd[0]], outcomes[nd[1]]
                 return {"bookmaker": key, "odds_h": oh, "odds_d": draw, "odds_a": oa}
     return None
@@ -220,8 +212,6 @@ def get_usage_stats(db_file):
         return {}
 
 # ── Mapowanie nazw ─────────────────────────────────────────────────────────────
-# Mapowanie: nazwa z Odds API -> nazwa modelu (ta sama co w NAZWY_MAP w app.py)
-# Odds API uzywa pelnych angielskich nazw, model uzywa skroconych z football-data.co.uk
 TEAM_NAME_MAP = {
     # ── PREMIER LEAGUE ───────────────────────────────────────────────────────
     "Manchester City":              "Man City",
@@ -246,6 +236,11 @@ TEAM_NAME_MAP = {
     "Fulham":                       "Fulham",
     "Brentford":                    "Brentford",
     "Southampton":                  "Southampton",
+    "Sunderland":                   "Sunderland",
+    "Leeds United":                 "Leeds",
+    "Burnley":                      "Burnley",
+    "Sheffield United":             "Sheffield United",
+    "Luton Town":                   "Luton",
     # ── LA LIGA ──────────────────────────────────────────────────────────────
     "Athletic Club":                "Ath Bilbao",
     "Athletic Bilbao":              "Ath Bilbao",
@@ -358,7 +353,7 @@ TEAM_NAME_MAP = {
     "Atalanta":                     "Atalanta",
     "Juventus":                     "Juventus",
     # ── LIGUE 1 ──────────────────────────────────────────────────────────────
-       "Paris Saint Germain":          "Paris SG",
+    "Paris Saint Germain":          "Paris SG",
     "Paris Saint-Germain":          "Paris SG",
     "Paris SG":                     "Paris SG",
     "PSG":                          "Paris SG",
@@ -402,66 +397,135 @@ TEAM_NAME_MAP = {
     "Lille OSC":                    "Lille",
     "Lille":                        "Lille",
 }
-_REV_MAP = {v: k for k, v in TEAM_NAME_MAP.items()}
 
-def map_api_to_model(api_name):
+# ── Reverse map: model_name -> [lista wszystkich możliwych nazw API] ──────────
+# POPRAWKA: zamiast {v: k} (który traci duplikaty) budujemy {v: [k1, k2, ...]}
+_REV_MAP_ALL: dict = {}
+for _api_name, _model_name in TEAM_NAME_MAP.items():
+    _REV_MAP_ALL.setdefault(_model_name, []).append(_api_name)
+
+# Płaski dict dla kompatybilności wstecznej (pierwszy klucz)
+_REV_MAP = {v: keys[0] for v, keys in _REV_MAP_ALL.items()}
+
+
+def map_api_to_model(api_name: str) -> str:
     return TEAM_NAME_MAP.get(api_name, api_name)
 
-def _fuzzy_team_match(name: str, candidates: list, cutoff: float = 0.72) -> str:
-    """Dopasowanie fuzzy nazwy drużyny. Zwraca najlepsze dopasowanie lub None."""
+
+def _normalize_fuzzy(s: str) -> str:
+    """Normalizacja do fuzzy match: usuwa akcenty, sufiksy klubowe, znaki specjalne."""
+    import unicodedata, re
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(
+        r"\b(FC|SC|CF|AC|AS|RC|CD|RCD|SL|SS|US|SK|FK|BK|VfB|VfL|SV|FSV|TSG|BSC|"
+        r"RB|KV|KRC|AFC|RFC|GFC|OGC|SM|UD|SD|CP|CA|CR|CE|1\.|04|Stade|Calcio|"
+        r"Hotspur|United|City|Athletic|Albion|Wanderers|County)\b",
+        "", s, flags=re.IGNORECASE)
+    s = re.sub(r"[^\w\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+
+# Cache fuzzy żeby nie liczyć wielokrotnie
+_fuzzy_cache: dict = {}
+
+
+def _fuzzy_team_match(name: str, candidates: list, cutoff: float = 0.72) -> str | None:
+    """Fuzzy matching nazwy drużyny. Zwraca najlepsze trafienie lub None."""
     import difflib
-    name_n = name.lower().strip()
-    # Exact after normalization
-    for c in candidates:
-        if c.lower().strip() == name_n:
-            return c
-    # difflib sequence matching
-    matches = difflib.get_close_matches(name_n, [c.lower() for c in candidates],
-                                        n=1, cutoff=cutoff)
-    if matches:
-        # Return original case
-        for c in candidates:
-            if c.lower() == matches[0]:
-                return c
-    # Token overlap: check if all words of short name are in long name
-    words_n = set(name_n.split())
-    for c in candidates:
-        words_c = set(c.lower().split())
+    if name in _fuzzy_cache:
+        return _fuzzy_cache[name]
+
+    name_l = name.lower().strip()
+    cands_l = [c.lower().strip() for c in candidates]
+
+    # Exact normalized
+    for i, cl in enumerate(cands_l):
+        if cl == name_l:
+            _fuzzy_cache[name] = candidates[i]
+            return candidates[i]
+
+    # difflib bezpośrednio
+    m = difflib.get_close_matches(name_l, cands_l, n=1, cutoff=cutoff)
+    if m:
+        idx = cands_l.index(m[0])
+        _fuzzy_cache[name] = candidates[idx]
+        return candidates[idx]
+
+    # difflib po normalizacji (usuwa FC, akcenty itp.)
+    fn   = _normalize_fuzzy(name)
+    fmap = {_normalize_fuzzy(c): c for c in candidates}
+    m2   = difflib.get_close_matches(fn, list(fmap.keys()), n=1, cutoff=0.55)
+    if m2:
+        result = fmap[m2[0]]
+        _fuzzy_cache[name] = result
+        return result
+
+    # Token overlap: wszystkie słowa krótkiej nazwy zawierają się w długiej
+    words_n = set(name_l.split())
+    for i, cl in enumerate(cands_l):
+        words_c = set(cl.split())
         if words_n and words_n.issubset(words_c):
-            return c
+            _fuzzy_cache[name] = candidates[i]
+            return candidates[i]
         if words_c and words_c.issubset(words_n):
-            return c
+            _fuzzy_cache[name] = candidates[i]
+            return candidates[i]
+
+    _fuzzy_cache[name] = None
     return None
 
 
-def znajdz_kursy(home_model, away_model, cached):
-    # 1. Direct lookup via reverse map
-    home_api = _REV_MAP.get(home_model, home_model)
-    away_api = _REV_MAP.get(away_model, away_model)
-    for hk, ak in [(home_api, away_api), (home_model, away_model)]:
-        if (hk, ak) in cached:
-            return cached[(hk, ak)]
+def znajdz_kursy(home_model: str, away_model: str, cached: dict):
+    """
+    Szuka kursów dla meczu home_model vs away_model w cache z Odds API.
+    
+    Pipeline (od najszybszego do najwolniejszego):
+    1. Bezpośrednie trafienie (model name lub api name)
+    2. Case-insensitive
+    3. Wszystkie możliwe api_names z _REV_MAP_ALL (naprawia bug z PSG)
+    4. map_api_to_model() dla każdego klucza w cached
+    5. Fuzzy matching jako ostateczny fallback
+    """
+    if not cached:
+        return None
 
-    # 2. Case-insensitive
+    # ── Krok 1: Bezpośrednie trafienie ────────────────────────────────────
+    if (home_model, away_model) in cached:
+        return cached[(home_model, away_model)]
+
+    # ── Krok 2: Wszystkie api_names z _REV_MAP_ALL ─────────────────────────
+    # KLUCZOWA POPRAWKA: sprawdzamy WSZYSTKIE możliwe nazwy API (nie tylko ostatnią)
+    home_api_names = _REV_MAP_ALL.get(home_model, [home_model])
+    away_api_names = _REV_MAP_ALL.get(away_model, [away_model])
+    for hk in home_api_names:
+        for ak in away_api_names:
+            if (hk, ak) in cached:
+                return cached[(hk, ak)]
+
+    # ── Krok 3: Case-insensitive ───────────────────────────────────────────
     cl_lower = {(h.lower(), a.lower()): v for (h, a), v in cached.items()}
-    for hk, ak in [(home_api.lower(), away_api.lower()),
-                   (home_model.lower(), away_model.lower())]:
-        if (hk, ak) in cl_lower:
-            return cl_lower[(hk, ak)]
+    for hk in home_api_names + [home_model]:
+        for ak in away_api_names + [away_model]:
+            if (hk.lower(), ak.lower()) in cl_lower:
+                return cl_lower[(hk.lower(), ak.lower())]
 
-    # 3. Map API names to model names
+    # ── Krok 4: map_api_to_model() dla każdego klucza w cached ────────────
     for (h, a), v in cached.items():
         if map_api_to_model(h) == home_model and map_api_to_model(a) == away_model:
             return v
 
-    # 4. Fuzzy fallback – last resort
+    # ── Krok 5: Fuzzy matching jako ostatni ratunek ─────────────────────────
     all_homes = list({h for (h, _) in cached})
     all_aways = list({a for (_, a) in cached})
-    for search_h in [home_model, home_api]:
+
+    for search_h in [home_model] + home_api_names:
         fh = _fuzzy_team_match(search_h, all_homes)
         if fh:
-            for search_a in [away_model, away_api]:
+            for search_a in [away_model] + away_api_names:
                 fa = _fuzzy_team_match(search_a, all_aways)
                 if fa and (fh, fa) in cached:
                     return cached[(fh, fa)]
+
     return None
