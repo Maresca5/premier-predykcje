@@ -4081,21 +4081,21 @@ if not historical.empty:
                                             "🚌 Bus Parker":       "#6b7280",
                                             "🛡️ Aktywna obrona":  "#06b6d4",
                                         }
-                                        for _tg in _h_tags_q:
-                                            if _tg == "⚖️ Balanced": continue
-                                            _tc = _tag_c_map.get(_tg, "#6b7280")
+                                        for _dtag in _h_tags_q:
+                                            if _dtag == "⚖️ Balanced": continue
+                                            _dtc = _tag_c_map.get(_dtag, "#6b7280")
                                             _dna_pills.append((
-                                                f"{_tg}",
+                                                f"{_dtag}",
                                                 f"{h[:9]}",
-                                                _tc
+                                                _dtc
                                             ))
-                                        for _tg in _a_tags_q:
-                                            if _tg == "⚖️ Balanced": continue
-                                            _tc = _tag_c_map.get(_tg, "#6b7280")
+                                        for _dtag in _a_tags_q:
+                                            if _dtag == "⚖️ Balanced": continue
+                                            _dtc = _tag_c_map.get(_dtag, "#6b7280")
                                             _dna_pills.append((
-                                                f"{_tg}",
+                                                f"{_dtag}",
                                                 f"{a[:9]}",
-                                                _tc
+                                                _dtc
                                             ))
 
                                         # Kartki — jeśli matchup ≥15% powyżej średniej
