@@ -396,6 +396,61 @@ def normalize_name(name: str) -> str:
         name = name.replace(suffix, "")
     return name.strip()
 
+def _fuzzy_normalize(s: str) -> str:
+    """Agresywna normalizacja do fuzzy matchingu — usuwa akcenty, sufiksy klubowe, znaki specjalne."""
+    import unicodedata as _ud, re as _re
+    s = _ud.normalize("NFD", s)
+    s = "".join(c for c in s if _ud.category(c) != "Mn")
+    s = _re.sub(
+        r"\b(FC|SC|CF|AC|AS|RC|CD|RCD|SL|SS|US|SK|FK|BK|VfB|VfL|SV|FSV|TSG|BSC|"
+        r"RB|KV|KRC|AFC|RFC|GFC|OGC|SM|UD|SD|CP|CA|CR|CE|1\.|04|Stade)\b",
+        "", s, flags=_re.IGNORECASE)
+    s = _re.sub(r"[^\w\s]", " ", s)
+    s = _re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+# Cache fuzzy: {znormalizowana_nazwa_obca: dopasowana_wartość_z_NAZWY_MAP}
+_niezmapowane: set = set()
+_fuzzy_cache: dict = {}
+
+def map_nazwa(nazwa: str) -> str:
+    if not isinstance(nazwa, str):
+        return str(nazwa)
+    # 1. Bezpośrednie trafienie
+    if nazwa in NAZWY_MAP:
+        return NAZWY_MAP[nazwa]
+    # 2. Uproszczone porównanie (bez spacji/myślników)
+    def _uproszcz(s):
+        return s.replace(" ", "").replace("-", "").replace("'", "").lower()
+    _u = _uproszcz(nazwa)
+    for key, val in NAZWY_MAP.items():
+        if _uproszcz(key) == _u:
+            return val
+    # 3. normalize_name fallback
+    znorm = normalize_name(nazwa)
+    if znorm in NAZWY_MAP:
+        return NAZWY_MAP[znorm]
+    # 4. Fuzzy matching jako auto-fallback (difflib)
+    if nazwa in _fuzzy_cache:
+        return _fuzzy_cache[nazwa]
+    from difflib import get_close_matches as _gcm
+    _all_values = list(set(NAZWY_MAP.values()))
+    # Próba bezpośrednia
+    _m = _gcm(nazwa, _all_values, n=1, cutoff=0.72)
+    if not _m:
+        # Próba po normalizacji (usuwa FC, akcenty itp.)
+        _fn  = _fuzzy_normalize(nazwa)
+        _fvs = {_fuzzy_normalize(v): v for v in _all_values}
+        _m2  = _gcm(_fn, list(_fvs.keys()), n=1, cutoff=0.55)
+        if _m2:
+            _m = [_fvs[_m2[0]]]
+    if _m:
+        _fuzzy_cache[nazwa] = _m[0]
+        return _m[0]
+    # 5. Nie znaleziono — loguj i zwróć oryginalną
+    _niezmapowane.add(nazwa)
+    return nazwa
+
 NAZWY_MAP = {
     # ══════════════════════════════════════════════════════
     # PREMIER LEAGUE 2025/26
@@ -657,23 +712,7 @@ NAZWY_MAP = {
 }
 
 
-_niezmapowane: set = set()
 
-def map_nazwa(nazwa: str) -> str:
-    if not isinstance(nazwa, str):
-        return str(nazwa)
-    if nazwa in NAZWY_MAP:
-        return NAZWY_MAP[nazwa]
-    def uproszcz(s):
-        return s.replace(" ", "").replace("-", "").replace("'", "").lower()
-    for key, val in NAZWY_MAP.items():
-        if uproszcz(key) == uproszcz(nazwa):
-            return val
-    znorm = normalize_name(nazwa)
-    if znorm in NAZWY_MAP:
-        return NAZWY_MAP[znorm]
-    _niezmapowane.add(nazwa)
-    return nazwa
 
 # ===========================================================================
 # BAZA DANYCH – NOWA STRUKTURA
