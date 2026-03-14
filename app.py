@@ -5679,6 +5679,54 @@ if not historical.empty:
                     df_rank = df_rank[df_rank["Kategoria"] != "1X2"]
                 # else: Wszystkie - df_rank bez zmian
 
+                # ── TOP PICKS – esencja dla "30-sekundowego użytkownika" ─────
+                _top_src = df_rank[
+                    (df_rank["EV"] >= 0.04) &
+                    (df_rank["P"] >= PROG_PEWNY) &
+                    (df_rank["Kelly_stake"].notna()) &
+                    (df_rank["Kelly_stake"] > 0)
+                ].sort_values("EV", ascending=False).head(3)
+
+                if not _top_src.empty:
+                    _tp_html = ""
+                    for _, _tr in _top_src.iterrows():
+                        _tp_ev   = _tr["EV"]
+                        _tp_p    = _tr["P"]
+                        _tp_fair = _tr["KursBuk"] or _tr["Fair"]
+                        _tp_kel  = _tr["Kelly_stake"]
+                        _tp_typ  = _tr["Typ"]
+                        _tp_mecz = _tr["Mecz"]
+                        _tp_kat  = _tr["Kategoria"]
+                        _tp_ev_c = "#4CAF50" if _tp_ev >= 0.08 else "#FF9800"
+                        _tp_unv  = _tr.get("Kelly_unverified", False)
+                        _tp_kurs_lbl = f"{_tp_fair:.2f}" if _tp_fair else "–"
+                        _tp_html += (
+                            f"<div style='background:linear-gradient(135deg,#052010,#041a0c);"
+                            f"border:1px solid {_tp_ev_c}44;border-left:3px solid {_tp_ev_c};"
+                            f"border-radius:8px;padding:8px 12px;margin-bottom:6px;"
+                            f"display:flex;justify-content:space-between;align-items:center;gap:8px'>"
+                            f"<div style='flex:1;min-width:0'>"
+                            f"<div style='font-size:0.72em;color:#6b7280;margin-bottom:1px'>"
+                            f"{_tp_mecz} · <span style='color:#aaa'>{_tp_kat}</span></div>"
+                            f"<div style='font-size:0.9em;font-weight:700;color:#e2e8f0'>{_tp_typ}</div>"
+                            f"</div>"
+                            f"<div style='text-align:right;flex-shrink:0'>"
+                            f"<div style='font-size:1.0em;font-weight:800;color:{_tp_ev_c}'>EV {_tp_ev:+.1%}</div>"
+                            f"<div style='font-size:0.72em;color:#6b7280'>"
+                            f"p={_tp_p:.0%} · {'✦' if _tp_unv else ''}{_tp_kurs_lbl} · "
+                            f"<span style='color:#4CAF50'>{_tp_kel:.0f} zł</span></div>"
+                            f"</div></div>"
+                        )
+                    st.markdown(
+                        f"<div style='background:#021a08;border:1px solid #4CAF5033;"
+                        f"border-radius:10px;padding:10px 12px;margin-bottom:14px'>"
+                        f"<div style='font-size:0.68em;color:#4CAF50;font-weight:700;"
+                        f"letter-spacing:.08em;margin-bottom:8px'>🏆 TOP PICKS KOLEJKI</div>"
+                        + _tp_html +
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
                 st.markdown("### 🔥 Value Bets kolejki")
                 st.caption(f"Wszystkie zdarzenia z EV > 0 · posortowane wg EV · limit {MAX_EXPOSURE_PCT:.0%}/mecz")
 
@@ -5807,6 +5855,22 @@ if not historical.empty:
                             _fw_html = (
                                 f"<div style='font-size:0.74em;color:#FF5722;margin-top:3px'>"
                                 f"⚠️ Forma vs model: {_fw}</div>")
+
+                        # ── High EV + High Chaos warning ────────────────────
+                        _chaos_warn_html = ""
+                        _vb_ev_val = float(row["EV"]) if row["EV"] else 0
+                        _vb_p_val  = float(row["P"])  if row["P"]  else 0
+                        # Chaos przybliżamy z p_typ — niskie p = chaos
+                        # entropy wysoka gdy p_home ≈ p_draw ≈ p_away
+                        # Proxy: jeśli p < 0.62 i EV > 0.08 = podejrzanie dobry deal
+                        _vb_is_high_ev    = _vb_ev_val >= 0.08
+                        _vb_is_uncertain  = _vb_p_val < 0.62
+                        if _vb_is_high_ev and _vb_is_uncertain:
+                            _chaos_warn_html = (
+                                f"<div style='font-size:0.74em;color:#f97316;margin-top:3px;"
+                                f"background:#f9731610;border-radius:4px;padding:2px 6px'>"
+                                f"⚠️ Wysokie EV, ale model niepewny (p={_vb_p_val:.0%}) — zweryfikuj skład</div>"
+                            )
                         _typ_badge_color = {"1":"#1b5e20","X":"#4a3000","2":"#0d2a4a"}.get(row["Typ"],"#1a1a2e")
                         _typ_text_color  = {"1":"#4CAF50","X":"#FFC107","2":"#42a5f5"}.get(row["Typ"],"#aaa")
                         st.markdown(
@@ -5831,6 +5895,9 @@ if not historical.empty:
                             # Wiersz 3: marża bukmachera
                             f"{_margin_html}"
                             f"{_lm_html}"
+                            f"{_fw_html}"
+                            f"{_chaos_warn_html}"
+                            f"{_form_html}"
                             f"</div>",
                             unsafe_allow_html=True)
                 else:
