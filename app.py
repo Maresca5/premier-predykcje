@@ -3794,12 +3794,11 @@ if not historical.empty:
             st.markdown("---")
 
     # TABS
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "⚽ Mecze",
         "📊 Value Bets",
         "🔬 Deep Data",
         "📈 Skuteczność",
-        "🎛️ Lab",
         "🌍 Multi-Liga",
         "🧪 Backtest",
     ])
@@ -4051,6 +4050,120 @@ if not historical.empty:
                                         f"<span style='color:#4CAF50'>{sot_info}</span></div>",
                                         unsafe_allow_html=True,
                                     )
+
+                                    # ── Match DNA strip ───────────────────────────────────────────
+                                    # Kompaktowe sygnały wyróżniające ten mecz vs średnią ligową
+                                    # Pojawia się tylko gdy są istotne odchylenia — nie zaśmieca widoku
+                                    try:
+                                        _ctx_q = oblicz_kontekst_meczu(h, a, historical, _sbn) \
+                                            if not historical.empty else {}
+                                        _hs_q  = _ctx_q.get("h_stats", {})
+                                        _as_q  = _ctx_q.get("a_stats", {})
+
+                                        # Liga avg jako punkt odniesienia
+                                        _lig_yc = (historical["HY"].mean() + historical["AY"].mean()) \
+                                            if "HY" in historical.columns else 3.8
+                                        _lig_co = (historical["HC"].mean() + historical["AC"].mean()) \
+                                            if "HC" in historical.columns else 9.8
+                                        _lig_fo = (historical["HF"].mean() + historical["AF"].mean()) \
+                                            if "HF" in historical.columns else 21.5
+
+                                        _dna_pills = []
+
+                                        # Styl gry — tagi (max 2, po jednym na drużynę)
+                                        _h_tags_q = _hs_q.get("style_tags", [])
+                                        _a_tags_q = _as_q.get("style_tags", [])
+                                        _tag_c_map = {
+                                            "🟥 Hot Heads":        "#ef4444",
+                                            "🎭 Foul Magnet":      "#f97316",
+                                            "📐 Corner Machine":   "#3b82f6",
+                                            "🎯 Central Attackers":"#8b5cf6",
+                                            "🚌 Bus Parker":       "#6b7280",
+                                            "🛡️ Aktywna obrona":  "#06b6d4",
+                                        }
+                                        for _tg in _h_tags_q:
+                                            if _tg == "⚖️ Balanced": continue
+                                            _tc = _tag_c_map.get(_tg, "#6b7280")
+                                            _dna_pills.append((
+                                                f"{_tg}",
+                                                f"{h[:9]}",
+                                                _tc
+                                            ))
+                                        for _tg in _a_tags_q:
+                                            if _tg == "⚖️ Balanced": continue
+                                            _tc = _tag_c_map.get(_tg, "#6b7280")
+                                            _dna_pills.append((
+                                                f"{_tg}",
+                                                f"{a[:9]}",
+                                                _tc
+                                            ))
+
+                                        # Kartki — jeśli matchup ≥15% powyżej średniej
+                                        _lam_yc_q = _ctx_q.get("lambda_yc_adj") or _ctx_q.get("lambda_yc")
+                                        if _lam_yc_q and _lig_yc > 0:
+                                            _yc_diff_pct = (_lam_yc_q - _lig_yc) / _lig_yc
+                                            if _yc_diff_pct >= 0.15:
+                                                _dna_pills.append((f"🟨 +{_yc_diff_pct:.0%} kartki", f"λ={_lam_yc_q:.1f}", "#f59e0b"))
+                                            elif _yc_diff_pct <= -0.15:
+                                                _dna_pills.append((f"🟨 {_yc_diff_pct:.0%} kartki", f"λ={_lam_yc_q:.1f}", "#6b7280"))
+
+                                        # Rożne — Pressure Tolerance matchup
+                                        _exp_co_q  = _ctx_q.get("exp_co_pt_total")
+                                        _lam_co_q  = _ctx_q.get("lambda_co")
+                                        _ref_co    = _exp_co_q or _lam_co_q
+                                        if _ref_co and _lig_co > 0:
+                                            _co_diff_pct = (_ref_co - _lig_co) / _lig_co
+                                            if _co_diff_pct >= 0.15:
+                                                _dna_pills.append((f"🚩 +{_co_diff_pct:.0%} rożne", f"exp={_ref_co:.1f}", "#3b82f6"))
+                                            elif _co_diff_pct <= -0.15:
+                                                _dna_pills.append((f"🚩 {_co_diff_pct:.0%} rożne", f"exp={_ref_co:.1f}", "#6b7280"))
+
+                                        # H2H gorące
+                                        _h2hs_q = _ctx_q.get("h2h_stats", {})
+                                        if _h2hs_q.get("hot_rivalry"):
+                                            _dna_pills.append((f"🔥 Gorące H2H", f"avg {_h2hs_q['avg_cards']:.1f}🟨", "#ef4444"))
+
+                                        # CLASH alert
+                                        if _ctx_q.get("clash_alert"):
+                                            _dna_pills.append(("⚔️ Foul Clash", f"+{_ctx_q['clash_vs_avg']:.0f}%", "#ef4444"))
+
+                                        # Home fortress lub travel team
+                                        _h_ha_q = _ctx_q.get("h_ha") or {}
+                                        _h_adv_q = _h_ha_q.get("home_adv")
+                                        if _h_adv_q and _h_adv_q > 0.7:
+                                            _dna_pills.append(("🏰 Twierdza", f"+{_h_adv_q:.2f}ppg", "#22c55e"))
+                                        elif _h_adv_q and _h_adv_q < -0.2:
+                                            _dna_pills.append(("✈️ Lepszy wyjazdowo", f"{_h_adv_q:+.2f}ppg", "#f97316"))
+
+                                        # Volatility warning
+                                        if _ctx_q.get("vol_warning_yc"):
+                                            _dna_pills.append(("⚠️ Zmienny", f"CV={_ctx_q.get('vol_yc_matchup', 0):.2f}", "#f97316"))
+
+                                        if _dna_pills:
+                                            _pills_html = "".join([
+                                                f"<span title='{sub}' style='"
+                                                f"background:{col}18;border:1px solid {col}55;"
+                                                f"border-radius:20px;padding:2px 8px;margin:2px;"
+                                                f"font-size:0.68em;color:{col};font-weight:600;"
+                                                f"display:inline-flex;align-items:center;gap:4px;"
+                                                f"white-space:nowrap'>"
+                                                f"{label}"
+                                                f"<span style='opacity:0.65;font-size:0.85em'>{sub}</span>"
+                                                f"</span>"
+                                                for label, sub, col in _dna_pills[:7]
+                                            ])
+                                            st.markdown(
+                                                f"<div style='margin:6px 0 4px;display:flex;"
+                                                f"flex-wrap:wrap;gap:2px;align-items:center'>"
+                                                f"<span style='font-size:0.62em;color:#374151;"
+                                                f"text-transform:uppercase;letter-spacing:.08em;"
+                                                f"margin-right:2px;flex-shrink:0'>DNA</span>"
+                                                + _pills_html +
+                                                f"</div>",
+                                                unsafe_allow_html=True
+                                            )
+                                    except Exception:
+                                        pass
 
                                     # Kursy live + Strefa Decyzji z Gauge
                                     _kurs_live_1x2 = None
@@ -5990,42 +6103,6 @@ if not historical.empty:
                                file_name="power_rankings.csv", mime="text/csv")
 
             st.divider()
-            if not sedziowie_df.empty:
-                st.markdown("### 🟨 Profile Sędziów")
-                st.caption("Historyczny profil sędziów – średnia kartek i goli per mecz. Dane dostępne tylko dla Premier League.")
-                df_sed = sedziowie_df.sort_values("_tot_k", ascending=False).head(20)
-                W_sed, H_sed, P_sed = 620, max(200, len(df_sed)*28+60), 160
-                max_k = df_sed["_tot_k"].max() if not df_sed.empty else 1
-                bars_sed = []
-                for i, (_, sr) in enumerate(df_sed.iterrows()):
-                    y_s = P_sed//3 + i*28
-                    blen_s = sr["_tot_k"] / max_k * (W_sed - P_sed - 20)
-                    k_col  = "#F44336" if sr["_tot_k"] > 5 else ("#FF9800" if sr["_tot_k"] > 3.5 else "#4CAF50")
-                    bars_sed.append(
-                        f"<rect x='{P_sed}' y='{y_s+6}' width='{blen_s:.0f}' height='14' "
-                        f"fill='{k_col}' fill-opacity='0.8' rx='3'/>"
-                        f"<text x='{P_sed-5}' y='{y_s+17}' text-anchor='end' "
-                        f"font-size='9' fill='#aaa' font-family='sans-serif'>{str(sr['Sędzia'])[:22]}</text>"
-                        f"<text x='{P_sed+blen_s+4:.0f}' y='{y_s+17}' "
-                        f"font-size='9' fill='{k_col}' font-family='sans-serif' font-weight='bold'>"
-                        f"{sr['Total Kart/M ↓']:.1f} ({sr['Meczów']}M)</text>"
-                    )
-                svg_sed = (
-                    f'<svg width="{W_sed}" height="{H_sed}" '
-                    f'style="background:var(--stat-bg);border-radius:8px;display:block;margin:auto">'
-                    f'<text x="{W_sed//2}" y="18" text-anchor="middle" '
-                    f'font-size="11" fill="#888" font-family="sans-serif">Całkowite kartki/mecz (Y+2R)</text>'
-                    f'{"".join(bars_sed)}</svg>'
-                )
-                st.markdown(svg_sed, unsafe_allow_html=True)
-
-                display_cols_sed = [c for c in ["Sędzia","Meczów","Kartki Y/M","Kartki R/M",
-                                                  "Total Kart/M ↓","Gole/M"] if c in sedziowie_df.columns]
-                st.dataframe(df_sed[display_cols_sed].reset_index(drop=True),
-                             use_container_width=True, hide_index=True)
-            else:
-                st.info("Brak kolumny 'Referee' w danych – profil sędziów niedostępny dla tej ligi.")
-        else:
             st.warning("Brak wystarczających danych do Power Rankings.")
 
     # =========================================================================
@@ -7314,332 +7391,11 @@ if not historical.empty:
             except Exception as _e_vd:
                 st.caption(f"Value Distribution: {_e_vd}")
 
-            # =========================================================================
-            # TAB 5 – LABORATORIUM (Bet Builder)
-            # =========================================================================
+    # =========================================================================
+    # =========================================================================
+    # TAB 5 – MULTI-LIGA GLOBAL DASHBOARD
+    # =========================================================================
     with tab5:
-        st.subheader("🎛️ Laboratorium modelu")
-
-        _lab_t1, = st.tabs(["🧱 Bet Builder"])
-
-        # ═══════════════════════════════════════════════════════════════════
-        with _lab_t1:
-            st.markdown(
-                "<div style='background:var(--hero-bg);border:1px solid #2a5a2a;border-radius:8px;"
-                "padding:10px 14px;margin-bottom:14px'>"
-                "<div style='font-size:0.88em;color:#4CAF50;font-weight:700;margin-bottom:4px'>"
-                "🧱 Bet Builder – Kombinator Poissona</div>"
-                "<div style='font-size:0.80em;color:#6b7280'>"
-                "Prawdopodobieństwa są obliczane z macierzy dokładnych wyników (Dixon-Coles), "
-                "a nie przez mnożenie niezależnych zdarzeń. Daje to realne Fair Odds "
-                "uwzględniające korelacje wewnątrz meczu."
-                "</div></div>",
-                unsafe_allow_html=True)
-
-            if not schedule.empty and not srednie_df.empty:
-                _bb_mecze_list = []
-                _bb_kol = get_current_round(schedule)
-                _bb_mecze_df = schedule[schedule["round"] == _bb_kol]
-                for _, _bm in _bb_mecze_df.iterrows():
-                    _bh = map_nazwa(_bm["home_team"])
-                    _ba = map_nazwa(_bm["away_team"])
-                    if _bh in srednie_df.index and _ba in srednie_df.index:
-                        _bb_mecze_list.append(f"{_bh} vs {_ba}")
-
-                if not _bb_mecze_list:
-                    st.info("Brak meczów z danymi w bieżącej kolejce.")
-                else:
-                    _bb_sel = st.selectbox("⚽ Wybierz mecz", _bb_mecze_list, key="_bb_mecz_sel")
-                    _bb_h_raw, _bb_a_raw = _bb_sel.split(" vs ", 1)
-                    _bb_h, _bb_a = _bb_h_raw.strip(), _bb_a_raw.strip()
-
-                    # Oblicz lambdy i macierz
-                    _bb_lh, _bb_la, _bb_lr, _bb_lk, _bb_sot, _bb_lsot = oblicz_lambdy(
-                        _bb_h, _bb_a, srednie_df, srednie_lig, forma_dict,
-                        csv_code=LIGI[wybrana_liga]["csv_code"])
-                    _bb_pred = predykcja_meczu(_bb_lh, _bb_la, rho=rho,
-                                               csv_code=LIGI[wybrana_liga]["csv_code"],
-                                               n_train=n_biezacy)
-                    _bb_macierz = _bb_pred["macierz"]  # dict {(h_gole, a_gole): prob}
-
-                    st.markdown(
-                        f"<div style='display:flex;justify-content:space-around;"
-                        f"background:#111827;border-radius:8px;padding:8px 4px;margin:8px 0'>"
-                        f"<div style='text-align:center'>"
-                        f"<div style='font-size:0.65em;color:#555'>λ {_bb_h[:10]}</div>"
-                        f"<div style='font-size:1em;font-weight:700;color:#4CAF50'>{_bb_lh:.2f}</div></div>"
-                        f"<div style='text-align:center'>"
-                        f"<div style='font-size:0.65em;color:#555'>1 · X · 2</div>"
-                        f"<div style='font-size:0.9em;font-weight:700;color:#aaa'>"
-                        f"{_bb_pred['p_home']:.0%} · {_bb_pred['p_draw']:.0%} · {_bb_pred['p_away']:.0%}</div></div>"
-                        f"<div style='text-align:center'>"
-                        f"<div style='font-size:0.65em;color:#555'>λ {_bb_a[:10]}</div>"
-                        f"<div style='font-size:1em;font-weight:700;color:#2196F3'>{_bb_la:.2f}</div></div>"
-                        f"</div>",
-                        unsafe_allow_html=True)
-
-                    st.markdown("#### ⚙️ Wybierz zdarzenia do kombinacji")
-
-                    # Sekcja 1: 1X2 + gole
-                    _bb_c1, _bb_c2, _bb_c3 = st.columns(3)
-                    _bb_wynik = _bb_c1.selectbox("Wynik meczu", ["(brak)", "1 – Wygrana dom.", "X – Remis", "2 – Wygrana gość", "1X – Dom lub remis", "X2 – Remis lub gość"], key="_bb_wynik")
-                    _bb_gole_typ = _bb_c2.selectbox("Gole (łącznie)", ["(brak)", "Over 0.5", "Over 1.5", "Over 2.5", "Over 3.5", "Under 1.5", "Under 2.5", "Under 3.5"], key="_bb_gole")
-                    _bb_btts = _bb_c3.selectbox("BTTS", ["(brak)", "BTTS – Tak", "BTTS – Nie"], key="_bb_btts")
-
-                    _bb_c4, _bb_c5 = st.columns(2)
-                    _bb_dom_gole = _bb_c4.selectbox(f"Gole {_bb_h[:12]}", ["(brak)", "Over 0.5", "Over 1.5", "Over 2.5", "Under 0.5", "Under 1.5"], key="_bb_dom_g")
-                    _bb_gos_gole = _bb_c5.selectbox(f"Gole {_bb_a[:12]}", ["(brak)", "Over 0.5", "Over 1.5", "Over 2.5", "Under 0.5", "Under 1.5"], key="_bb_gos_g")
-
-                    # Rożne i kartki – niezależne od macierzy Poissona (Poisson osobny)
-                    _bb_c6, _bb_c7 = st.columns(2)
-                    _bb_rozne = _bb_c6.selectbox("Rożne (łącznie)", ["(brak)", "Over 7.5", "Over 8.5", "Over 9.5", "Over 10.5", "Under 7.5", "Under 8.5", "Under 9.5"], key="_bb_rozne")
-                    _bb_kartki = _bb_c7.selectbox("Kartki (łącznie)", ["(brak)", "Over 1.5", "Over 2.5", "Over 3.5", "Over 4.5", "Under 1.5", "Under 2.5", "Under 3.5"], key="_bb_kartki")
-
-                    # Opcjonalny kurs bukmachera
-                    _bb_kurs_buk = st.number_input("Kurs bukmachera (opcjonalnie)", min_value=1.01, max_value=100.0, value=2.00, step=0.05, key="_bb_kurs", help="Wpisz kurs z Bet Buildera żeby sprawdzić wartość")
-
-                    # ── Oblicz p z macierzy Poissona ─────────────────────────
-                    # M jest np.ndarray gdzie M[hg][ag] = p(home=hg, away=ag)
-                    def _bb_p_from_matrix(M_arr, condition_fn):
-                        """Sumuje p z macierzy ndarray dla wyników spełniających warunek."""
-                        total = 0.0
-                        for hg in range(M_arr.shape[0]):
-                            for ag in range(M_arr.shape[1]):
-                                if condition_fn(hg, ag):
-                                    total += M_arr[hg, ag]
-                        return total
-
-                    _conditions = []
-                    _labels = []
-                    # Zdarzenia niezależne od macierzy (rożne, kartki) – Poisson osobny
-                    _bb_indep_ps = []  # (label, p) dla rożnych/kartek
-
-                    # 1X2
-                    if _bb_wynik != "(brak)":
-                        if _bb_wynik.startswith("1 –"):
-                            _conditions.append(lambda hg, ag: hg > ag)
-                        elif _bb_wynik.startswith("X –"):
-                            _conditions.append(lambda hg, ag: hg == ag)
-                        elif _bb_wynik.startswith("2 –"):
-                            _conditions.append(lambda hg, ag: ag > hg)
-                        elif _bb_wynik.startswith("1X"):
-                            _conditions.append(lambda hg, ag: hg >= ag)
-                        elif _bb_wynik.startswith("X2"):
-                            _conditions.append(lambda hg, ag: ag >= hg)
-                        _labels.append(_bb_wynik)
-
-                    # Gole łącznie
-                    if _bb_gole_typ != "(brak)":
-                        _gt_over = "Over" in _bb_gole_typ
-                        _gt_line = float(_bb_gole_typ.split()[1])
-                        if _gt_over:
-                            _conditions.append(lambda hg, ag, l=_gt_line: (hg + ag) > l)
-                        else:
-                            _conditions.append(lambda hg, ag, l=_gt_line: (hg + ag) < l)
-                        _labels.append(_bb_gole_typ)
-
-                    # BTTS
-                    if _bb_btts != "(brak)":
-                        if "Tak" in _bb_btts:
-                            _conditions.append(lambda hg, ag: hg > 0 and ag > 0)
-                        else:
-                            _conditions.append(lambda hg, ag: hg == 0 or ag == 0)
-                        _labels.append(_bb_btts)
-
-                    # Gole dom
-                    if _bb_dom_gole != "(brak)":
-                        _dg_over = "Over" in _bb_dom_gole
-                        _dg_line = float(_bb_dom_gole.split()[1])
-                        if _dg_over:
-                            _conditions.append(lambda hg, ag, l=_dg_line: hg > l)
-                        else:
-                            _conditions.append(lambda hg, ag, l=_dg_line: hg < l)
-                        _labels.append(f"{_bb_h[:10]} {_bb_dom_gole}")
-
-                    # Gole gość
-                    if _bb_gos_gole != "(brak)":
-                        _gg_over = "Over" in _bb_gos_gole
-                        _gg_line = float(_bb_gos_gole.split()[1])
-                        if _gg_over:
-                            _conditions.append(lambda hg, ag, l=_gg_line: ag > l)
-                        else:
-                            _conditions.append(lambda hg, ag, l=_gg_line: ag < l)
-                        _labels.append(f"{_bb_a[:10]} {_bb_gos_gole}")
-
-                    # Rożne – Poisson niezależny od macierzy goli
-                    if _bb_rozne != "(brak)":
-                        _rz_over = "Over" in _bb_rozne
-                        _rz_line = float(_bb_rozne.split()[1])
-                        _rz_p = oblicz_p("Over" if _rz_over else "Under", _rz_line, _bb_lr)
-                        _bb_indep_ps.append((f"Rożne {_bb_rozne}", _rz_p))
-
-                    # Kartki – Poisson niezależny
-                    if _bb_kartki != "(brak)":
-                        _kk_over = "Over" in _bb_kartki
-                        _kk_line = float(_bb_kartki.split()[1])
-                        _kk_p = oblicz_p("Over" if _kk_over else "Under", _kk_line, _bb_lk)
-                        _bb_indep_ps.append((f"Kartki {_bb_kartki}", _kk_p))
-
-                    if not _conditions and not _bb_indep_ps:
-                        st.info("Wybierz co najmniej jedno zdarzenie aby obliczyć kurs.")
-                    else:
-                        # P z macierzy goli (zdarzenia skorelowane)
-                        if _conditions:
-                            def _all_conds(hg, ag):
-                                return all(c(hg, ag) for c in _conditions)
-                            _bb_p_matrix = _bb_p_from_matrix(_bb_macierz, _all_conds)
-                        else:
-                            _bb_p_matrix = 1.0
-
-                        # P rożnych i kartek (niezależne od macierzy goli, mnożone)
-                        _bb_p_indep = 1.0
-                        for _, _pi in _bb_indep_ps:
-                            _bb_p_indep *= _pi
-
-                        # Finalne combo: macierz * niezależne
-                        _bb_p_combo = _bb_p_matrix * _bb_p_indep
-                        _bb_fair    = 1 / _bb_p_combo if _bb_p_combo > 0.001 else 999
-                        _bb_ev      = _bb_p_combo * (_bb_kurs_buk - 1) - (1 - _bb_p_combo)
-                        _bb_ev_c    = "#4CAF50" if _bb_ev > 0 else ("#FF9800" if _bb_ev > -0.05 else "#F44336")
-
-                        # Dla porównania: błędna metoda (wszystko mnożone niezależnie)
-                        _bb_p_ind_all = _bb_p_indep
-                        for _cond, _lbl in zip(_conditions, _labels):
-                            _bb_p_ind_all *= _bb_p_from_matrix(_bb_macierz, _cond)
-                        _bb_fair_ind = 1 / _bb_p_ind_all if _bb_p_ind_all > 0.001 else 999
-
-                        # Wszystkie zdarzenia z p dla tabeli (label, p, źródło)
-                        _bb_all_ps = []
-                        for _cond, _lbl in zip(_conditions, _labels):
-                            _p_i = _bb_p_from_matrix(_bb_macierz, _cond)
-                            _bb_all_ps.append((_lbl, _p_i, "🔗 Poisson"))
-                        for _lbl, _pi in _bb_indep_ps:
-                            _bb_all_ps.append((_lbl, _pi, "⚡ niezależne"))
-
-                        # ── Wskaźnik korelacji (edukacyjny) ──────────────────
-                        _corr_diff = _bb_p_combo - _bb_p_ind_all
-                        _n_events  = len(_bb_all_ps)
-                        if abs(_corr_diff) < 0.005 or _n_events < 2:
-                            _corr_label = "Neutralna"
-                            _corr_ico   = "⚪"
-                            _corr_c     = "var(--text-dim)"
-                            _corr_bg    = "var(--bg-card2)"
-                            _corr_bdr   = "var(--border)"
-                            _corr_tip   = ("Zdarzenia praktycznie niezależne – bukmacher "
-                                           "mnoży kursy poprawnie.")
-                        elif _corr_diff > 0:
-                            _corr_label = f"Pozytywna (+{_corr_diff:.1%})"
-                            _corr_ico   = "🟢"
-                            _corr_c     = "#4CAF50"
-                            _corr_bg    = "#0a1a0a"
-                            _corr_bdr   = "#2e7d32"
-                            _corr_tip   = (f"Model liczy combo o {_corr_diff:.1%} wyżej niż mnożenie. "
-                                           "Zdarzenia idą razem częściej niż losowo — "
-                                           "bukmacher NIEDOSZACUJE Twój kurs.")
-                        else:
-                            _corr_label = f"Negatywna ({_corr_diff:.1%})"
-                            _corr_ico   = "🔴"
-                            _corr_c     = "#F44336"
-                            _corr_bg    = "#1a0a0a"
-                            _corr_bdr   = "#c62828"
-                            _corr_tip   = (f"Model liczy combo o {abs(_corr_diff):.1%} niżej niż mnożenie. "
-                                           "Zdarzenia wykluczają się częściej niż losowo — "
-                                           "bukmacher PRZESZACUJE Twój kurs.")
-                        if _n_events >= 2:
-                            st.markdown(
-                                f"<div style='background:{_corr_bg};border:1px solid {_corr_bdr};"
-                                f"border-radius:8px;padding:8px 14px;margin:8px 0;"
-                                f"display:flex;align-items:center;gap:12px'>"
-                                f"<div style='font-size:1.4em'>{_corr_ico}</div>"
-                                f"<div>"
-                                f"<div style='font-size:0.80em;font-weight:700;color:{_corr_c}'>"
-                                f"Korelacja zdarzeń: {_corr_label}</div>"
-                                f"<div style='font-size:0.74em;color:var(--text-muted);margin-top:2px'>"
-                                f"{_corr_tip}</div>"
-                                f"</div></div>",
-                                unsafe_allow_html=True)
-
-                        st.markdown("---")
-                        st.markdown("#### 📊 Wynik analizy")
-
-                        # Tabela indywidualnych zdarzeń
-                        _bb_rows = "".join([
-                            f"<tr>"
-                            f"<td style='padding:6px 10px;font-size:0.85em;color:var(--text-secondary)'>{_lbl}</td>"
-                            f"<td style='padding:6px 8px;text-align:center;font-size:0.72em;color:var(--text-dim)'>{_src}</td>"
-                            f"<td style='padding:6px 10px;text-align:right;font-weight:700;color:var(--accent)'>{_pi:.1%}</td>"
-                            f"<td style='padding:6px 10px;text-align:right;color:var(--text-muted)'>{1/_pi:.2f}</td>"
-                            f"</tr>"
-                            for _lbl, _pi, _src in _bb_all_ps
-                        ])
-                        st.markdown(
-                            "<table style='width:100%;border-collapse:collapse;margin-bottom:8px'>"
-                            "<thead><tr style='font-size:0.72em;color:var(--text-dimmer);text-transform:uppercase;background:var(--bg-card2)'>"
-                            "<th style='padding:5px 10px;text-align:left'>Zdarzenie</th>"
-                            "<th style='padding:5px 8px;text-align:center'>Metoda</th>"
-                            "<th style='padding:5px 10px;text-align:right'>P model</th>"
-                            "<th style='padding:5px 10px;text-align:right'>Fair</th>"
-                            f"</tr></thead><tbody>{_bb_rows}</tbody></table>",
-                            unsafe_allow_html=True)
-
-                        # Wynik kombo: Poisson vs mnożone
-                        st.markdown(
-                            f"<div style='background:var(--bg-card);border-radius:10px;padding:14px;margin-top:4px;"
-                            f"border:1px solid var(--border)'>"
-                            f"<div style='display:flex;justify-content:space-between;margin-bottom:10px'>"
-                            f"<div style='text-align:center;flex:1'>"
-                            f"<div style='font-size:0.70em;color:var(--text-dim);margin-bottom:3px;text-transform:uppercase'>P Poisson (poprawna)</div>"
-                            f"<div style='font-size:1.8em;font-weight:800;color:var(--accent)'>{_bb_p_combo:.1%}</div>"
-                            f"<div style='font-size:0.85em;color:var(--text-muted)'>Fair Odds: <b>{_bb_fair:.2f}</b></div>"
-                            f"</div>"
-                            f"<div style='width:1px;background:var(--border);margin:0 10px'></div>"
-                            f"<div style='text-align:center;flex:1'>"
-                            f"<div style='font-size:0.70em;color:var(--text-dim);margin-bottom:3px;text-transform:uppercase'>P mnożone (błędna)</div>"
-                            f"<div style='font-size:1.8em;font-weight:800;color:var(--text-dimmer)'>{_bb_p_ind_all:.1%}</div>"
-                            f"<div style='font-size:0.85em;color:var(--text-dimmer)'>Fair Odds: <b>{_bb_fair_ind:.2f}</b></div>"
-                            f"</div></div>"
-                            f"<div style='border-top:1px solid var(--border);padding-top:8px;"
-                            f"display:flex;justify-content:space-between;align-items:center'>"
-                            f"<div style='font-size:0.78em;color:{_corr_c}'>"
-                            f"{_corr_ico} {_corr_label} ({_corr_diff:+.1%})</div>"
-                            f"<div style='font-size:0.78em;color:var(--text-dim)'>Zdarzeń: {len(_bb_all_ps)}</div>"
-                            f"</div></div>",
-                            unsafe_allow_html=True)
-
-                        # Werdykt vs kurs buka
-                        if _bb_kurs_buk > 1.05:
-                            _verd_bg  = "var(--accent-bg)" if _bb_ev > 0 else "var(--bg-card2)"
-                            _verd_brd = "var(--accent-border)" if _bb_ev > 0 else "var(--danger)"
-                            _verd_ico = "✅ WARTOŚĆ" if _bb_ev > 0 else ("⚠️ NEUTRALNY" if _bb_ev > -0.05 else "❌ BRAK WARTOŚCI")
-                            _margin_warn = ""
-                            if _bb_fair > 0 and _bb_kurs_buk < _bb_fair * 0.85:
-                                _margin_warn = (
-                                    f"<div style='font-size:0.74em;color:var(--danger);margin-top:4px'>"
-                                    f"⚠️ Kurs buka o {(_bb_fair-_bb_kurs_buk)/_bb_fair:.0%} poniżej Fair "
-                                    f"— marża bukmachera pochłania wartość.</div>")
-                            st.markdown(
-                                f"<div style='background:{_verd_bg};border:1px solid {_verd_brd};"
-                                f"border-radius:8px;padding:12px 14px;margin-top:8px'>"
-                                f"<div style='font-size:0.72em;color:var(--text-dim);text-transform:uppercase;"
-                                f"letter-spacing:.06em;margin-bottom:6px'>Werdykt</div>"
-                                f"<div style='display:flex;justify-content:space-between;"
-                                f"align-items:center;flex-wrap:wrap;gap:8px'>"
-                                f"<div><span style='font-size:1.3em;font-weight:800;color:{_bb_ev_c}'>"
-                                f"{_verd_ico}</span></div>"
-                                f"<div style='text-align:right;font-size:0.85em'>"
-                                f"<div>Buk: <b>{_bb_kurs_buk:.2f}</b> vs Fair: "
-                                f"<b style='color:var(--accent)'>{_bb_fair:.2f}</b></div>"
-                                f"<div>EV: <b style='color:{_bb_ev_c}'>{_bb_ev:+.3f}</b> na jedn.</div>"
-                                f"</div></div>{_margin_warn}</div>",
-                                unsafe_allow_html=True)
-            else:
-                st.warning("Brak danych modelu.")
-
-    # =========================================================================
-    # =========================================================================
-    # TAB 6 – MULTI-LIGA GLOBAL DASHBOARD
-    # =========================================================================
-    with tab6:
         st.markdown("<div class='section-header'>🌍 Multi-Liga · Globalny przegląd strategii</div>",
                     unsafe_allow_html=True)
         st.caption("Agregacja predykcji i wyników ze wszystkich lig. Źródło: baza SQLite predykcje.db.")
@@ -8004,9 +7760,9 @@ if not historical.empty:
                 )
 
 
-        # TAB 7 – BACKTEST
+        # TAB 6 – BACKTEST
     # =========================================================================
-    with tab7:
+    with tab6:
         st.subheader("🧪 Backtest – Symulacja walk-forward")
         st.caption(
             "Model trenowany kolejka po kolejce – dla K-tej kolejki widzi tylko dane do K-1. "
