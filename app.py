@@ -658,6 +658,9 @@ NAZWY_MAP = {
     # ══════════════════════════════════════════════════════
     "Paris Saint-Germain FC":        "Paris SG",
     "Paris Saint-Germain":           "Paris SG",
+    "Paris Saint Germain":           "Paris SG",
+    "Paris SG FC":                   "Paris SG",
+    "Paris SG":                      "Paris SG",
     "PSG":                           "Paris SG",
     "Olympique de Marseille":        "Marseille",
     "Marseille":                     "Marseille",
@@ -1043,14 +1046,16 @@ def load_standings(fd_org_id: int) -> dict:
 
 def _standings_by_name(standings: dict) -> dict:
     """Pomocniczy: zwraca standings indeksowane po znormalizowanej nazwie
-    (po map_nazwa) dla łatwego lookup w karcie meczu."""
+    (po map_nazwa) dla łatwego lookup w karcie meczu.
+    Uwaga: używamy tylko pełnej nazwy (name), nie short — skróty jak
+    'FCB', 'ESP' mogą przez fuzzy matching trafić w złą drużynę i
+    mieszać cresty (np. Barcelona <-> Espanyol)."""
     by_name = {}
     for tid, info in standings.items():
-        # Próbuj wszystkie warianty nazwy
-        for raw in [info["name"], info["short"]]:
-            mapped = map_nazwa(raw)
-            by_name[mapped] = info
-            by_name[raw] = info
+        raw    = info["name"]   # tylko pełna nazwa, nie short
+        mapped = map_nazwa(raw)
+        by_name[mapped] = info
+        by_name[raw]    = info
     return by_name
 
 
@@ -4182,14 +4187,9 @@ if not historical.empty:
                                                 _bankroll = st.session_state.get("bankroll", KELLY_BANKROLL_DEFAULT)
                                                 _kelly = kelly_stake(pred["p_typ"], _kdc, bankroll=_bankroll)
 
-                                                # 📲 Telegram real-time alert (EV≥12%, anti-spam: 1/mecz/dzień)
-                                                if _TG_OK and _is_val and _ev_val >= _tg.MIN_EV_ALERT:
-                                                    _tg.send_value_alert(
-                                                        home=h, away=a, liga=wybrana_liga,
-                                                        typ=pred["typ"], kurs=_kdc,
-                                                        p_model=pred["p_typ"], ev=_ev_val,
-                                                        stake_pln=_kelly.get("stake_pln", 0),
-                                                        kolejka=int(mecz.get("round", 0)) if hasattr(mecz, "get") else 0)
+                                                # 📲 Telegram — alerty wyłączone (zastąpione porannym digestem)
+                                                # Real-time alerty powodowały spam przy każdym rerun Streamlit.
+                                                # Powiadomienia idą raz dziennie przez send_morning_digest.
                                                 _mn2 = market_noise_check(pred["p_typ"], _idc)
                                                 if _mn2["noise"]:
                                                     st.markdown(
