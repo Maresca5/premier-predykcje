@@ -521,9 +521,13 @@ NAZWY_MAP = {
     # LA LIGA
     # co.uk: "Barcelona", "Ath Madrid", "Ath Bilbao", "Sociedad",
     #        "Betis", "Celta", "Espanol", "Alaves", "Vallecano" itd.
+    # fd.org używa pełnych nazw — MUSZĄ być tutaj jawnie żeby uniknąć
+    # fałszywego fuzzy matchingu (np. "RCD Espanyol de Barcelona" -> "Barcelona")
     # ══════════════════════════════════════════════════════
     "FC Barcelona":                  "Barcelona",
+    "Futbol Club Barcelona":         "Barcelona",
     "Real Madrid CF":                "Real Madrid",
+    "Real Madrid Club de Fútbol":    "Real Madrid",
     "Atlético de Madrid":            "Ath Madrid",
     "Atlético Madrid":               "Ath Madrid",
     "Atletico Madrid":               "Ath Madrid",
@@ -532,12 +536,16 @@ NAZWY_MAP = {
     "Athletic Bilbao":               "Ath Bilbao",
     "Athletic Club Bilbao":          "Ath Bilbao",
     "Real Sociedad de Fútbol":       "Sociedad",
+    "Real Sociedad de Futbol":       "Sociedad",
     "Real Sociedad":                 "Sociedad",
     "Real Betis Balompié":           "Betis",
+    "Real Betis Balompie":           "Betis",
     "Real Betis":                    "Betis",
     "RC Celta de Vigo":              "Celta",
     "Celta Vigo":                    "Celta",
     "RCD Espanyol":                  "Espanol",
+    "RCD Espanyol de Barcelona":     "Espanol",   # ← pełna nazwa z fd.org!
+    "Espanyol de Barcelona":         "Espanol",
     "Espanyol":                      "Espanol",
     "Deportivo Alavés":              "Alaves",
     "Deportivo Alaves":              "Alaves",
@@ -562,8 +570,8 @@ NAZWY_MAP = {
     "Valencia CF":                   "Valencia",
     "Real Oviedo":                   "Oviedo",
     "CD Leganés":                    "Leganes",
+    "CD Leganes":                    "Leganes",
     "Leganés":                       "Leganes",
-    "Real Valladolid":               "Valladolid",
     "Deportivo La Coruña":           "La Coruna",
     "RC Deportivo":                  "La Coruna",
 
@@ -3206,6 +3214,16 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
             if _res["ok"]: st.success(f"✅ {_res['n_events']} meczów")
             else:          st.error(_res["error"])
         _oa_cached = _oa.get_cached_odds(_CSV_CODE, _OA_DB)
+
+        # ── Debug: pokaż co jest w cache kursów (diagnoza PSG i innych) ──
+        if _oa_cached and st.session_state.get("_oa_debug_show"):
+            with st.expander(f"🔍 Cache odds ({len(_oa_cached)} meczów)", expanded=True):
+                for (hh, aa) in list(_oa_cached.keys())[:15]:
+                    _mapped_h = _oa.map_api_to_model(hh)
+                    _mapped_a = _oa.map_api_to_model(aa)
+                    st.caption(f"`{hh}` → `{_mapped_h}` | `{aa}` → `{_mapped_a}`")
+        st.checkbox("🔍 Debug cache", key="_oa_debug_show", value=False)
+
 
         # ── Auto-odświeżanie kursów (raz dziennie, rano) ─────────────────
         # Oszczędzamy limity: max 1 request/liga/dobę, tylko między 6:00-22:00
