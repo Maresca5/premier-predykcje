@@ -8565,4 +8565,4 @@ if not historical.empty:
                             f"Sezon: {_brier_all:.4f} · Δ {_brier_delta:+.4f} — stabilny")
 
 else:
-    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
+    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.") 
