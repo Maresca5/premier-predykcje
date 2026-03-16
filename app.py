@@ -6724,58 +6724,59 @@ if not historical.empty:
                         f"border-radius:6px;padding:8px 12px;margin-top:6px'>{_n_warn_txt}</div>",
                         unsafe_allow_html=True)
 
+
                 # ── Szczegóły typów Kelly – gdzie model się mylił ─────────────
                 if _kelly_typy > 0:
                     with st.expander(f"🔍 Szczegóły typów Kelly ({_kelly_typy} zakładów)", expanded=False):
-                        # Zbierz dane do tabeli
                         _kelly_rows = []
                         for _kol2, _grp2 in _eq_df.groupby("kolejnosc"):
                             _cand2 = _grp2[_grp2["ev"].notna() & (_grp2["ev"] >= _KEV)].nlargest(3, "ev")
                             for _, _r2 in _cand2.iterrows():
-                                _kb2  = float(_r2.get("kurs_buk") or 0)
-                                _pt2  = float(_r2["p_model"])
-                                _ev2  = float(_r2["ev"])
-                                if _kb2 <= 0: continue
-                                _b2   = _kb2 - 1
-                                _f2   = min(max((_pt2*_b2-(1-_pt2))/_b2, 0.0) * _KF, _KMAX)
-                                _stw2 = round(1000 * _f2, 2)  # przybliżona stawka od 1000
+                                # kurs_eff = closing odds CSV lub fair odds jako fallback
+                                # NIE pomijamy meczów bez closing (najnowsze kolejki)
+                                _ke2 = _r2.get("kurs_eff")
+                                _kb2 = _r2.get("kurs_buk")
+                                if _ke2 is None or pd.isna(_ke2): continue
+                                _ke2 = float(_ke2)
+                                if _ke2 <= 1.0: continue
+                                _pt2   = float(_r2["p_model"])
+                                _ev2   = float(_r2["ev"])
+                                _b2    = _ke2 - 1
+                                _f2    = min(max((_pt2*_b2-(1-_pt2))/_b2, 0.0) * _KF, _KMAX)
+                                _stw2  = round(1000 * _f2, 2)
                                 _traf2 = _r2["trafione"] == 1
-                                _pnl2  = round(_stw2*(_kb2-1), 2) if _traf2 else round(-_stw2, 2)
+                                _pnl2  = round(_stw2*(_ke2-1), 2) if _traf2 else round(-_stw2, 2)
+                                _fair_flag = " ✦" if (_kb2 is None or pd.isna(_kb2)) else ""
                                 _kelly_rows.append({
-                                    "Kolejka":  int(_kol2),
-                                    "Mecz":     f"{_r2['home']} – {_r2['away']}",
-                                    "Typ":      _r2["typ"],
-                                    "P model":  f"{_pt2:.0%}",
-                                    "Kurs buk": f"{_kb2:.2f}",
-                                    "EV":       f"{_ev2:+.1%}",
-                                    "Stawka*":  f"{_stw2:.0f} zł",
-                                    "Wynik":    "✅ TAK" if _traf2 else "❌ NIE",
-                                    "PnL*":     f"{_pnl2:+.0f} zł",
+                                    "Kolejka": int(_kol2),
+                                    "Mecz":    f"{_r2['home']} – {_r2['away']}",
+                                    "Typ":     _r2["typ"],
+                                    "P model": f"{_pt2:.0%}",
+                                    "Kurs":    f"{_ke2:.2f}{_fair_flag}",
+                                    "EV":      f"{_ev2:+.1%}",
+                                    "Stawka*": f"{_stw2:.0f} zł",
+                                    "Wynik":   "✅ TAK" if _traf2 else "❌ NIE",
+                                    "PnL*":    f"{_pnl2:+.0f} zł",
                                 })
                         if _kelly_rows:
                             import pandas as _pd_kd
                             _kd_df = _pd_kd.DataFrame(_kelly_rows)
-                            # Highlight trafione/chybione
                             st.dataframe(
                                 _kd_df,
                                 use_container_width=True,
                                 hide_index=True,
                                 column_config={
                                     "Wynik": st.column_config.TextColumn("Wynik", width="small"),
-                                    "PnL*":  st.column_config.TextColumn("PnL*", width="small"),
+                                    "PnL*":  st.column_config.TextColumn("PnL*",  width="small"),
                                 }
                             )
                             _wins   = sum(1 for r in _kelly_rows if "TAK" in r["Wynik"])
                             _losses = len(_kelly_rows) - _wins
                             st.caption(
                                 f"✅ Trafione: {_wins} · ❌ Chybione: {_losses} · "
-                                f"*Stawki szacunkowe od bankrollu 1000 zł (walk-forward może się różnić)"
+                                f"*Stawki szacunkowe od 1000 zł · ✦ = fair odds (CSV bez closing)"
                             )
 
-
-            st.divider()
-
-            st.divider()
 
         st.divider()
 
