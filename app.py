@@ -6576,7 +6576,41 @@ if not historical.empty:
 
             if len(_eq_df) >= 3:
 
-                # Kelly walk-forward per kolejka (top 3 wg EV)
+                # Kelly parametry
+                _KS      = float(st.session_state.get("bankroll", 1000.0))
+                _KF_base = float(st.session_state.get("kelly_frac", 0.125))
+                _KF      = _KF_base * KELLY_FRAC_SCALE
+                _KMAX    = 0.05; _KEV = 0.05; _KMAX_ODDS = 3.50
+
+                def _conservative_p(p):
+                    return 0.5 + (float(p) - 0.5) * KELLY_PROB_SCALE
+
+                def _kurs_efektywny(row):
+                    k = row.get("kurs_buk")
+                    if k is not None and not pd.isna(k): return float(k)
+                    fo = row.get("fair_odds")
+                    if fo is not None and not pd.isna(fo): return float(fo)
+                    return None
+                _eq_df["kurs_eff"] = _eq_df.apply(_kurs_efektywny, axis=1)
+
+                def _calc_ev(r):
+                    try:
+                        k = r["kurs_eff"]
+                        if k is None or pd.isna(k): return None
+                        k = float(k)
+                        if not (1.35 <= k <= _KMAX_ODDS): return None
+                        return float(r["p_model"]) * k - 1.0
+                    except Exception:
+                        return None
+                _eq_df["ev"] = _eq_df.apply(_calc_ev, axis=1)
+
+                # Źródła kursów caption
+                _n_csv_ok        = int(_eq_df["kurs_buk"].notna().sum())
+                _n_fair_fallback = int(_eq_df["kurs_buk"].isna().sum())
+                _src_parts = [f"📊 Źródła kursów: **{_n_csv_ok}** z football-data (MaxC/Pinnacle/B365)"]
+                if _n_fair_fallback > 0:
+                    _src_parts.append(f"**{_n_fair_fallback}** fair odds (brak kursu w CSV)")
+                st.caption("  ·  ".join(_src_parts))
                 _bk   = _KS
                 _bk_flat = _KS   # równoległa flat dla porównania
                 _bk_vals  = []
@@ -6631,13 +6665,6 @@ if not historical.empty:
                     "kol_nums": list(_kol_nums),
                 }
 
-                # Wykres Kelly per kolejka
-                _n_csv_ok        = int(_eq_df["kurs_buk"].notna().sum())
-                _n_fair_fallback = int(_eq_df["kurs_buk"].isna().sum())
-                _src_parts = [f"📊 Źródła kursów: **{_n_csv_ok}** z football-data (MaxC/Pinnacle/B365)"]
-                if _n_fair_fallback > 0:
-                    _src_parts.append(f"**{_n_fair_fallback}** fair odds (brak kursu w CSV)")
-                st.caption("  ·  ".join(_src_parts))
 
                 _ek1, _ek2, _ek3, _ek4 = st.columns(4)
                 _ek1.metric("💰 Bankroll", f"{_bk:.0f} zł",
