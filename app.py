@@ -6651,8 +6651,14 @@ if not historical.empty:
                 _kol_nums  = sorted(_eq_df["kolejnosc"].unique())
                 _kc = "#4CAF50" if _bk >= _KS else "#F44336"
                 _fc = "#888" if _bk_flat >= _KS else "#F44336"
+                _kelly_hr  = f"{_kelly_traf/_kelly_typy:.0%}" if _kelly_typy else "–"
 
-                # Zapisz końcowy bankroll do session_state → Multi-Liga go odczyta
+                st.markdown(
+                    "<div class='section-header'>💰 Symulacja Kelly – bieżący sezon"
+                    "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
+                    "top 3 typy/kolejkę · Pinnacle/B365 1.35–3.50 · Conservative Kelly"
+                    "</span></div>",
+                    unsafe_allow_html=True)
                 _ss_ml_key = f"ml_bk_{wybrana_liga}"
                 st.session_state[_ss_ml_key] = {
                     "bk": round(_bk, 2),
