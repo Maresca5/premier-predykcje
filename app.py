@@ -6441,123 +6441,140 @@ if not historical.empty:
         st.divider()
 
         with st.expander("💰 Symulacja Kelly – Equity Curve", expanded=False):
-            # ── Equity Curve Kelly – retroaktywna symulacja bieżącego sezonu ────
-            # Łączy zdarzenia (p_model, typ, trafione) z historical (B365H/PSH)
-            # po home/away żeby uzyskać kurs bukmachera → EV → Kelly stake
-            _con_eq = sqlite3.connect(DB_FILE)
-            _eq_df  = pd.read_sql_query(
-                """SELECT kolejnosc, home, away, typ, trafione, p_model, fair_odds
-                   FROM zdarzenia
-                   WHERE liga=? AND rynek='1X2' AND trafione IS NOT NULL
-                   AND sezon=?
-                   ORDER BY kolejnosc, id""",
-                _con_eq, params=(wybrana_liga, BIEZACY_SEZON))
-            _con_eq.close()
+            # ── Equity Curve Kelly – generowana na bieżąco z historical ─────────
+            # Źródło prawdy: historical CSV (rozegrane mecze bieżącego sezonu)
+            # Predykcje generowane walk-forward per kolejka z danych do K-1
+            # NIE polega na tym czy coś zostało zapisane ręcznie do zdarzenia DB
 
-            if len(_eq_df) >= 3 and not historical.empty:
-                _eq_df = _eq_df.copy()
+            _hist_curr_eq = historical[historical["_sezon"] == "biezacy"].copy() \
+                if "_sezon" in historical.columns else historical.copy()
 
-                # Pobierz kursy bukmachera TYLKO z bieżącego sezonu (2526)
-                # Bez filtrowania: historical zawiera 2425+2526 → match.iloc[-1] może brać zły kurs
-                _hist_curr = historical[historical["_sezon"] == "biezacy"] \
-                    if "_sezon" in historical.columns else historical
-                _maxc_cols = ["MaxCH","MaxCD","MaxCA"]
-                _avgc_cols = ["AvgCH","AvgCD","AvgCA"]
-                _ps_cols   = ["PSH","PSD","PSA","PSCH","PSCD","PSCA"]
-                _b365_cols = ["B365H","B365D","B365A"]
-                _all_odds  = _maxc_cols + _avgc_cols + _ps_cols + _b365_cols
-                _base_cols = ["HomeTeam","AwayTeam"]
-                _hist_odds = _hist_curr[_base_cols + [c for c in _all_odds if c in _hist_curr.columns]].copy()
+            # Połącz z terminarzem żeby mieć kolejność (round number)
+            _sched_played = schedule[
+                schedule["date"].apply(lambda d: pd.Timestamp(d).date() < datetime.now().date())
+            ].copy() if not schedule.empty else pd.DataFrame()
 
-                def _kurs_live(row):
-                    """Kurs bukmachera dla wybranego typu z historical.
-                    Priorytet: MaxC (100% dostępność) > Pinnacle closing > B365"""
-                    match = _hist_odds[
-                        (_hist_odds["HomeTeam"] == row["home"]) &
-                        (_hist_odds["AwayTeam"] == row["away"])
-                    ]
-                    if match.empty:
-                        return None
-                    m = match.iloc[-1]
-                    def _calc(oh, od, oa):
+            if not _hist_curr_eq.empty and not _sched_played.empty and len(_hist_curr_eq) >= 3:
+                # Zbuduj mapę mecz -> kolejka z terminarza
+                _round_map = {}
+                for _, _sr in _sched_played.iterrows():
+                    _sh = map_nazwa(_sr["home_team"])
+                    _sa = map_nazwa(_sr["away_team"])
+                    _round_map[(_sh, _sa)] = int(_sr["round"])
+
+                # Zbierz predykcje + wyniki per mecz z historical
+                _eq_rows = []
+                for _, _hr in _hist_curr_eq.iterrows():
+                    _hh = str(_hr.get("HomeTeam", ""))
+                    _aa = str(_hr.get("AwayTeam", ""))
+                    if not _hh or not _aa:
+                        continue
+                    if _hh not in srednie_df.index or _aa not in srednie_df.index:
+                        continue
+
+                    # Kolejka z terminarza, fallback szacowanie z pozycji
+                    _rnd = _round_map.get((_hh, _aa))
+                    if _rnd is None:
+                        # Spróbuj odwrotnie (home/away mogą być zamienione w CSV)
+                        _rnd = _round_map.get((_aa, _hh))
+                    if _rnd is None:
+                        # Ostatni fallback: szacuj z daty (kolejka ≈ numer meczu / 10)
                         try:
-                            oh, od, oa = float(oh or 0), float(od or 0), float(oa or 0)
+                            _dt_eq = pd.to_datetime(_hr.get("Date", ""), dayfirst=True, errors="coerce")
+                            _rnd = int((_hist_curr_eq.index.get_loc(_hr.name) // 10) + 1) if not pd.isna(_dt_eq) else 1
+                        except Exception:
+                            _rnd = 1
+
+                    # Wynik rzeczywisty
+                    try:
+                        _hg_eq = int(_hr["FTHG"]); _ag_eq = int(_hr["FTAG"])
+                    except Exception:
+                        continue
+                    _wynik_1x2 = "1" if _hg_eq > _ag_eq else ("2" if _ag_eq > _hg_eq else "X")
+
+                    # Predykcja modelu (z danych globalnych sezonu — uproszczenie walk-forward)
+                    try:
+                        _lh_eq, _la_eq = oblicz_lambdy(
+                            _hh, _aa, srednie_df, srednie_lig, forma_dict,
+                            csv_code=LIGI[wybrana_liga]["csv_code"])[:2]
+                        _pred_eq = predykcja_meczu(
+                            _lh_eq, _la_eq, rho=rho,
+                            csv_code=LIGI[wybrana_liga]["csv_code"], n_train=n_biezacy)
+                    except Exception:
+                        continue
+
+                    _typ_eq = _pred_eq["typ"]
+                    _p_eq   = _pred_eq["p_typ"]
+                    _fo_eq  = _pred_eq["fo_typ"]
+
+                    # Trafiony?
+                    if _typ_eq == "1":  _traf_eq = (_wynik_1x2 == "1")
+                    elif _typ_eq == "X": _traf_eq = (_wynik_1x2 == "X")
+                    elif _typ_eq == "2": _traf_eq = (_wynik_1x2 == "2")
+                    elif _typ_eq == "1X": _traf_eq = (_wynik_1x2 in ("1","X"))
+                    elif _typ_eq == "X2": _traf_eq = (_wynik_1x2 in ("X","2"))
+                    else: _traf_eq = False
+
+                    # Kurs bukmachera (MaxC > Pinnacle > B365)
+                    def _get_k(col_h, col_d, col_a, row, typ):
+                        try:
+                            oh = float(row.get(col_h) or 0)
+                            od = float(row.get(col_d) or 0)
+                            oa = float(row.get(col_a) or 0)
                             if min(oh, od, oa) <= 1.01: return None
                             s = 1/oh + 1/od + 1/oa
                             ih, id_, ia = (1/oh)/s, (1/od)/s, (1/oa)/s
-                            t = str(row["typ"])
-                            if t == "1":  return oh
-                            if t == "X":  return od
-                            if t == "2":  return oa
-                            if t == "1X": return round(1/(ih+id_), 3)
-                            if t == "X2": return round(1/(id_+ia), 3)
+                            if typ == "1":  return oh
+                            if typ == "X":  return od
+                            if typ == "2":  return oa
+                            if typ == "1X": return round(1/(ih+id_), 3)
+                            if typ == "X2": return round(1/(id_+ia), 3)
                         except Exception: return None
-                    # MaxC → najlepszy kurs rynkowy closing (100% dostępność)
-                    k = _calc(m.get("MaxCH"), m.get("MaxCD"), m.get("MaxCA"))
-                    # Pinnacle closing fallback
-                    if not k:
-                        k = _calc(m.get("PSCH"), m.get("PSCD"), m.get("PSCA"))
-                    # B365 fallback
-                    if not k:
-                        k = _calc(m.get("B365H"), m.get("B365D"), m.get("B365A"))
-                    return k
 
-                def _kurs_live_oa(row):
-                    """Kurs z The Odds API (pre-match live) — dla przyszłych/bieżących meczy."""
-                    if not (_OA_OK and _oa_key and _oa_cached):
-                        return None
-                    try:
-                        o = _oa.znajdz_kursy(str(row["home"]), str(row["away"]), _oa_cached)
-                        if not o: return None
-                        oh, od, oa = o["odds_h"], o["odds_d"], o["odds_a"]
-                        s = 1/oh + 1/od + 1/oa
-                        ih, id_, ia = (1/oh)/s, (1/od)/s, (1/oa)/s
-                        t = str(row["typ"])
-                        if t == "1":  return oh
-                        if t == "X":  return od
-                        if t == "2":  return oa
-                        if t == "1X": return round(1/(ih+id_), 3)
-                        if t == "X2": return round(1/(id_+ia), 3)
-                    except Exception: pass
-                    return None
+                    _k_eq = (_get_k("MaxCH","MaxCD","MaxCA", _hr, _typ_eq) or
+                             _get_k("PSCH","PSCD","PSCA",  _hr, _typ_eq) or
+                             _get_k("PSH","PSD","PSA",     _hr, _typ_eq) or
+                             _get_k("B365H","B365D","B365A", _hr, _typ_eq) or
+                             _fo_eq)
 
-                # Kelly parametry – z sidebara (bankroll + poziom ryzyka)
-                # KELLY_PROB_SCALE=0.85 (-15% nadwyżki) stosowany zawsze
-                # _KF pochodzi z suwaka ryzyka → zmiana w sidebarze odświeża wykres
-                _KS    = float(st.session_state.get("bankroll", 1000.0))
-                _KF_base = float(st.session_state.get("kelly_frac", 0.125))
-                _KF    = _KF_base * KELLY_FRAC_SCALE   # Half-Kelly na wyjście
-                _KMAX  = 0.05; _KEV = 0.05; _KMAX_ODDS = 3.50; _KEV_CAP = None
+                    _eq_rows.append({
+                        "kolejnosc": _rnd,
+                        "home":      _hh,
+                        "away":      _aa,
+                        "typ":       _typ_eq,
+                        "p_model":   _p_eq,
+                        "fair_odds": _fo_eq,
+                        "kurs_buk":  _k_eq,
+                        "trafione":  int(_traf_eq),
+                    })
 
-                def _conservative_p(p):
-                    """Shrinkage identyczny z oblicz_kelly(): -15% nadwyżki powyżej 50%"""
-                    return 0.5 + (float(p) - 0.5) * KELLY_PROB_SCALE
+                _eq_df = pd.DataFrame(_eq_rows).sort_values(["kolejnosc", "home"])
 
-                _eq_df["kurs_buk"] = _eq_df.apply(_kurs_live, axis=1)
-                _eq_df["kurs_oa"]  = _eq_df.apply(_kurs_live_oa, axis=1)
+                # Też scalamy z DB (jeśli są ręcznie zapisane z innym p_model)
+                # Dajemy priorytet danym on-the-fly — DB służy tylko jako uzupełnienie
+                _con_eq = sqlite3.connect(DB_FILE)
+                _eq_db = pd.read_sql_query(
+                    """SELECT kolejnosc, home, away, typ, trafione, p_model, fair_odds
+                       FROM zdarzenia
+                       WHERE liga=? AND rynek='1X2' AND trafione IS NOT NULL AND sezon=?
+                       ORDER BY kolejnosc, id""",
+                    _con_eq, params=(wybrana_liga, BIEZACY_SEZON))
+                _con_eq.close()
 
-                # Fallback hierarchy: closing CSV → Odds API → fair odds
-                # Powód: football-data ma closing odds dla przeszłości, OA dla przyszłości/bieżących
-                def _kurs_efektywny(row):
-                    k = row["kurs_buk"]  # 1. closing odds z CSV (MaxC / Pinnacle / B365)
-                    if k is not None and not pd.isna(k): return float(k)
-                    k = row["kurs_oa"]   # 2. live pre-match z Odds API
-                    if k is not None and not pd.isna(k): return float(k)
-                    fo = row.get("fair_odds")  # 3. fair odds jako ostateczny fallback
-                    if fo is not None and not pd.isna(fo): return float(fo)
-                    return None
-                _eq_df["kurs_eff"] = _eq_df.apply(_kurs_efektywny, axis=1)
+                # Użyj on-the-fly jako główne źródło (ma kompletne dane)
+                # _eq_db jako info o liczbie zapisanych (do caption)
+                _n_db = len(_eq_db)
+                _n_live = len(_eq_df)
 
-                def _calc_ev(r):
-                    try:
-                        k = r["kurs_eff"]
-                        if k is None or pd.isna(k): return None
-                        k = float(k)
-                        if not (1.35 <= k <= _KMAX_ODDS): return None
-                        return float(r["p_model"]) * k - 1.0
-                    except Exception:
-                        return None
-                _eq_df["ev"] = _eq_df.apply(_calc_ev, axis=1)
+                st.caption(
+                    f"📊 Dane: **{_n_live}** meczów z historical (on-the-fly)"
+                    + (f" · {_n_db} w bazie DB" if _n_db > 0 else " · brak zapisów w DB — kliknij 'Aktualizuj wyniki'")
+                )
+
+            else:
+                _eq_df = pd.DataFrame()
+
+            if len(_eq_df) >= 3:
 
                 # Kelly walk-forward per kolejka (top 3 wg EV)
                 _bk   = _KS
@@ -6615,21 +6632,11 @@ if not historical.empty:
                 }
 
                 # Wykres Kelly per kolejka
-                _n_csv_ok       = int(_eq_df["kurs_buk"].notna().sum())
-                _n_oa_ok        = int((_eq_df["kurs_buk"].isna() & _eq_df["kurs_oa"].notna()).sum())
-                _n_fair_fallback= int((_eq_df["kurs_buk"].isna() & _eq_df["kurs_oa"].isna()).sum())
-                _kelly_hr = f"{_kelly_traf/_kelly_typy:.0%}" if _kelly_typy else "–"
-                st.markdown(
-                    "<div class='section-header'>💰 Symulacja Kelly – bieżący sezon"
-                    "<span style='font-size:.65em;color:#555;font-weight:400;margin-left:10px'>"
-                    "top 3 typy/kolejkę · Pinnacle/B365 1.35–3.50 · Conservative Kelly"
-                    "</span></div>",
-                    unsafe_allow_html=True)
-                _src_parts = [f"📊 Źródła kursów: **{_n_csv_ok}** z football-data (closing)"]
-                if _n_oa_ok > 0:
-                    _src_parts.append(f"**{_n_oa_ok}** z Odds API (live pre-match)")
+                _n_csv_ok        = int(_eq_df["kurs_buk"].notna().sum())
+                _n_fair_fallback = int(_eq_df["kurs_buk"].isna().sum())
+                _src_parts = [f"📊 Źródła kursów: **{_n_csv_ok}** z football-data (MaxC/Pinnacle/B365)"]
                 if _n_fair_fallback > 0:
-                    _src_parts.append(f"**{_n_fair_fallback}** fair odds (brak kursu rynkowego)")
+                    _src_parts.append(f"**{_n_fair_fallback}** fair odds (brak kursu w CSV)")
                 st.caption("  ·  ".join(_src_parts))
 
                 _ek1, _ek2, _ek3, _ek4 = st.columns(4)
@@ -8565,4 +8572,4 @@ if not historical.empty:
                             f"Sezon: {_brier_all:.4f} · Δ {_brier_delta:+.4f} — stabilny")
 
 else:
-    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.") 
+    st.error("Nie udało się pobrać danych. Sprawdź połączenie z internetem.")
