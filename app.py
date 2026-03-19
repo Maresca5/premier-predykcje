@@ -7023,14 +7023,14 @@ if not historical.empty:
                         if len(_pos_bins) > 0 and len(_neg_bins) > 0:
                             _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
                             _neg_labels = ", ".join(_neg_bins["Kurs bin"].tolist())
+                            _pos_yield = _pos_bins["Yield"].max()
+                            _neg_yield = _neg_bins["Yield"].min()
                             st.success(
                                 f"💡 **Edge w kursach {_pos_labels}** "
-                                f"(yield {_pos_bins['Yield'].max():+.1%}). "
-                                f"Unikaj kursów {_neg_labels} — yield {_neg_bins['Yield'].min():+.1%} na fair odds.")
-                        elif len(_pos_bins) > 0:
+                                f"(yield {_pos_yield:+.1%}). "
+                                f"Unikaj kursów {_neg_labels} — yield {_neg_yield:+.1%} na fair odds.")
                             _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
                             st.success(f"💡 Dodatni yield w zakresach: **{_pos_labels}**. "
                                        f"Pozostałe przedziały neutralne.")
                         else:
-                            st.warning("⚠️ Brak przedziału kursowego z trwale dodatnim yieldem. "
-                                      
+                            st.warning("⚠️ Brak przedziału kursowego z trwale do
