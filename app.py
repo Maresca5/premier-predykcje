@@ -7028,9 +7028,9 @@ if not historical.empty:
                             st.success(
                                 f"💡 **Edge w kursach {_pos_labels}** "
                                 f"(yield {_pos_yield:+.1%}). "
-                                f"Unikaj kursów {_neg_labels} — yield {_neg_yield:+.1%} na fair odds.")
+                                f"Avoid odds {_neg_labels} - yield {_neg_yield:+.1%} on fair odds.")
                             _pos_labels = ", ".join(_pos_bins["Kurs bin"].tolist())
                             st.success(f"💡 Dodatni yield w zakresach: **{_pos_labels}**. "
                                        f"Pozostałe przedziały neutralne.")
                         else:
-                            st.warning("⚠️ Brak przedziału kursowego z trwale do
+                            st.warning("Brak przedzialu kursowego z trwale dodatnim
