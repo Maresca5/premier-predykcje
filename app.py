@@ -3817,14 +3817,13 @@ if not historical.empty:
             st.markdown("---")
 
     # TABS
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "⚽ Mecze",
         "📊 Value Bets",
         "🔬 Deep Data",
         "📈 Skuteczność",
         "🌍 Multi-Liga",
         "🧪 Backtest",
-        "🎬 TikTok",
     ])
 
     # =========================================================================
@@ -7036,4 +7035,4 @@ if not historical.empty:
                                               axis=_altv.Axis(labelAngle=0)),
                                     y=_altv.Y("Wartość:Q",
                                               axis=_altv.Axis(format=".0%"),
-                  
+                                             
