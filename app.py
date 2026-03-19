@@ -7033,4 +7033,4 @@ if not historical.empty:
                                        f"Pozostałe przedziały neutralne.")
                         else:
                             st.warning("⚠️ Brak przedziału kursowego z trwale dodatnim yieldem. "
-                                     
+                                      
