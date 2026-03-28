@@ -781,12 +781,94 @@ def init_db():
         )
     """)
 
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS odds_history (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            liga       TEXT,
+            home       TEXT,
+            away       TEXT,
+            fetched_at TEXT,
+            odds_h     REAL,
+            odds_d     REAL,
+            odds_a     REAL,
+            is_opening INTEGER DEFAULT 0,
+            UNIQUE(liga, home, away, is_opening) ON CONFLICT IGNORE
+        )
+    """)
     con.commit()
     con.close()
 
 # ===========================================================================
 # ŁADOWANIE DANYCH – BLEND SEZONÓW
 # ===========================================================================
+
+def _zapisz_opening_odds(liga: str, home: str, away: str,
+                          oh: float, od: float, oa: float):
+    """Zapisuje kursy otwarcia — tylko raz per mecz (pierwsze pobranie)."""
+    try:
+        init_db()
+        con = sqlite3.connect(DB_FILE)
+        con.execute(
+            "INSERT OR IGNORE INTO odds_history"
+            "(liga,home,away,fetched_at,odds_h,odds_d,odds_a,is_opening) VALUES(?,?,?,?,?,?,?,1)",
+            (liga, home, away, datetime.now().isoformat(), oh, od, oa))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+
+def _pobierz_trend_kursow(liga: str, home: str, away: str,
+                           curr_h: float, curr_d: float, curr_a: float) -> dict:
+    """
+    Zwraca trend kursów vs kursy otwarcia (CLV proxy).
+    dp > 0 = implied probability rośnie = smart money wchodzi = Market Confirmation.
+    dp < 0 = market idzie przeciwko = Market Divergence.
+    """
+    try:
+        init_db()
+        con = sqlite3.connect(DB_FILE)
+        row = con.execute(
+            "SELECT odds_h, odds_d, odds_a FROM odds_history "
+            "WHERE liga=? AND home=? AND away=? AND is_opening=1",
+            (liga, home, away)).fetchone()
+        con.close()
+    except Exception:
+        row = None
+
+    if not row:
+        _zapisz_opening_odds(liga, home, away, curr_h, curr_d, curr_a)
+        return {"has_trend": False}
+
+    open_h, open_d, open_a = row
+    if not all([open_h, open_d, open_a, curr_h, curr_d, curr_a]):
+        return {"has_trend": False}
+
+    def _impl(h, d, a):
+        s = 1/h + 1/d + 1/a
+        return (1/h)/s, (1/d)/s, (1/a)/s
+
+    try:
+        oh_p, od_p, oa_p = _impl(open_h, open_d, open_a)
+        ch_p, cd_p, ca_p = _impl(curr_h, curr_d, curr_a)
+    except ZeroDivisionError:
+        return {"has_trend": False}
+
+    return {
+        "has_trend": True,
+        "open_h": open_h, "open_d": open_d, "open_a": open_a,
+        "curr_h": curr_h, "curr_d": curr_d, "curr_a": curr_a,
+        # Zmiana implied probability w pp (dodatnia = smart money na tę opcję)
+        "dph": round((ch_p - oh_p) * 100, 2),
+        "dpd": round((cd_p - od_p) * 100, 2),
+        "dpa": round((ca_p - oa_p) * 100, 2),
+        # Zmiana kursu
+        "dh": round(curr_h - open_h, 3),
+        "dd": round(curr_d - open_d, 3),
+        "da": round(curr_a - open_a, 3),
+    }
+
 def _pobierz_csv(league_code: str, sezon: str) -> pd.DataFrame:
     try:
         url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{league_code}.csv"
@@ -2722,6 +2804,11 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
                 st  += am["AST"].dropna().tolist() if "AST" in am.columns else []
             stats["avg_shots"] = float(np.mean(sht)) if sht else None
             stats["avg_sot"]   = float(np.mean(st))  if st  else None
+            # Efficiency Index: SOT/Shots — snajperzy vs maszynowcy
+            if stats.get("avg_shots") and stats.get("avg_sot") and stats["avg_shots"] > 0:
+                stats["efficiency"] = round(stats["avg_sot"] / stats["avg_shots"], 3)
+            else:
+                stats["efficiency"] = None
             # Strzały przyjęte (shots faced) — do Pressure Tolerance
             sht_faced = []
             if "AS" in hm.columns:
@@ -2778,6 +2865,8 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
                 tags.append("🚌 Bus Parker")
             if _pt >= 0.43:
                 tags.append("🛡️ Aktywna obrona")  # wybijają na rożne
+            if stats.get("efficiency") and stats["efficiency"] > 0.42:
+                tags.append("🎯 Snajperzy")
             if not tags:
                 tags.append("⚖️ Balanced")
             stats["style_tags"] = tags
@@ -3061,6 +3150,14 @@ def oblicz_kontekst_meczu(h: str, a: str, historical: pd.DataFrame,
             if motyw:
                 parts.append(" · ".join(motyw[:2]))
 
+            # 9. Efficiency
+            h_eff = ctx.get("h_stats", {}).get("efficiency")
+            a_eff = ctx.get("a_stats", {}).get("efficiency")
+            if h_eff and a_eff:
+                if h_eff > 0.42 and a_eff < 0.30:
+                    parts.append(f"{h} strzela precyzyjnie ({h_eff:.0%} SOT/strzał) — groźni nawet z mniejszej liczby okazji")
+                elif a_eff > 0.42 and h_eff < 0.30:
+                    parts.append(f"{a} to snajperzy ({a_eff:.0%} SOT/strzał vs {h_eff:.0%} {h}) — groźni z kontry")
             # 8. Volatility
             if ctx.get("vol_warning_yc") or ctx.get("vol_warning_co"):
                 items = []
@@ -3185,6 +3282,19 @@ with st.sidebar.expander("💰 Kursy bukmacherskie", expanded=not bool(_oa_key))
             if _res["ok"]: st.success(f"✅ {_res['n_events']} meczów")
             else:          st.error(_res["error"])
         _oa_cached = _oa.get_cached_odds(_CSV_CODE, _OA_DB)
+
+        # Zapisz kursy otwarcia dla CLV (pierwsze pobranie = opening)
+        if _OA_OK and _oa_key and _oa_cached:
+            for (_h_ev, _a_ev), _ev_data in _oa_cached.items():
+                try:
+                    if _ev_data.get("odds_h") and _ev_data.get("odds_d") and _ev_data.get("odds_a"):
+                        _zapisz_opening_odds(
+                            wybrana_liga, _h_ev, _a_ev,
+                            float(_ev_data["odds_h"]),
+                            float(_ev_data["odds_d"]),
+                            float(_ev_data["odds_a"]))
+                except Exception:
+                    pass
 
         # ── Debug: pokaż co jest w cache kursów (diagnoza PSG i innych) ──
         if _oa_cached and st.session_state.get("_oa_debug_show"):
@@ -3628,6 +3738,12 @@ if not historical.empty:
                     "data": _sm.get("date",""),
                     "entropy": _sp["entropy"],
                     "sot_mom_h": _smh, "sot_mom_a": _sma,
+                    "odds_trend": _pobierz_trend_kursow(
+                        wybrana_liga, _sh, _sa,
+                        float(_so["odds_h"]) if _so else 0,
+                        float(_so["odds_d"]) if _so else 0,
+                        float(_so["odds_a"]) if _so else 0
+                    ) if _so else {},
                 })
             except Exception: continue
         _top_val = sorted([x for x in _start_top if x["is_val"] and not x["noise"]],
@@ -3667,6 +3783,27 @@ if not historical.empty:
                     _sot_badge += f"<span class='stat-pill' title='Gość {_sma:.0%} więcej strzałów celnych niż sezonowo'>🔥 Atak A +{(_sma-1)*100:.0f}%</span>"
                 elif _sma and _sma >= 1.15:
                     _sot_badge += f"<span class='stat-pill' title='SOT Momentum Gość'>↑SOT A +{(_sma-1)*100:.0f}%</span>"
+                # CLV / Market Movement badge
+                _ot = _tv.get("odds_trend", {})
+                _clv_badge = ""
+                if _ot.get("has_trend"):
+                    _tv_typ = _tv["typ"]
+                    _dp_map = {"1": _ot.get("dph",0), "X": _ot.get("dpd",0), "2": _ot.get("dpa",0),
+                               "1X": max(_ot.get("dph",0), _ot.get("dpd",0)),
+                               "X2": max(_ot.get("dpd",0), _ot.get("dpa",0))}
+                    _dp = _dp_map.get(_tv_typ, 0)
+                    if _dp >= 2.0:
+                        _clv_badge = ("<span class='stat-pill' "
+                            "style='background:#1a3a1f;color:#00e676;border:1px solid #00e67633'>"
+                            f"📈 +{_dp:.1f}pp Market Conf.</span>")
+                    elif _dp <= -2.0:
+                        _clv_badge = ("<span class='stat-pill' "
+                            "style='background:#3b1a1a;color:#ff7043;border:1px solid #ff704333'>"
+                            f"📉 {_dp:.1f}pp Divergence</span>")
+                    elif abs(_dp) >= 0.8:
+                        _arr = "\u2191" if _dp > 0 else "\u2193"
+                        _clv_badge = (f"<span class='stat-pill' style='color:#888'>"
+                            f"Mkt {_arr}{abs(_dp):.1f}pp</span>")
                 # EV sygnalizacja
                 if _tv['ev'] >= 0.15:
                     _sig_color = "#2e7d32"; _sig_label = "🟢 Wysoki EV"
@@ -3894,7 +4031,7 @@ if not historical.empty:
                                 # ── 3 zakładki progressive disclosure ────────
                                 _ctx = oblicz_kontekst_meczu(h, a, historical, _sbn)
 
-                                _dt1, _dt2, _dt3, _dt4 = st.tabs(["📊 Analiza", "📈 Statystyki", "⚔️ H2H", "🔍 Kontekst"])
+                                _dt1, _dt2, _dt3, _dt4 = st.tabs(["📊 Analiza", "🔍 Kontekst", "⚔️ H2H", "📈 Statystyki"])
 
                                 with _dt1:
                                     # Wynik modelowy
@@ -4244,204 +4381,6 @@ if not historical.empty:
                                             st.caption("Brak zdarzeń powyżej progu 55%.")
 
                                 with _dt2:
-                                    # Oczekiwane statystyki – kompaktowy pasek
-                                    _sot_d = f"{lam_sot:.1f}" if (lam_sot and lam_sot > 0) else "–"
-                                    st.markdown(
-                                        f"<div style='display:flex;justify-content:space-around;"
-                                        f"background:var(--bg-card2);border-radius:6px;padding:5px 4px;margin:4px 0'>"
-                                        f"<div style='text-align:center'>"
-                                        f"<div style='font-size:0.62em;color:#555'>⚽ Śr. gole</div>"
-                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_h+lam_a:.2f}</div>"
-                                        f"<div style='font-size:0.58em;color:#444'>{h[:5]}:{lam_h:.1f} {a[:5]}:{lam_a:.1f}</div></div>"
-                                        f"<div style='text-align:center'>"
-                                        f"<div style='font-size:0.62em;color:#555'>🚩 Śr. rożne</div>"
-                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_r:.1f}</div>"
-                                        f"<div style='font-size:0.58em;color:#444'>obie drużyny</div></div>"
-                                        f"<div style='text-align:center'>"
-                                        f"<div style='font-size:0.62em;color:#555'>🟨 Śr. kartki</div>"
-                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_k:.1f}</div>"
-                                        f"<div style='font-size:0.58em;color:#444'>Y=1 R=2</div></div>"
-                                        f"<div style='text-align:center'>"
-                                        f"<div style='font-size:0.62em;color:#555'>🎯 Śr. SOT</div>"
-                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{_sot_d}</div>"
-                                        f"<div style='font-size:0.58em;color:#444'>celne strzały</div></div>"
-                                        f"</div>",
-                                        unsafe_allow_html=True,
-                                    )
-
-                                    if sedzia_ostr:
-                                        st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
-                                    elif sedzia not in ("Nieznany", "", None):
-                                        # Pokaż YC/foul strictness jeśli mamy dane
-                                        _ref_map = _ctx.get("referee_stats_map", {})
-                                        _ref_data = _ref_map.get(sedzia)
-                                        if _ref_data:
-                                            _ycf = _ref_data["yc_per_foul"]
-                                            _ref_label = "🔴 Aptekarz" if _ycf >= 0.19 else ("🟡 Surowy" if _ycf >= 0.17 else "🟢 Wyrozumiały")
-                                            st.caption(
-                                                f"🟨 **Sędzia:** {sedzia} · "
-                                                f"YC/foul: **{_ycf:.3f}** {_ref_label} · "
-                                                f"avg {_ref_data['avg_yc']:.1f} 🟨/M ({_ref_data['n']}M)"
-                                            )
-                                        else:
-                                            st.caption(f"🟨 **Sędzia:** {sedzia}")
-
-                                    # Macierz wyników (toggle)
-                                    if pokaz_macierz:
-                                        try:
-                                            _M_arr = pred.get("macierz")
-                                            if _M_arr is not None:
-                                                st.markdown(
-                                                    render_macierz_html(_M_arr, h, a),
-                                                    unsafe_allow_html=True)
-                                        except Exception:
-                                            pass
-
-                                    # Ostatnie 5 meczów drużyn
-                                    try:
-                                        _hist_h2h = historical.copy()
-                                        def _ostatnie_mecze(team, n=5):
-                                            _hm = _hist_h2h[_hist_h2h["HomeTeam"] == team].copy()
-                                            _hm["res"]    = _hm.apply(lambda r: "W" if r["FTHG"]>r["FTAG"] else ("L" if r["FTHG"]<r["FTAG"] else "D"), axis=1)
-                                            _hm["wynik"]  = _hm.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
-                                            _hm["rywal"]  = _hm["AwayTeam"]; _hm["strona"] = "H"
-                                            _am = _hist_h2h[_hist_h2h["AwayTeam"] == team].copy()
-                                            _am["res"]    = _am.apply(lambda r: "W" if r["FTAG"]>r["FTHG"] else ("L" if r["FTAG"]<r["FTHG"] else "D"), axis=1)
-                                            _am["wynik"]  = _am.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
-                                            _am["rywal"]  = _am["HomeTeam"]; _am["strona"] = "A"
-                                            return pd.concat([
-                                                _hm[["Date","res","wynik","rywal","strona"]],
-                                                _am[["Date","res","wynik","rywal","strona"]]
-                                            ]).sort_values("Date", ascending=False).head(n)
-                                        _h_last = _ostatnie_mecze(h, 5)
-                                        _a_last = _ostatnie_mecze(a, 5)
-
-                                        def _team_hist_html(team_name, df_last, crest_url=""):
-                                            _crest_tag = (
-                                                f"<img src='{crest_url}' style='width:16px;height:16px;"
-                                                f"object-fit:contain;vertical-align:middle;margin-right:4px' "
-                                                f"onerror=\"this.style.display='none'\">"
-                                            ) if crest_url else ""
-                                            rows = ""
-                                            for _, _r in df_last.iterrows():
-                                                _rc  = {"W":"#4CAF50","D":"#FF9800","L":"#F44336"}.get(_r["res"],"#888")
-                                                _dt  = _r["Date"].strftime("%d.%m") if pd.notna(_r["Date"]) else "?"
-                                                _rywal_short = str(_r["rywal"])[:11]
-                                                _side = _r["strona"]
-                                                rows += (
-                                                    f"<div style='display:flex;align-items:center;gap:5px;"
-                                                    f"padding:4px 0;border-bottom:1px solid #111827'>"
-                                                    f"<span style='color:#4b5563;font-size:0.70em;min-width:30px'>{_dt}</span>"
-                                                    f"<span style='color:#374151;font-size:0.68em;min-width:14px;text-align:center'>{_side}</span>"
-                                                    f"<span style='color:#9ca3af;font-size:0.75em;flex:1;overflow:hidden;"
-                                                    f"text-overflow:ellipsis;white-space:nowrap'>{_rywal_short}</span>"
-                                                    f"<span style='background:{_rc}22;color:{_rc};font-size:0.70em;"
-                                                    f"font-weight:700;padding:1px 5px;border-radius:6px;min-width:16px;text-align:center'>{_r['res']}</span>"
-                                                    f"<span style='color:#6b7280;font-size:0.70em;min-width:26px;text-align:right'>{_r['wynik']}</span>"
-                                                    f"</div>"
-                                                )
-                                            return (
-                                                f"<div style='flex:1;min-width:0'>"
-                                                f"<div style='display:flex;align-items:center;gap:4px;"
-                                                f"font-size:0.78em;color:#e5e7eb;font-weight:600;margin-bottom:5px;"
-                                                f"padding-bottom:4px;border-bottom:1px solid #1f2937'>"
-                                                f"{_crest_tag}{team_name}</div>"
-                                                f"{rows}"
-                                                f"</div>"
-                                            )
-
-                                        _h_crest_url = _sbn.get(h, {}).get("crest", "")
-                                        _a_crest_url = _sbn.get(a, {}).get("crest", "")
-                                        if not _h_last.empty or not _a_last.empty:
-                                            st.markdown(
-                                                f"<div style='display:flex;gap:10px;margin:4px 0 10px'>"
-                                                + _team_hist_html(h, _h_last, _h_crest_url)
-                                                + f"<div style='width:1px;background:#1f2937;flex-shrink:0'></div>"
-                                                + _team_hist_html(a, _a_last, _a_crest_url)
-                                                + f"</div>",
-                                                unsafe_allow_html=True)
-                                    except Exception:
-                                        pass
-
-                                with _dt3:
-                                    # H2H – 5 ostatnich spotkań
-                                    _h2h_api = []
-                                    _h2h_source = "csv"
-                                    _fd_key_h2h = st.session_state.get("fd_api_key", "")
-                                    if _fd_key_h2h and _mecz_h_id and _mecz_a_id:
-                                        try:
-                                            _h2h_api = load_h2h_api(
-                                                int(_mecz_h_id), int(_mecz_a_id),
-                                                _fd_key_h2h, n=5)
-                                            if _h2h_api:
-                                                _h2h_source = "api"
-                                        except Exception:
-                                            pass
-
-                                    _h2h_unified = []
-                                    if _h2h_source == "api" and _h2h_api:
-                                        for _am in _h2h_api:
-                                            _h2h_unified.append({
-                                                "date": _am["date"],
-                                                "home": _am["home"], "away": _am["away"],
-                                                "score_h": _am["score_h"], "score_a": _am["score_a"],
-                                            })
-                                    else:
-                                        _h2h_all = load_h2h_csv(LIGI[wybrana_liga]["csv_code"], n_seasons=4)
-                                        if _h2h_all.empty:
-                                            _h2h_all = historical
-                                        _h2h_csv = _h2h_all[
-                                            (((_h2h_all["HomeTeam"]==h) & (_h2h_all["AwayTeam"]==a)) |
-                                             ((_h2h_all["HomeTeam"]==a) & (_h2h_all["AwayTeam"]==h)))
-                                        ].sort_values("Date", ascending=False).head(5)
-                                        for _, _cm in _h2h_csv.iterrows():
-                                            _h2h_unified.append({
-                                                "date": _cm["Date"].strftime("%Y-%m-%d") if pd.notna(_cm["Date"]) else "?",
-                                                "home": _cm["HomeTeam"], "away": _cm["AwayTeam"],
-                                                "score_h": int(_cm["FTHG"]), "score_a": int(_cm["FTAG"]),
-                                            })
-
-                                    if _h2h_unified:
-                                        _h_wins = sum(1 for m in _h2h_unified
-                                                      if (m["home"]==h and m["score_h"]>m["score_a"]) or
-                                                         (m["away"]==h and m["score_a"]>m["score_h"]))
-                                        _draws  = sum(1 for m in _h2h_unified if m["score_h"]==m["score_a"])
-                                        _a_wins = len(_h2h_unified) - _h_wins - _draws
-                                        _src_badge = "🌐 API" if _h2h_source == "api" else "📂 CSV"
-                                        st.markdown(
-                                            f"<div style='font-size:0.74em;margin-bottom:8px;display:flex;gap:12px'>"
-                                            f"<span style='color:#4CAF50'>● {h[:12]} {_h_wins}W</span>"
-                                            f"<span style='color:#FF9800'>● {_draws}R</span>"
-                                            f"<span style='color:#F44336'>● {_a_wins}W {a[:12]}</span>"
-                                            f"<span style='color:#374151;margin-left:auto'>{_src_badge}</span>"
-                                            f"</div>",
-                                            unsafe_allow_html=True)
-                                        _h2h_rows = []
-                                        for _hm in _h2h_unified:
-                                            _hg, _ag = _hm["score_h"], _hm["score_a"]
-                                            _hw, _aw = _hm["home"], _hm["away"]
-                                            _dt2h = _hm["date"][:7] if len(_hm["date"]) >= 7 else _hm["date"]
-                                            _res_c = "#4CAF50" if _hg > _ag else ("#F44336" if _hg < _ag else "#FF9800")
-                                            _bold_h = "font-weight:700;color:var(--text-primary)" if _hw == h else "color:#aaa"
-                                            _bold_a = "font-weight:700;color:var(--text-primary)" if _aw == h else "color:#aaa"
-                                            _h2h_rows.append(
-                                                f"<tr style='border-bottom:1px solid #111827'>"
-                                                f"<td style='padding:5px 6px;color:#4b5563;font-size:0.75em'>{_dt2h}</td>"
-                                                f"<td style='padding:5px 6px;font-size:0.78em;{_bold_h};text-align:right'>{_hw[:14]}</td>"
-                                                f"<td style='padding:5px 8px;text-align:center;color:{_res_c};"
-                                                f"font-weight:700;font-size:0.88em;white-space:nowrap'>{_hg}:{_ag}</td>"
-                                                f"<td style='padding:5px 6px;font-size:0.78em;{_bold_a}'>{_aw[:14]}</td>"
-                                                f"</tr>"
-                                            )
-                                        st.markdown(
-                                            f"<table style='width:100%;border-collapse:collapse'>"
-                                            f"{''.join(_h2h_rows)}</table>",
-                                            unsafe_allow_html=True)
-                                    else:
-                                        st.caption("Brak danych H2H dla tej pary drużyn.")
-
-
-                                with _dt4:
                                     # ── Kontekst meczu ──────────────────────────────────────────────
                                     _pos_h = _ctx.get('h_pos', 0)
                                     _pos_a = _ctx.get('a_pos', 0)
@@ -4864,6 +4803,204 @@ if not historical.empty:
                                         )
                 # Auto-zapis predykcji – uruchamia sie raz per liga+kolejka
                 # Klucz session_state zapobiega powtornemu zapisowi przy kazdym rerunie
+                                with _dt3:
+                                    # H2H – 5 ostatnich spotkań
+                                    _h2h_api = []
+                                    _h2h_source = "csv"
+                                    _fd_key_h2h = st.session_state.get("fd_api_key", "")
+                                    if _fd_key_h2h and _mecz_h_id and _mecz_a_id:
+                                        try:
+                                            _h2h_api = load_h2h_api(
+                                                int(_mecz_h_id), int(_mecz_a_id),
+                                                _fd_key_h2h, n=5)
+                                            if _h2h_api:
+                                                _h2h_source = "api"
+                                        except Exception:
+                                            pass
+
+                                    _h2h_unified = []
+                                    if _h2h_source == "api" and _h2h_api:
+                                        for _am in _h2h_api:
+                                            _h2h_unified.append({
+                                                "date": _am["date"],
+                                                "home": _am["home"], "away": _am["away"],
+                                                "score_h": _am["score_h"], "score_a": _am["score_a"],
+                                            })
+                                    else:
+                                        _h2h_all = load_h2h_csv(LIGI[wybrana_liga]["csv_code"], n_seasons=4)
+                                        if _h2h_all.empty:
+                                            _h2h_all = historical
+                                        _h2h_csv = _h2h_all[
+                                            (((_h2h_all["HomeTeam"]==h) & (_h2h_all["AwayTeam"]==a)) |
+                                             ((_h2h_all["HomeTeam"]==a) & (_h2h_all["AwayTeam"]==h)))
+                                        ].sort_values("Date", ascending=False).head(5)
+                                        for _, _cm in _h2h_csv.iterrows():
+                                            _h2h_unified.append({
+                                                "date": _cm["Date"].strftime("%Y-%m-%d") if pd.notna(_cm["Date"]) else "?",
+                                                "home": _cm["HomeTeam"], "away": _cm["AwayTeam"],
+                                                "score_h": int(_cm["FTHG"]), "score_a": int(_cm["FTAG"]),
+                                            })
+
+                                    if _h2h_unified:
+                                        _h_wins = sum(1 for m in _h2h_unified
+                                                      if (m["home"]==h and m["score_h"]>m["score_a"]) or
+                                                         (m["away"]==h and m["score_a"]>m["score_h"]))
+                                        _draws  = sum(1 for m in _h2h_unified if m["score_h"]==m["score_a"])
+                                        _a_wins = len(_h2h_unified) - _h_wins - _draws
+                                        _src_badge = "🌐 API" if _h2h_source == "api" else "📂 CSV"
+                                        st.markdown(
+                                            f"<div style='font-size:0.74em;margin-bottom:8px;display:flex;gap:12px'>"
+                                            f"<span style='color:#4CAF50'>● {h[:12]} {_h_wins}W</span>"
+                                            f"<span style='color:#FF9800'>● {_draws}R</span>"
+                                            f"<span style='color:#F44336'>● {_a_wins}W {a[:12]}</span>"
+                                            f"<span style='color:#374151;margin-left:auto'>{_src_badge}</span>"
+                                            f"</div>",
+                                            unsafe_allow_html=True)
+                                        _h2h_rows = []
+                                        for _hm in _h2h_unified:
+                                            _hg, _ag = _hm["score_h"], _hm["score_a"]
+                                            _hw, _aw = _hm["home"], _hm["away"]
+                                            _dt2h = _hm["date"][:7] if len(_hm["date"]) >= 7 else _hm["date"]
+                                            _res_c = "#4CAF50" if _hg > _ag else ("#F44336" if _hg < _ag else "#FF9800")
+                                            _bold_h = "font-weight:700;color:var(--text-primary)" if _hw == h else "color:#aaa"
+                                            _bold_a = "font-weight:700;color:var(--text-primary)" if _aw == h else "color:#aaa"
+                                            _h2h_rows.append(
+                                                f"<tr style='border-bottom:1px solid #111827'>"
+                                                f"<td style='padding:5px 6px;color:#4b5563;font-size:0.75em'>{_dt2h}</td>"
+                                                f"<td style='padding:5px 6px;font-size:0.78em;{_bold_h};text-align:right'>{_hw[:14]}</td>"
+                                                f"<td style='padding:5px 8px;text-align:center;color:{_res_c};"
+                                                f"font-weight:700;font-size:0.88em;white-space:nowrap'>{_hg}:{_ag}</td>"
+                                                f"<td style='padding:5px 6px;font-size:0.78em;{_bold_a}'>{_aw[:14]}</td>"
+                                                f"</tr>"
+                                            )
+                                        st.markdown(
+                                            f"<table style='width:100%;border-collapse:collapse'>"
+                                            f"{''.join(_h2h_rows)}</table>",
+                                            unsafe_allow_html=True)
+                                    else:
+                                        st.caption("Brak danych H2H dla tej pary drużyn.")
+
+
+                                with _dt4:
+                                    # Oczekiwane statystyki – kompaktowy pasek
+                                    _sot_d = f"{lam_sot:.1f}" if (lam_sot and lam_sot > 0) else "–"
+                                    st.markdown(
+                                        f"<div style='display:flex;justify-content:space-around;"
+                                        f"background:var(--bg-card2);border-radius:6px;padding:5px 4px;margin:4px 0'>"
+                                        f"<div style='text-align:center'>"
+                                        f"<div style='font-size:0.62em;color:#555'>⚽ Śr. gole</div>"
+                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_h+lam_a:.2f}</div>"
+                                        f"<div style='font-size:0.58em;color:#444'>{h[:5]}:{lam_h:.1f} {a[:5]}:{lam_a:.1f}</div></div>"
+                                        f"<div style='text-align:center'>"
+                                        f"<div style='font-size:0.62em;color:#555'>🚩 Śr. rożne</div>"
+                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_r:.1f}</div>"
+                                        f"<div style='font-size:0.58em;color:#444'>obie drużyny</div></div>"
+                                        f"<div style='text-align:center'>"
+                                        f"<div style='font-size:0.62em;color:#555'>🟨 Śr. kartki</div>"
+                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{lam_k:.1f}</div>"
+                                        f"<div style='font-size:0.58em;color:#444'>Y=1 R=2</div></div>"
+                                        f"<div style='text-align:center'>"
+                                        f"<div style='font-size:0.62em;color:#555'>🎯 Śr. SOT</div>"
+                                        f"<div style='font-size:0.90em;font-weight:bold;color:#aaa'>{_sot_d}</div>"
+                                        f"<div style='font-size:0.58em;color:#444'>celne strzały</div></div>"
+                                        f"</div>",
+                                        unsafe_allow_html=True,
+                                    )
+
+                                    if sedzia_ostr:
+                                        st.caption(f"🟨 **Sędzia:** {sedzia} – {sedzia_ostr}")
+                                    elif sedzia not in ("Nieznany", "", None):
+                                        # Pokaż YC/foul strictness jeśli mamy dane
+                                        _ref_map = _ctx.get("referee_stats_map", {})
+                                        _ref_data = _ref_map.get(sedzia)
+                                        if _ref_data:
+                                            _ycf = _ref_data["yc_per_foul"]
+                                            _ref_label = "🔴 Aptekarz" if _ycf >= 0.19 else ("🟡 Surowy" if _ycf >= 0.17 else "🟢 Wyrozumiały")
+                                            st.caption(
+                                                f"🟨 **Sędzia:** {sedzia} · "
+                                                f"YC/foul: **{_ycf:.3f}** {_ref_label} · "
+                                                f"avg {_ref_data['avg_yc']:.1f} 🟨/M ({_ref_data['n']}M)"
+                                            )
+                                        else:
+                                            st.caption(f"🟨 **Sędzia:** {sedzia}")
+
+                                    # Macierz wyników (toggle)
+                                    if pokaz_macierz:
+                                        try:
+                                            _M_arr = pred.get("macierz")
+                                            if _M_arr is not None:
+                                                st.markdown(
+                                                    render_macierz_html(_M_arr, h, a),
+                                                    unsafe_allow_html=True)
+                                        except Exception:
+                                            pass
+
+                                    # Ostatnie 5 meczów drużyn
+                                    try:
+                                        _hist_h2h = historical.copy()
+                                        def _ostatnie_mecze(team, n=5):
+                                            _hm = _hist_h2h[_hist_h2h["HomeTeam"] == team].copy()
+                                            _hm["res"]    = _hm.apply(lambda r: "W" if r["FTHG"]>r["FTAG"] else ("L" if r["FTHG"]<r["FTAG"] else "D"), axis=1)
+                                            _hm["wynik"]  = _hm.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
+                                            _hm["rywal"]  = _hm["AwayTeam"]; _hm["strona"] = "H"
+                                            _am = _hist_h2h[_hist_h2h["AwayTeam"] == team].copy()
+                                            _am["res"]    = _am.apply(lambda r: "W" if r["FTAG"]>r["FTHG"] else ("L" if r["FTAG"]<r["FTHG"] else "D"), axis=1)
+                                            _am["wynik"]  = _am.apply(lambda r: f"{int(r['FTHG'])}:{int(r['FTAG'])}", axis=1)
+                                            _am["rywal"]  = _am["HomeTeam"]; _am["strona"] = "A"
+                                            return pd.concat([
+                                                _hm[["Date","res","wynik","rywal","strona"]],
+                                                _am[["Date","res","wynik","rywal","strona"]]
+                                            ]).sort_values("Date", ascending=False).head(n)
+                                        _h_last = _ostatnie_mecze(h, 5)
+                                        _a_last = _ostatnie_mecze(a, 5)
+
+                                        def _team_hist_html(team_name, df_last, crest_url=""):
+                                            _crest_tag = (
+                                                f"<img src='{crest_url}' style='width:16px;height:16px;"
+                                                f"object-fit:contain;vertical-align:middle;margin-right:4px' "
+                                                f"onerror=\"this.style.display='none'\">"
+                                            ) if crest_url else ""
+                                            rows = ""
+                                            for _, _r in df_last.iterrows():
+                                                _rc  = {"W":"#4CAF50","D":"#FF9800","L":"#F44336"}.get(_r["res"],"#888")
+                                                _dt  = _r["Date"].strftime("%d.%m") if pd.notna(_r["Date"]) else "?"
+                                                _rywal_short = str(_r["rywal"])[:11]
+                                                _side = _r["strona"]
+                                                rows += (
+                                                    f"<div style='display:flex;align-items:center;gap:5px;"
+                                                    f"padding:4px 0;border-bottom:1px solid #111827'>"
+                                                    f"<span style='color:#4b5563;font-size:0.70em;min-width:30px'>{_dt}</span>"
+                                                    f"<span style='color:#374151;font-size:0.68em;min-width:14px;text-align:center'>{_side}</span>"
+                                                    f"<span style='color:#9ca3af;font-size:0.75em;flex:1;overflow:hidden;"
+                                                    f"text-overflow:ellipsis;white-space:nowrap'>{_rywal_short}</span>"
+                                                    f"<span style='background:{_rc}22;color:{_rc};font-size:0.70em;"
+                                                    f"font-weight:700;padding:1px 5px;border-radius:6px;min-width:16px;text-align:center'>{_r['res']}</span>"
+                                                    f"<span style='color:#6b7280;font-size:0.70em;min-width:26px;text-align:right'>{_r['wynik']}</span>"
+                                                    f"</div>"
+                                                )
+                                            return (
+                                                f"<div style='flex:1;min-width:0'>"
+                                                f"<div style='display:flex;align-items:center;gap:4px;"
+                                                f"font-size:0.78em;color:#e5e7eb;font-weight:600;margin-bottom:5px;"
+                                                f"padding-bottom:4px;border-bottom:1px solid #1f2937'>"
+                                                f"{_crest_tag}{team_name}</div>"
+                                                f"{rows}"
+                                                f"</div>"
+                                            )
+
+                                        _h_crest_url = _sbn.get(h, {}).get("crest", "")
+                                        _a_crest_url = _sbn.get(a, {}).get("crest", "")
+                                        if not _h_last.empty or not _a_last.empty:
+                                            st.markdown(
+                                                f"<div style='display:flex;gap:10px;margin:4px 0 10px'>"
+                                                + _team_hist_html(h, _h_last, _h_crest_url)
+                                                + f"<div style='width:1px;background:#1f2937;flex-shrink:0'></div>"
+                                                + _team_hist_html(a, _a_last, _a_crest_url)
+                                                + f"</div>",
+                                                unsafe_allow_html=True)
+                                    except Exception:
+                                        pass
+
                 _save_key = f"saved_{wybrana_liga}_{aktualna_kolejka}"
                 if _save_key not in st.session_state:
                     n_saved = 0
