@@ -5982,23 +5982,54 @@ if not historical.empty:
             ].copy() if not schedule.empty else pd.DataFrame()
 
             if not _hist_curr_eq.empty and not _sched_played.empty and len(_hist_curr_eq) >= 5:
+                # Posortuj historical po dacie
                 _hist_eq_sorted = _hist_curr_eq.copy()
                 if "Date" in _hist_eq_sorted.columns:
                     _hist_eq_sorted = _hist_eq_sorted.sort_values("Date").reset_index(drop=True)
 
-                _round_map = {}
+                # Mapa daty -> kolejka z terminarza (klucz: date zaokrąglony do dnia)
+                # Działa niezależnie od formatu nazw drużyn
+                _date_to_round = {}
+                _date_to_home  = {}  # date+home_csv -> mapped_name
                 for _, _sr in _sched_played.iterrows():
-                    _sh = map_nazwa(_sr["home_team"])
-                    _sa = map_nazwa(_sr["away_team"])
-                    _round_map[(_sh, _sa)] = (int(_sr["round"]), pd.Timestamp(_sr["date"]))
+                    _dt_key = pd.Timestamp(_sr["date"]).date()
+                    _rnd_v  = int(_sr["round"])
+                    _sh_map = map_nazwa(_sr["home_team"])
+                    _sa_map = map_nazwa(_sr["away_team"])
+                    _date_to_round[(_dt_key, _sh_map, _sa_map)] = _rnd_v
+                    _date_to_round[(_dt_key, _sa_map, _sh_map)] = _rnd_v  # fallback odwrotny
 
+                # Buduj też mapę nazw CSV -> zmapowana nazwa (dla srednie_df lookup)
+                # historical używa surowych nazw CSV; srednie_df indeksowane po tych samych nazwach
+                # Więc NIE mapujemy nazw — używamy ich wprost jak są w CSV
+
+                # Przypisz kolejkę przez datę meczu
                 _hist_eq_sorted["_round"] = None
                 for idx, _hr in _hist_eq_sorted.iterrows():
-                    _hh = str(_hr.get("HomeTeam", ""))
-                    _aa = str(_hr.get("AwayTeam", ""))
-                    rinfo = _round_map.get((_hh, _aa)) or _round_map.get((_aa, _hh))
-                    if rinfo:
-                        _hist_eq_sorted.at[idx, "_round"] = rinfo[0]
+                    _raw_h = str(_hr.get("HomeTeam", ""))
+                    _raw_a = str(_hr.get("AwayTeam", ""))
+                    _map_h = map_nazwa(_raw_h)
+                    _map_a = map_nazwa(_raw_a)
+                    try:
+                        _dt_key = pd.Timestamp(_hr.get("Date")).date()
+                    except Exception:
+                        continue
+                    # Szukaj w mapie date+team
+                    _rnd_v = (_date_to_round.get((_dt_key, _map_h, _map_a)) or
+                              _date_to_round.get((_dt_key, _map_a, _map_h)))
+                    if _rnd_v:
+                        _hist_eq_sorted.at[idx, "_round"] = _rnd_v
+                    else:
+                        # Fallback: szukaj tylko po dacie (±1 dzień) i podobnych nazwach
+                        for _d2 in [_dt_key,
+                                    _dt_key - pd.Timedelta(days=1),
+                                    _dt_key + pd.Timedelta(days=1)]:
+                            for (_dk, _dh, _da), _rv in _date_to_round.items():
+                                if _dk == _d2 and (_dh == _map_h or _da == _map_a):
+                                    _hist_eq_sorted.at[idx, "_round"] = _rv
+                                    break
+                            if _hist_eq_sorted.at[idx, "_round"] is not None:
+                                break
 
                 _hist_eq_sorted = _hist_eq_sorted[_hist_eq_sorted["_round"].notna()].copy()
                 _hist_eq_sorted["_round"] = _hist_eq_sorted["_round"].astype(int)
@@ -6008,9 +6039,11 @@ if not historical.empty:
 
                 with st.spinner(f"Walk-forward: {len(_rundy)} kolejek..."):
                     for _rnd in _rundy:
+                        # Dane PRZED kolejką K (surowe nazwy CSV — takie same jak srednie_df używa)
                         _hist_before = _hist_eq_sorted[_hist_eq_sorted["_round"] < _rnd].copy()
                         if len(_hist_before) < 10:
                             continue
+
                         try:
                             _sdf_kf  = oblicz_wszystkie_statystyki(_hist_before.to_json())
                             _slig_kf = _oblicz_srednie_impl(_hist_before.to_json())
@@ -6019,9 +6052,12 @@ if not historical.empty:
                         if _sdf_kf.empty:
                             continue
 
+                        # forma_dict z danych K-1 (surowe nazwy CSV)
                         _forma_kf = {}
                         for _t in pd.unique(_hist_before[["HomeTeam","AwayTeam"]].values.ravel()):
-                            _tm = _hist_before[(_hist_before["HomeTeam"]==_t)|(_hist_before["AwayTeam"]==_t)].tail(5)
+                            _tm = _hist_before[
+                                (_hist_before["HomeTeam"]==_t)|(_hist_before["AwayTeam"]==_t)
+                            ].tail(5)
                             _pts = 0
                             for _, _mr in _tm.iterrows():
                                 if _mr["HomeTeam"] == _t:
@@ -6035,14 +6071,18 @@ if not historical.empty:
                         _rho_kf = float(_slig_kf.get("rho", -0.13))
                         _n_kf   = int(_slig_kf.get("n_biezacy", len(_hist_before)))
 
+                        # Mecze tej kolejki — używaj surowych nazw CSV
                         for _, _hr in _hist_eq_sorted[_hist_eq_sorted["_round"] == _rnd].iterrows():
-                            _hh = str(_hr.get("HomeTeam", ""))
-                            _aa = str(_hr.get("AwayTeam", ""))
-                            if not _hh or not _aa: continue
-                            if _hh not in _sdf_kf.index or _aa not in _sdf_kf.index: continue
+                            _raw_h = str(_hr.get("HomeTeam", ""))
+                            _raw_a = str(_hr.get("AwayTeam", ""))
+                            if not _raw_h or not _raw_a: continue
+                            # Sprawdź czy drużyna jest w srednie_df (surowe nazwy CSV)
+                            if _raw_h not in _sdf_kf.index or _raw_a not in _sdf_kf.index:
+                                continue
+
                             try:
                                 _lh_kf, _la_kf = oblicz_lambdy(
-                                    _hh, _aa, _sdf_kf, _slig_kf, _forma_kf,
+                                    _raw_h, _raw_a, _sdf_kf, _slig_kf, _forma_kf,
                                     csv_code=_csv_code_eq)[:2]
                                 _pred_kf = predykcja_meczu(
                                     _lh_kf, _la_kf, rho=_rho_kf,
@@ -6060,10 +6100,14 @@ if not historical.empty:
                                 continue
                             _w1x2 = "1" if _hg > _ag else ("2" if _ag > _hg else "X")
                             _traf = {
-                                "1": _w1x2=="1", "X": _w1x2=="X", "2": _w1x2=="2",
-                                "1X": _w1x2 in ("1","X"), "X2": _w1x2 in ("X","2")
+                                "1":  _w1x2 == "1",
+                                "X":  _w1x2 == "X",
+                                "2":  _w1x2 == "2",
+                                "1X": _w1x2 in ("1","X"),
+                                "X2": _w1x2 in ("X","2"),
                             }.get(_typ_kf, False)
 
+                            # Kurs bukmachera (MaxC > Pinnacle > B365)
                             def _gk(ch, cd, ca, row, t):
                                 try:
                                     oh=float(row.get(ch) or 0)
@@ -6087,8 +6131,8 @@ if not historical.empty:
 
                             _eq_rows.append({
                                 "kolejnosc": _rnd,
-                                "home":      _hh,
-                                "away":      _aa,
+                                "home":      _raw_h,
+                                "away":      _raw_a,
                                 "typ":       _typ_kf,
                                 "p_model":   _p_kf,
                                 "fair_odds": _fo_kf,
@@ -6099,7 +6143,7 @@ if not historical.empty:
                 _eq_df = pd.DataFrame(_eq_rows).sort_values(["kolejnosc","home"]) \
                     if _eq_rows else pd.DataFrame()
                 st.caption(f"Walk-forward: {len(_eq_df)} meczow z {len(_rundy)} kolejek"
-                           f" (dane K-1 do predykcji kolejki K)")
+                           f" | model trenuje na danych do K-1, bez look-ahead bias")
             else:
                 _eq_df = pd.DataFrame()
 
