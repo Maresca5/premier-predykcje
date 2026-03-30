@@ -6052,21 +6052,8 @@ if not historical.empty:
                         if _sdf_kf.empty:
                             continue
 
-                        # forma_dict z danych K-1 (surowe nazwy CSV)
-                        _forma_kf = {}
-                        for _t in pd.unique(_hist_before[["HomeTeam","AwayTeam"]].values.ravel()):
-                            _tm = _hist_before[
-                                (_hist_before["HomeTeam"]==_t)|(_hist_before["AwayTeam"]==_t)
-                            ].tail(5)
-                            _pts = 0
-                            for _, _mr in _tm.iterrows():
-                                if _mr["HomeTeam"] == _t:
-                                    if _mr["FTHG"] > _mr["FTAG"]: _pts += 3
-                                    elif _mr["FTHG"] == _mr["FTAG"]: _pts += 1
-                                else:
-                                    if _mr["FTAG"] > _mr["FTHG"]: _pts += 3
-                                    elif _mr["FTAG"] == _mr["FTHG"]: _pts += 1
-                            _forma_kf[_t] = _pts / max(len(_tm), 1)
+                        # forma_dict z danych K-1 — używamy oblicz_forme() identycznie jak główny kod
+                        _forma_kf = oblicz_forme(_hist_before)
 
                         _rho_kf = float(_slig_kf.get("rho", -0.13))
                         _n_kf   = int(_slig_kf.get("n_biezacy", len(_hist_before)))
@@ -6142,23 +6129,6 @@ if not historical.empty:
 
                 _eq_df = pd.DataFrame(_eq_rows).sort_values(["kolejnosc","home"]) \
                     if _eq_rows else pd.DataFrame()
-                # Debug: pokaż pierwsze błędy
-                if not _eq_rows and _rundy:
-                    _rnd_test = _rundy[min(5, len(_rundy)-1)]
-                    _hb_test = _hist_eq_sorted[_hist_eq_sorted["_round"] < _rnd_test]
-                    _mecze_test = _hist_eq_sorted[_hist_eq_sorted["_round"] == _rnd_test]
-                    try:
-                        _sdf_test = oblicz_wszystkie_statystyki(_hb_test.to_json())
-                    except Exception as _de:
-                        _sdf_test = pd.DataFrame()
-                    _h0 = str(_mecze_test.iloc[0]["HomeTeam"]) if len(_mecze_test) > 0 else "?"
-                    _a0 = str(_mecze_test.iloc[0]["AwayTeam"]) if len(_mecze_test) > 0 else "?"
-                    st.warning(
-                        f"DEBUG kolejka {_rnd_test}: hist_before={len(_hb_test)} meczów, "
-                        f"mecze_k={len(_mecze_test)}, sdf_size={len(_sdf_test)}, "
-                        f"sdf_idx={list(_sdf_test.index[:3])}, "
-                        f"h0={_h0!r} in_idx={_h0 in _sdf_test.index}, "
-                        f"a0={_a0!r} in_idx={_a0 in _sdf_test.index}")
                 st.caption(f"Walk-forward: {len(_eq_df)} meczow z {len(_rundy)} kolejek"
                            f" | model trenuje na danych do K-1, bez look-ahead bias")
             else:
