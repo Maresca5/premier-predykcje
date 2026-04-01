@@ -1486,7 +1486,7 @@ def oblicz_wszystkie_statystyki(df_json: str) -> pd.DataFrame:
     return _oblicz_statystyki_impl(df_json)
 
 def _oblicz_statystyki_impl(df_json: str) -> pd.DataFrame:
-    df = pd.read_json(df_json)
+    df = pd.read_json(StringIO(df_json))
     if df.empty:
         return pd.DataFrame()
     druzyny = pd.unique(df[["HomeTeam", "AwayTeam"]].values.ravel())
@@ -1531,7 +1531,7 @@ def oblicz_srednie_ligowe(df_json: str) -> dict:
     return _oblicz_srednie_impl(df_json)
 
 def _oblicz_srednie_impl(df_json: str) -> dict:
-    df = pd.read_json(df_json)
+    df = pd.read_json(StringIO(df_json))
     if df.empty:
         return {"avg_home": 1.5, "avg_away": 1.2, "rho": -0.13, "n_biezacy": 0}
     n_biezacy = int((df.get("_sezon", pd.Series()) == "biezacy").sum()) if "_sezon" in df.columns else len(df)
@@ -2763,7 +2763,7 @@ def deep_data_stats(df_json: str, druzyny_ligi: set = None) -> tuple:
     """Zwraca (power_df, sedziowie_df) dla tab Deep Data.
     druzyny_ligi: jeśli podany, pokazuje tylko drużyny bieżącego sezonu (bez spadkowiczów).
     """
-    df = pd.read_json(df_json)
+    df = pd.read_json(StringIO(df_json))
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
